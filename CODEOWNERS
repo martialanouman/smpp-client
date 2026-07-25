@@ -1,0 +1,28 @@
+# Propriété du code — guide §14.3, §16.2.
+#
+# Le fichier attribue les relecteurs par défaut. L'exigence d'approbation
+# elle-même n'est pas activée tant que le dépôt a un seul mainteneur : GitHub
+# interdit d'approuver sa propre PR, et l'activer verrouillerait `main`
+# définitivement. Voir CONTRIBUTING.md §5.
+
+# Par défaut.
+*                       @martialanouman
+
+# Cœur protocolaire — deux approbations dès qu'un second mainteneur existe.
+/crates/smpp-core/      @martialanouman
+/crates/smpp-session/   @martialanouman
+
+# Sécurité : chiffrement des secrets, trousseau OS, TLS. Même exigence.
+/crates/security/       @martialanouman
+
+# Garde-fous du dépôt. Toute modification de ces fichiers relâche ou durcit
+# une règle appliquée par la machine — notamment l'unique échappatoire au
+# `unsafe_code = "forbid"` du Cargo.toml racine, qui passe forcément par ici.
+/Cargo.toml             @martialanouman
+/clippy.toml            @martialanouman
+/deny.toml              @martialanouman
+/.github/workflows/     @martialanouman
+/scripts/               @martialanouman
+
+# Décisions d'architecture : immuables une fois acceptées, on les supersède.
+/docs/adr/              @martialanouman
