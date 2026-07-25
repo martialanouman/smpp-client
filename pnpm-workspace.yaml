@@ -5,6 +5,9 @@
 packages:
   - "ui"
 
+minimumReleaseAgeExclude:
+  - eslint@10.8.0
+
 # pnpm ≥ 10 bloque par défaut les scripts de post-installation des dépendances.
 # Sans cette liste, esbuild n'écrit pas son binaire et `vite build` échoue sur
 # un exécutable introuvable. N'ajouter ici qu'un paquet dont on a vérifié le

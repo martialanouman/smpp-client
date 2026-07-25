@@ -1,0 +1,42 @@
+{
+  // UN SEUL fichier, délibérément — pas de `references` vers des
+  // tsconfig.app.json / tsconfig.node.json comme le génère `create-vite`.
+  //
+  // Avec une configuration « solution » (`files: []` + `references`),
+  // `tsc --noEmit` ne vérifie RIEN : il ne suit pas les références et sort en
+  // succès sur un projet vide. CA-000-04 exige littéralement
+  // `pnpm -C ui tsc --noEmit` ; le critère serait donc vérifié à vide, ce qui
+  // est pire que pas de vérification du tout.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    // Les deux options nommément exigées par CA-000-04 et le guide §10.1.
+    // `noUncheckedIndexedAccess` fait de `tableau[i]` un `T | undefined` :
+    // c'est ce qui empêche les accès non gardés dans les tables virtualisées
+    // de logs et de contacts.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    // Durcissements complémentaires : du code mort ou une branche `switch`
+    // oubliée doivent échouer en CI, pas se remarquer à l'exécution.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["src", "vite.config.ts", "eslint.config.js"]
+}

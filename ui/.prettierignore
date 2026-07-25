@@ -1,0 +1,11 @@
+# L'étape 1 de la CI lance `prettier --check .` depuis ce répertoire. Sans ces
+# exclusions, elle échouerait sur des fichiers que personne n'écrit à la main.
+dist
+coverage
+node_modules
+*.tsbuildinfo
+
+# Répertoire des types IPC générés par tauri-specta (à partir de step-001) :
+# leur mise en forme appartient au générateur, pas à prettier. Un reformatage
+# ici produirait un diff permanent contre l'étape 4 de la CI.
+src/ipc/generated
