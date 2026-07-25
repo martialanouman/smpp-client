@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+# `src-tauri` est membre du MÊME workspace que les crates métier, et non un
+# workspace autonome comme le génère `create-tauri-app` : CA-000-01 exige que
+# `cargo metadata --no-deps` les liste ensemble. Conséquence pratique : un seul
+# `target/`, un seul `Cargo.lock`, une seule entrée de cache en CI.
+members = ["crates/*", "src-tauri"]
 
 [workspace.package]
 version = "0.0.1"
