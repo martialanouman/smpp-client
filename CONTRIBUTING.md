@@ -67,12 +67,30 @@ refactor et une fonctionnalité, ni du formatage et de la logique.
 
 Trunk-based léger : `main` toujours livrable, jamais de commit direct.
 Branches courtes `feat/…`, `fix/…`, `chore/…`, `docs/…`, `refactor/…`,
-`test/…`, puis PR avec CI verte.
+`test/…`, ou `step-NNN-<slug>` pour un jalon, puis PR avec CI verte.
 
-**Fusionner en `rebase merge`, pas en `squash`.** Un squash écrase les commits
-de la PR et ne conserve que son titre : le job `commitlint` perd alors son
-objet sur l'historique de `main`, et les commits atomiques exigés par
-CLAUDE.md §6 disparaissent.
+### Une PR par jalon, fusionnée en squash
+
+Un jalon fait l'objet d'**une seule PR**, fusionnée en **squash** avec
+suppression de la branche. `main` porte ainsi un commit par jalon, ce qui rend
+son historique lisible et un `revert` trivial. Les commits atomiques exigés par
+CLAUDE.md §6 restent la règle **à l'intérieur** de la PR, où ils servent la
+revue et la bisect.
+
+> **Corollaire non négociable : le titre de la PR doit respecter Conventional
+> Commits.** En squash, c'est lui — et non les commits — qui devient le message
+> sur `main`, avec un suffixe ` (#N)` ajouté par GitHub. Le job `commitlint` le
+> vérifie donc sous cette forme exacte, suffixe compris, en plus des commits de
+> la branche.
+>
+> Ce garde-fou n'existait pas lors de la fusion de la PR #1 : son titre,
+> `Jalon 000 — fondations du dépôt, tooling, CI et release`, n'avait ni type ni
+> sujet conventionnel, et a fait passer `main` au rouge. Le job ne vérifiant
+> que la plage `before → sha`, `main` est redevenu vert au merge suivant — mais
+> la faille, elle, est fermée depuis.
+
+Si un jalon dépasse nettement la taille d'un jalon ordinaire, le découper en
+sous-PRs focalisées vaut mieux qu'une PR que personne ne relira réellement.
 
 > **Revue.** Le guide §14.3 exige au moins une approbation, deux pour
 > `smpp-core`, `smpp-session` et `security`. GitHub interdisant d'approuver sa
