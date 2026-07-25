@@ -177,6 +177,24 @@ jobs:
             --to ${{ github.event.pull_request.head.sha }} \
             --verbose
 
+      # Pull requests are merged with SQUASH, so the PR title — not the
+      # individual commits — becomes the commit message on `main`, with a
+      # ` (#N)` suffix appended by GitHub. Linting the commits alone therefore
+      # leaves a hole: a conventional branch can still land a non-conventional
+      # commit on `main`. That is exactly what happened with #1, which turned
+      # `main` red.
+      #
+      # We lint the title in the precise form it will take, suffix included,
+      # so the length check accounts for it too.
+      - name: Check the pull request title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          printf '%s (#%s)\n' "$PR_TITLE" "$PR_NUMBER" \
+            | pnpm exec commitlint --verbose
+
       - name: Check the commits pushed to main
         if: github.event_name == 'push'
         env:
