@@ -53,9 +53,10 @@ majeur.
 Ce jalon ne produit **aucune fonctionnalité SMPP**. L'application démarre sur
 une page d'attente ; les crates métier sont des squelettes documentés.
 
-Deux critères du jalon 000 restent à vérifier — CA-000-09 (démonstration
-d'échec de la CI) et CA-000-10 (tag de test produisant une *draft release*) —
-faute de portée distante accordée. Les protocoles sont décrits dans
+Trois critères du jalon 000 restent à vérifier — CA-000-09 (démonstration
+d'échec de la CI), CA-000-10 (tag de test produisant une *draft release*) et
+CA-000-13 (comparaison de deux runs pour attester l'effet des caches) — faute
+de portée distante suffisante. Les protocoles sont décrits dans
 [CONTRIBUTING.md](CONTRIBUTING.md#6-vérification-des-pipelines).
 
 [Non publié]: https://github.com/martialanouman/smpp-client/commits/main
