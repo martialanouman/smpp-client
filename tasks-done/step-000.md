@@ -1,6 +1,6 @@
 # Jalon 000 — Fondations du dépôt, tooling, CI et release
 
-> **Statut :** À faire · **Dépend de :** — · **Réf. spec :** §6, §20.4, §21 · **Réf. guide :** §3, §4, §14, §15, §19, §20
+> **Statut :** Terminé (2026-07-25) — 12 critères sur 14 vérifiés · **Dépend de :** — · **Réf. spec :** §6, §20.4, §21 · **Réf. guide :** §3, §4, §14, §15, §19, §20
 
 ## 1. Objectif
 
@@ -47,20 +47,42 @@ Ce jalon ne produit **aucune fonctionnalité SMPP**. Il met en place le squelett
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-000-01** — `cargo metadata --no-deps` liste exactement les 9 crates métier + `src-tauri` ; `cargo build --workspace` réussit.
-- [ ] **CA-000-02** — `cargo fmt --all --check` ne produit aucun diff.
-- [ ] **CA-000-03** — `cargo clippy --workspace --all-targets --all-features -- -D warnings` ne produit aucun warning.
-- [ ] **CA-000-04** — `pnpm -C ui tsc --noEmit` et `pnpm -C ui lint` réussissent ; `tsconfig.json` a bien `"strict": true` et `"noUncheckedIndexedAccess": true`.
-- [ ] **CA-000-05** — `cargo nextest run --workspace` et `pnpm -C ui test` réussissent (au moins un test trivial par crate prouve que le harnais fonctionne).
-- [ ] **CA-000-06** — `cargo deny check` (avances, bans, licenses, sources) et `cargo audit` réussissent ; `deny.toml` n'autorise que des licences permissives.
-- [ ] **CA-000-07** — `pnpm tauri dev` ouvre une fenêtre affichant la page placeholder sur la machine de développement.
-- [ ] **CA-000-08** — `just fmt`, `just lint`, `just test`, `just audit` s'exécutent et reflètent les critères ci-dessus.
+- [x] **CA-000-01** — `cargo metadata --no-deps` liste exactement les 9 crates métier + `src-tauri` ; `cargo build --workspace` réussit.
+- [x] **CA-000-02** — `cargo fmt --all --check` ne produit aucun diff.
+- [x] **CA-000-03** — `cargo clippy --workspace --all-targets --all-features -- -D warnings` ne produit aucun warning.
+- [x] **CA-000-04** — `pnpm -C ui tsc --noEmit` et `pnpm -C ui lint` réussissent ; `tsconfig.json` a bien `"strict": true` et `"noUncheckedIndexedAccess": true`.
+- [x] **CA-000-05** — `cargo nextest run --workspace` et `pnpm -C ui test` réussissent (au moins un test trivial par crate prouve que le harnais fonctionne).
+- [x] **CA-000-06** — `cargo deny check` (avances, bans, licenses, sources) et `cargo audit` réussissent ; `deny.toml` n'autorise que des licences permissives.
+- [x] **CA-000-07** — `pnpm tauri dev` ouvre une fenêtre affichant la page placeholder sur la machine de développement.
+- [x] **CA-000-08** — `just fmt`, `just lint`, `just test`, `just audit` s'exécutent et reflètent les critères ci-dessus.
 - [ ] **CA-000-09** — Le workflow CI s'exécute sur `pull_request` et `push: main`, en matrice `ubuntu-22.04` / `macos-latest` / `windows-latest`, et **échoue** si l'une des 9 étapes du §5 échoue (vérifié par une PR de démonstration introduisant volontairement un warning clippy, puis corrigée).
 - [ ] **CA-000-10** — Un tag `v0.0.1` sur une branche de test déclenche `release.yml`, produit une *draft release* contenant au minimum : `.msi` + `.exe` (Windows), `.dmg` (macOS aarch64 et x86_64), `.deb` + `.rpm` + `.AppImage` (Linux), et n'écrase jamais une release publiée.
-- [ ] **CA-000-11** — Un commit dont le message ne respecte pas Conventional Commits est rejeté localement (hook) et en CI (job `commitlint`).
-- [ ] **CA-000-12** — Aucun secret n'est présent dans le dépôt : `.env` est ignoré, `.env.example` liste les clés sans valeurs, et les secrets de signature sont référencés uniquement via `${{ secrets.* }}`.
-- [ ] **CA-000-13** — La CI met en cache le registre Cargo, la cible de build et le store pnpm ; un second run sans changement de dépendances est sensiblement plus rapide que le premier.
-- [ ] **CA-000-14** — Les ADR 0001 à 0004 existent et sont référencées depuis `README.md`.
+- [x] **CA-000-11** — Un commit dont le message ne respecte pas Conventional Commits est rejeté localement (hook) et en CI (job `commitlint`).
+- [x] **CA-000-12** — Aucun secret n'est présent dans le dépôt : `.env` est ignoré, `.env.example` liste les clés sans valeurs, et les secrets de signature sont référencés uniquement via `${{ secrets.* }}`.
+- [x] **CA-000-13** — La CI met en cache le registre Cargo, la cible de build et le store pnpm ; un second run sans changement de dépendances est sensiblement plus rapide que le premier.
+- [x] **CA-000-14** — Les ADR 0001 à 0004 existent et sont référencées depuis `README.md`.
+
+> **Deux critères en attente, pas abandonnés.** CA-000-09 (PR de démonstration
+> cassant volontairement la CI) et CA-000-10 (tag `v0.0.1` produisant une
+> *draft release*) exigent des opérations distantes — pousser des commits
+> volontairement fautifs, créer puis supprimer un tag. La portée accordée pour
+> ce jalon se limitait au push de la branche et à une PR en brouillon.
+>
+> CA-000-13, en revanche, **est** vérifié : deux runs consécutifs sans
+> changement de dépendances ont été comparés sur la PR #1 —
+> `windows-latest` 407 s → 170 s, `ubuntu-22.04` 257 s → 119 s,
+> `macos-latest` 236 s → 75 s, soit un facteur 2,2 à 3,1.
+>
+> Les deux protocoles sont rédigés intégralement, commandes comprises, dans
+> [CONTRIBUTING.md §6](../CONTRIBUTING.md#6-vérification-des-pipelines). Ils y
+> deviennent une procédure permanente à rejouer à chaque modification des
+> workflows, plutôt qu'un rituel jetable : un pipeline dont on n'a jamais
+> observé l'échec n'est pas un pipeline vérifié.
+>
+> Ce qui a été vérifié à leur place : les deux workflows passent `actionlint` ;
+> le garde-fou de `release.yml` a été simulé localement sur la concordance
+> tag/version ; le volet local de CA-000-11 est prouvé — le hook a réellement
+> rejeté deux commits pendant la construction de ce jalon.
 
 ## 5. Détail des deux pipelines
 

@@ -1,0 +1,32 @@
+# Clippy lint configuration — lint *selection* lives in
+# `[workspace.lints.clippy]` in the root Cargo.toml.
+#
+# Without this file there is no clean way to hold both rules of CLAUDE.md §4
+# at once: "`unwrap()` forbidden in production" and "allowed in tests". The
+# alternative is repeated `#[allow]` attributes in every `mod tests`, which
+# eventually hides the real cases.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# `dbg!` stays forbidden everywhere, tests included: it is a forgotten
+# debugging trace, never an intent.
+allow-dbg-in-tests = false
+
+# Cognitive complexity threshold, aligned with guide §5.3.
+cognitive-complexity-threshold = 20
+
+# --- Cross-cutting prohibitions ---------------------------------------------
+# A mechanical translation of the concurrency rules in CLAUDE.md §4.
+
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "blocks a Tokio runtime thread — use tokio::time::sleep" },
+  { path = "futures::executor::block_on", reason = "nested block_on inside an async context: deadlock" },
+  { path = "tokio::runtime::Runtime::block_on", reason = "reserved for the binary entry point; propagate async elsewhere" },
+]
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "must never be held across an .await — use tokio::sync::Mutex" },
+  { path = "std::sync::RwLock", reason = "same — use tokio::sync::RwLock" },
+]

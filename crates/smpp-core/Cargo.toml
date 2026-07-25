@@ -1,0 +1,15 @@
+[package]
+name = "smpp-core"
+description = "SMPP v3.4 and v5.0 PDU codec and state machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

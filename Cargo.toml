@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+
+# `src-tauri` belongs to the SAME workspace as the business crates, rather
+# than being a standalone one as `create-tauri-app` generates: CA-000-01
+# requires `cargo metadata --no-deps` to list them together. Practical
+# consequence: a single `target/`, a single `Cargo.lock`, a single CI cache
+# entry.
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+authors = ["Martial Anouman"]
+repository = "https://github.com/martialanouman/smpp-client"
+publish = false
+
+[workspace.dependencies]
+thiserror = "2.0.19"
+
+# ---------------------------------------------------------------------------
+# Machine-enforced coding rules
+# ---------------------------------------------------------------------------
+#
+# This block is the heart of milestone 000. The "non-negotiable" rules of
+# CLAUDE.md §4 and guide §5.4 stop being conventions that get discovered
+# violated three milestones later: they become compile errors from the very
+# first line written.
+#
+# Each crate opts in with `[lints] workspace = true`.
+# Fine-grained configuration (test relaxations, deny lists) lives in
+# `clippy.toml`, which *configures* lints without selecting them.
+
+[workspace.lints.rust]
+# `forbid`, not `deny`: a local `#[allow(unsafe_code)]` cannot lift it. The
+# only escape hatch goes through this file, which CODEOWNERS covers — turning
+# the "reviewed by a maintainer" of CLAUDE.md §4 from intent into mechanism.
+unsafe_code = "forbid"
+
+# Combined with `-D warnings` in CI, this makes the `///` on every public item
+# required by CLAUDE.md §4 and guide §5.5 mandatory.
+missing_docs = "warn"
+
+# "Minimal visibility" (CLAUDE.md §4): flags a `pub` item only reachable
+# within the crate, which should be `pub(crate)`.
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# `priority = -1` lets the individually named lints below override the group.
+all = { level = "deny", priority = -1 }
+
+# Prohibitions from CLAUDE.md §4. `clippy.toml` reopens them inside tests,
+# where they are explicitly allowed — otherwise every `mod tests` would need
+# a cluster of `#[allow]` attributes.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# "`tracing` exclusively, never `println!`/`eprintln!`" (CLAUDE.md §4).
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+
+# Backing for the deny lists in `clippy.toml` (blocking I/O in async code,
+# `std::sync::Mutex`). Enabled by name so they do not depend on group
+# membership.
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+# Numeric conversions: the SMPP codec constantly handles `u8`/`u16`/`u32`
+# fields whose width the protocol fixes. A silent truncation there produces a
+# malformed PDU that no high-level test catches. These four lints belong to
+# `clippy::pedantic`, whose remainder is deliberately NOT enabled: under
+# `-D warnings`, the full group would turn every public function into a
+# negotiation.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+cast_lossless = "warn"

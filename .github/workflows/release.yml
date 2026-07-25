@@ -1,0 +1,193 @@
+name: Release
+
+# Triggered by a `vX.Y.Z` tag (guide §19.3). `workflow_dispatch` allows
+# replaying a release from an existing tag without recreating it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Guard — CA-000-10: "never overwrites a published release"
+  # ---------------------------------------------------------------------------
+  # `tauri-action` reuses an existing release matching tagName; nothing in its
+  # behaviour distinguishes a draft from a published release. Without this job
+  # the criterion's clause would remain an intention. Here it becomes a
+  # testable property: the pipeline stops before producing anything.
+  guard:
+    name: Pre-flight checks
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve the tag
+        id: resolve
+        env:
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="$MANUAL_TAG"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Target tag: $tag"
+
+      - name: Refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" --json isDraft > /tmp/release.json 2>/dev/null; then
+            echo "No existing release for $TAG: publishing is safe."
+            exit 0
+          fi
+
+          if [ "$(jq -r .isDraft /tmp/release.json)" = "true" ]; then
+            echo "A DRAFT release already exists for $TAG: it will be completed."
+            exit 0
+          fi
+
+          echo "::error::Release $TAG is already PUBLISHED. Refusing to overwrite it." >&2
+          echo "To republish, delete it explicitly or choose a new tag." >&2
+          exit 1
+
+      - name: Tag and application version must agree
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match version $version in tauri.conf.json." >&2
+            echo "An artifact whose number differs from its tag is untraceable." >&2
+            exit 1
+          fi
+          echo "Tag and version agree: $TAG"
+
+  # ---------------------------------------------------------------------------
+  # Build and publish
+  # ---------------------------------------------------------------------------
+  publish:
+    name: ${{ matrix.label }}
+    needs: [guard]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            label: macOS (Apple Silicon)
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            label: macOS (Intel)
+          - platform: ubuntu-22.04
+            args: ""
+            label: Linux (.deb, .rpm, .AppImage)
+          - platform: windows-latest
+            args: ""
+            label: Windows (.msi, .exe)
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev \
+            rpm
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both Apple targets are only needed on macOS runners.
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      # Milestone 016 will populate the signing secrets. Without them we
+      # produce UNSIGNED artifacts and say so plainly in the logs, rather than
+      # letting anyone believe the release is distributable
+      # (milestone 000 §5.2).
+      - name: Signing status
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -z "$APPLE_CERTIFICATE" ]         && missing="$missing APPLE_CERTIFICATE"
+          [ -z "$WINDOWS_CERTIFICATE" ]       && missing="$missing WINDOWS_CERTIFICATE"
+          [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] && missing="$missing TAURI_SIGNING_PRIVATE_KEY"
+
+          if [ -n "$missing" ]; then
+            echo "::warning::Signing secrets missing:$missing"
+            echo "::warning::The produced artifacts will be UNSIGNED and UNNOTARISED."
+            echo "::warning::They are not distributable as they stand — see milestone 016."
+          else
+            echo "All signing secrets are present."
+          fi
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing and notarisation — populated at milestone 016. Referenced
+          # exclusively through `secrets`: no value appears in the repository
+          # (CA-000-12).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # The tag already exists — it is what triggered the workflow. So we
+          # do not let the action build one from `v__VERSION__`.
+          tagName: ${{ needs.guard.outputs.tag }}
+          releaseName: ShinobiSMPP ${{ needs.guard.outputs.tag }}
+          releaseBody: |
+            See the CHANGELOG for the detailed list of changes.
+
+            The artifacts below are produced automatically.
+            Verify their signature before installing.
+          # Draft: a release is only published after manually verifying the
+          # artifacts on each operating system (guide §19.3, step 6).
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

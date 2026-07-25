@@ -1,0 +1,236 @@
+name: CI
+
+# The nine blocking steps of guide §15.1. A failure in any of them prevents
+# merging (milestone 000 §5.1).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A pull request pushed three times in a row must not occupy the runners three
+# times: only the latest state matters. `main` is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # NO `RUSTFLAGS: -D warnings` here: cargo applies RUSTFLAGS to EVERY
+  # compilation unit, third-party dependencies included. A warning in a crate
+  # of the Tauri ecosystem would then fail CI for a reason entirely outside
+  # our control. Our rules are carried by `[workspace.lints]` (which only
+  # applies to our crates) and by the `-- -D warnings` passed to clippy.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Steps 1 to 6 and 8 — on all three operating systems
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A Windows failure must not mask the state of macOS and Linux: this is
+      # what allows the claim that one step, and only one, failed.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `webkit2gtk-4.1` is not available on ubuntu-latest at the time of
+      # writing; do not change this label without re-checking the package.
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # A single entry: `src-tauri` is a member of the root workspace, so
+      # there is only one `target/` (see Cargo.toml). The
+      # `workspaces: './src-tauri -> target'` setting from the Tauri
+      # documentation assumes the create-tauri-app layout, not ours.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # --- Step 1: formatting ---
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      # `pnpm -C ui prettier …` would look for an npm SCRIPT named "prettier"
+      # and fail with ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL. Running a binary
+      # from node_modules requires `exec`. Same for tsc and eslint below.
+      - name: TypeScript formatting
+        run: pnpm -C ui exec prettier --check .
+
+      # --- Step 2: Rust lint ---
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # --- Step 3: TypeScript types and lint ---
+      - name: TypeScript types
+        run: pnpm -C ui exec tsc --noEmit
+
+      - name: ESLint
+        run: pnpm -C ui exec eslint .
+
+      # --- Step 4: generated IPC types ---
+      # Passes vacuously while the generator is not wired in (milestone 001),
+      # but fails if generated types appear without it.
+      - name: Generated IPC types
+        shell: bash
+        run: bash scripts/check-ipc-types.sh
+
+      # --- Step 5: tests ---
+      - uses: taiki-e/install-action@nextest
+
+      - name: Rust tests
+        run: cargo nextest run --workspace
+
+      - name: Frontend tests
+        run: pnpm -C ui test --run
+
+      # --- Step 6: doctests ---
+      # `nextest` cannot run doctests: this step is not redundant with the
+      # previous one.
+      - name: Doctests
+        run: cargo test --doc --workspace
+
+      # --- Step 8: migrations ---
+      # Active from milestone 002, same ratchet pattern as step 4.
+      - name: Migrations
+        shell: bash
+        run: bash scripts/check-migrations.sh
+
+  # ---------------------------------------------------------------------------
+  # Step 7 — supply chain, once
+  # ---------------------------------------------------------------------------
+  # Outside the matrix: the analysed dependency tree is identical on all three
+  # systems (`[graph] all-features = true`), so tripling it would say nothing
+  # more. Milestone 000 §5.1 explicitly suggests this separation.
+  supply-chain:
+    name: Vulnerabilities and licences
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
+      - name: cargo deny
+        run: cargo deny check advisories bans licenses sources
+
+  # ---------------------------------------------------------------------------
+  # Commit messages — CA-000-11, CI side
+  # ---------------------------------------------------------------------------
+  # Deliberate duplicate of the local .husky/commit-msg hook: the hook can be
+  # bypassed with `git commit --no-verify`, this job cannot.
+  commitlint:
+    name: Commit messages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # commitlint must see the whole range of commits to check, not just
+          # the last one.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the pull request commits
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm exec commitlint \
+            --from ${{ github.event.pull_request.base.sha }} \
+            --to ${{ github.event.pull_request.head.sha }} \
+            --verbose
+
+      - name: Check the commits pushed to main
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # On the very first push of a branch, `before` is the null SHA:
+          # there is no range to check.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "First push: no commit range to check."
+            exit 0
+          fi
+          pnpm exec commitlint --from "$BEFORE" --to "${{ github.sha }}" --verbose
+
+  # ---------------------------------------------------------------------------
+  # Step 9 — native packages
+  # ---------------------------------------------------------------------------
+  # `tauri build` is the dominant cost of this pipeline: several minutes per
+  # operating system. Running it on every pull request would make the feedback
+  # loop unusable for near-zero gain — hence the restriction to `main`
+  # (milestone 000 §8). Tags are covered by release.yml.
+  packages:
+    name: Native packages (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the packages
+        run: pnpm tauri build

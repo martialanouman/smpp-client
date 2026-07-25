@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Icône d'attente du jalon 000 : un monogramme neutre, à remplacer par
+       l'identité visuelle définitive au jalon 016. Volontairement pas les
+       icônes livrées par create-tauri-app, qui portent une marque tierce. -->
+  <defs>
+    <linearGradient id="fond" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#fond)"/>
+  <!-- Quatre lames en rotation : évocation du shuriken, lisible à 32 px. -->
+  <g fill="#38bdf8">
+    <path d="M512 208 L588 436 L512 512 L436 436 Z"/>
+    <path d="M816 512 L588 588 L512 512 L588 436 Z"/>
+    <path d="M512 816 L436 588 L512 512 L588 588 Z"/>
+    <path d="M208 512 L436 436 L512 512 L436 588 Z"/>
+  </g>
+  <circle cx="512" cy="512" r="58" fill="#0f172a"/>
+</svg>

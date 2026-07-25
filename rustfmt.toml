@@ -1,0 +1,20 @@
+# Guide §5.1 mandates "rustfmt with defaults": this file therefore changes no
+# formatting rule. It only pins two environment parameters, without which
+# formatting is not reproducible.
+
+# `cargo fmt` reads the edition from the manifest, but `rustfmt` invoked
+# directly — which is what rust-analyzer does on format-on-save — falls back
+# to edition 2015 and formats `async`/`await` differently. Without this line
+# the editor undoes on every save what CI demands.
+edition = "2021"
+
+# `cargo fmt --all --check` also runs on windows-latest. Together with
+# `* text=auto eol=lf` in .gitattributes, this setting removes a whole class
+# of spurious CRLF diffs on that runner alone (CA-000-02).
+newline_style = "Unix"
+
+# NOTE — import sorting and grouping options (`group_imports`,
+# `imports_granularity`) are nightly-only. On stable they are ignored WITHOUT
+# ERROR, so writing them here would give the illusion of an enforced rule.
+# They require a dedicated `cargo +nightly fmt` job — out of scope for
+# milestone 000.

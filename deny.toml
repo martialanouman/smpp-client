@@ -1,0 +1,129 @@
+# Supply-chain control — guide §17.4, CA-000-06.
+#
+# cargo-deny ≥ 0.18 format: the `version = 2` field under [licenses] and
+# [advisories] was removed, along with the v1 fields (`unlicensed`,
+# `copyleft`, `default`, `vulnerability`, `severity-threshold`…). Writing them
+# here would not be ignored: cargo-deny would reject the file.
+#
+# Check with: `cargo deny check advisories bans licenses sources`.
+
+[graph]
+# Analyse every feature: a dependency that only shows up behind an optional
+# feature is still a dependency we ship.
+all-features = true
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+
+[licenses]
+# POLICY — this list holds exactly the licences actually present in the tree,
+# and nothing more. No forward-looking list:
+#   · a licence allowed "just in case" produces a `license-not-encountered`
+#     warning on every run, and permanent noise ends up being ignored;
+#   · more importantly, a pre-approved licence enters silently the day a
+#     dependency brings it in. Here it fails CI and forces a line to be added
+#     — which is the conscious review we are after.
+#
+# Later milestones will therefore widen this list as they go (BSL-1.0 with
+# sqlx, ISC with rustls…). That is the intended behaviour, not a regression.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception", # wasi, wit-bindgen, target-lexicon
+  "BSD-3-Clause",                   # brotli, num_enum
+  "Zlib",                           # foldhash, objc2 family
+  "Unicode-3.0",                    # unicode-ident, icu_* (Tauri chain)
+  "MIT-0",                          # dunce
+  "Unlicense",                      # aho-corasick, memchr, walkdir
+  "CC0-1.0",                        # dunce
+]
+
+# Detection confidence threshold. The default of 0.8 accepts loose matches on
+# modified licence texts; 0.93 demands a clean match and forces borderline
+# cases to be settled explicitly.
+confidence-threshold = 0.93
+
+# MPL-2.0 is FILE-level copyleft: its §3.3 explicitly permits combination with
+# proprietary code in a larger work, and obligations only trigger when covered
+# files are modified. Perfectly usable here — but it is NOT a permissive
+# licence in the sense of CA-000-06.
+#
+# Hence this choice: named, crate by crate, never wholesale in `allow`. The
+# list above stays literally compliant with the criterion, and any new MPL
+# dependency fails CI instead of slipping through unnoticed.
+#
+# The first four come from Servo's CSS stack, pulled in by wry; the fifth from
+# application directory handling. None is modified, so the §3.3 obligations
+# are not triggered.
+exceptions = [
+  { crate = "cssparser", allow = ["MPL-2.0"] },        # via wry → selectors
+  { crate = "cssparser-macros", allow = ["MPL-2.0"] }, # same
+  { crate = "selectors", allow = ["MPL-2.0"] },        # same
+  { crate = "dtoa-short", allow = ["MPL-2.0"] },       # same
+  { crate = "option-ext", allow = ["MPL-2.0"] },       # via dirs → dirs-sys
+]
+
+[licenses.private]
+# Workspace crates are not published (`publish = false`) and therefore carry
+# no `license` field: there is nothing to check on them.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Banned dependencies
+# ---------------------------------------------------------------------------
+
+[bans]
+# "deny" would be unrealistic: the Tauri tree durably embeds several versions
+# of `windows-sys`, `bitflags` and `toml_edit` without that being a defect. We
+# want the signal, not the block.
+multiple-versions = "warn"
+
+# A `version = "*"` dependency silently accepts any future version, including
+# a breaking or compromised one.
+wildcards = "deny"
+
+# … but an internal `path` dependency has no version and is not a wildcard in
+# the risky sense: it resolves nothing from a registry. Without this line our
+# own layering boundaries (messaging → smpp-session, smpp-session →
+# smpp-core) fail the check.
+allow-wildcard-paths = true
+
+deny = [
+  # TLS exclusively through rustls (guide §17.2, CLAUDE.md §8). Banning it
+  # here turns the security rule into a guard: openssl can no longer come in
+  # through a transitive dependency without CI saying so.
+  { crate = "openssl", reason = "TLS through tokio-rustls only" },
+  { crate = "openssl-sys", reason = "TLS through tokio-rustls only" },
+]
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# NOTE — ADR 0001 leaves open the option of consuming `rusmpp` from GitHub
+# rather than crates.io. If that is chosen at milestone 003, the organisation
+# must be declared here, not the check disabled.
+
+# ---------------------------------------------------------------------------
+# Vulnerabilities
+# ---------------------------------------------------------------------------
+
+[advisories]
+# A crate withdrawn from crates.io by its author is a strong signal: we
+# refuse, we do not merely warn.
+yanked = "deny"
+
+# "all" is unmanageable on a Tauri tree, which carries unmaintained crates
+# with no alternative (proc-macro-error, winapi 0.3…). "workspace" targets
+# what we actually have leverage over.
+unmaintained = "workspace"
+
+# No tolerated vulnerability. Any entry added here must carry a comment
+# justifying the exception and a review date.
+ignore = []

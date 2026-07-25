@@ -1,0 +1,29 @@
+# Line ending normalisation.
+#
+# `cargo fmt --all --check` and `prettier --check` run on windows-latest in
+# CI. Without this normalisation, a file committed with CRLF produces a
+# formatting diff on that runner alone, failing CA-000-02 for a reason
+# unrelated to the code.
+* text=auto eol=lf
+
+# Windows scripts: cmd.exe requires CRLF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Generated files: excluded from language statistics and collapsed by default
+# in GitHub diffs. They stay versioned and reviewed (guide §17.4).
+Cargo.lock      linguist-generated
+pnpm-lock.yaml  linguist-generated
+
+# Binaries: never subject to line ending conversion.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+*.db    binary

@@ -1,0 +1,13 @@
+[toolchain]
+# Unpinned `stable`: the development machine and CI
+# (`dtolnay/rust-toolchain@stable`) stay aligned without version churn.
+# Accepted trade-off: a new Rust release may introduce fresh clippy lints and
+# turn a green CI red overnight. The remedy is to fix the code, not to pin the
+# toolchain.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
+
+# `x86_64-apple-darwin` is required by the release matrix (two separate .dmg
+# files, Intel and Apple Silicon — see .github/workflows/release.yml).
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]

@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Tailwind v4 sets no default text or background colour: without these rules
+   the page inherits the WebView theme and text renders black on a dark
+   background. Minimal baseline, replaced by the full theme at milestone 001. */
+:root {
+  color-scheme: light dark;
+  --shinobi-background: #f8fafc;
+  --shinobi-text: #0f172a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shinobi-background: #0f172a;
+    --shinobi-text: #e2e8f0;
+  }
+}
+
+body {
+  background-color: var(--shinobi-background);
+  color: var(--shinobi-text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
