@@ -1,0 +1,33 @@
+# Conventions d'édition partagées — guide §3.5.
+# Les valeurs reprennent les défauts de rustfmt et de prettier : ce fichier
+# aligne les éditeurs sur les formateurs, il ne définit pas un style concurrent.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.rs]
+indent_size = 4
+max_line_length = 100
+
+[*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css,html,yml,yaml,toml}]
+indent_size = 2
+
+[*.md]
+# Deux espaces en fin de ligne sont un retour à la ligne significatif en
+# Markdown : ne pas les supprimer.
+trim_trailing_whitespace = false
+
+[justfile]
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[*.{bat,cmd,ps1}]
+end_of_line = crlf

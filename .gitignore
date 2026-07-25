@@ -7,6 +7,8 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
+coverage/
+.pnpm-store/
 
 # Tauri
 src-tauri/target/
