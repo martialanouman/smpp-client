@@ -1,0 +1,13 @@
+# Le frontend vit dans `ui/`, mais le `package.json` racine reste nécessaire :
+# c'est lui qui porte `@tauri-apps/cli` (`pnpm tauri dev` se lance depuis la
+# racine, cf. CLAUDE.md §5) et husky, dont le chemin de hooks est relatif à la
+# racine du dépôt git. Cf. docs/adr/0004-gestionnaire-de-paquets-frontend.md.
+packages:
+  - "ui"
+
+# pnpm ≥ 10 bloque par défaut les scripts de post-installation des dépendances.
+# Sans cette liste, esbuild n'écrit pas son binaire et `vite build` échoue sur
+# un exécutable introuvable. N'ajouter ici qu'un paquet dont on a vérifié le
+# besoin réel — c'est une surface d'exécution de code à l'installation.
+onlyBuiltDependencies:
+  - esbuild
