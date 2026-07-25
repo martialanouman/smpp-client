@@ -79,8 +79,11 @@ jobs:
       - name: Rust formatting
         run: cargo fmt --all --check
 
+      # `pnpm -C ui prettier …` would look for an npm SCRIPT named "prettier"
+      # and fail with ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL. Running a binary
+      # from node_modules requires `exec`. Same for tsc and eslint below.
       - name: TypeScript formatting
-        run: pnpm -C ui prettier --check .
+        run: pnpm -C ui exec prettier --check .
 
       # --- Step 2: Rust lint ---
       - name: Clippy
@@ -88,10 +91,10 @@ jobs:
 
       # --- Step 3: TypeScript types and lint ---
       - name: TypeScript types
-        run: pnpm -C ui tsc --noEmit
+        run: pnpm -C ui exec tsc --noEmit
 
       - name: ESLint
-        run: pnpm -C ui eslint .
+        run: pnpm -C ui exec eslint .
 
       # --- Step 4: generated IPC types ---
       # Passes vacuously while the generator is not wired in (milestone 001),
