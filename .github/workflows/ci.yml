@@ -1,0 +1,234 @@
+name: CI
+
+# Les neuf étapes bloquantes du guide §15.1. Un échec sur l'une d'elles
+# empêche la fusion (jalon 000 §5.1).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Une PR poussée trois fois de suite ne doit pas occuper trois fois les
+# runners : seul le dernier état compte. `main` n'est jamais annulé.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # PAS de `RUSTFLAGS: -D warnings` ici : cargo applique RUSTFLAGS à TOUTES
+  # les unités de compilation, dépendances tierces comprises. Un warning dans
+  # une crate de l'écosystème Tauri ferait alors échouer la CI pour une raison
+  # sur laquelle nous n'avons aucune prise. Nos règles sont portées par
+  # `[workspace.lints]` (qui ne s'applique qu'à nos crates) et par le
+  # `-- -D warnings` passé à clippy.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Étapes 1 à 6 et 8 — sur les trois systèmes
+  # ---------------------------------------------------------------------------
+  qualite:
+    name: Qualité (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Un échec sur Windows ne doit pas masquer l'état de macOS et Linux :
+      # c'est ce qui permet d'affirmer qu'une étape, et elle seule, a échoué.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `webkit2gtk-4.1` n'est pas disponible sur ubuntu-latest au moment de
+      # l'écriture ; ne pas changer ce label sans revérifier le paquet.
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Une seule entrée : `src-tauri` est membre du workspace racine, il n'y
+      # a donc qu'un `target/` (cf. Cargo.toml). La configuration
+      # `workspaces: './src-tauri -> target'` de la documentation Tauri
+      # suppose la disposition de create-tauri-app, pas la nôtre.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Installation des dépendances frontend
+        run: pnpm install --frozen-lockfile
+
+      # --- Étape 1 : formatage ---
+      - name: Format Rust
+        run: cargo fmt --all --check
+
+      - name: Format TypeScript
+        run: pnpm -C ui prettier --check .
+
+      # --- Étape 2 : lint Rust ---
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # --- Étape 3 : types et lint TypeScript ---
+      - name: Typage TypeScript
+        run: pnpm -C ui tsc --noEmit
+
+      - name: ESLint
+        run: pnpm -C ui eslint .
+
+      # --- Étape 4 : types IPC générés ---
+      # Passe à vide tant que le générateur n'est pas branché (jalon 001),
+      # mais échoue si des types générés apparaissent sans lui.
+      - name: Types IPC générés
+        shell: bash
+        run: bash scripts/check-ipc-types.sh
+
+      # --- Étape 5 : tests ---
+      - uses: taiki-e/install-action@nextest
+
+      - name: Tests Rust
+        run: cargo nextest run --workspace
+
+      - name: Tests frontend
+        run: pnpm -C ui test --run
+
+      # --- Étape 6 : doctests ---
+      # `nextest` ne sait pas exécuter les doctests : cette étape n'est pas
+      # redondante avec la précédente.
+      - name: Doctests
+        run: cargo test --doc --workspace
+
+      # --- Étape 8 : migrations ---
+      # Active dès le jalon 002, même patron à cliquet que l'étape 4.
+      - name: Migrations
+        shell: bash
+        run: bash scripts/check-migrations.sh
+
+  # ---------------------------------------------------------------------------
+  # Étape 7 — chaîne d'approvisionnement, une seule fois
+  # ---------------------------------------------------------------------------
+  # Hors matrice : l'arbre de dépendances analysé est le même sur les trois
+  # systèmes (`[graph] all-features = true`), le tripler ne dirait rien de
+  # plus. Le §5.1 du jalon suggère explicitement cette séparation.
+  chaine-approvisionnement:
+    name: Vulnérabilités et licences
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
+      - name: cargo deny
+        run: cargo deny check advisories bans licenses sources
+
+  # ---------------------------------------------------------------------------
+  # Messages de commit — CA-000-11, volet CI
+  # ---------------------------------------------------------------------------
+  # Doublon volontaire du hook local .husky/commit-msg : le hook peut être
+  # contourné par `git commit --no-verify`, ce job non.
+  commitlint:
+    name: Messages de commit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # commitlint doit voir toute la plage de commits à vérifier, pas
+          # seulement le dernier.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Vérification des commits de la PR
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm exec commitlint \
+            --from ${{ github.event.pull_request.base.sha }} \
+            --to ${{ github.event.pull_request.head.sha }} \
+            --verbose
+
+      - name: Vérification des commits poussés sur main
+        if: github.event_name == 'push'
+        env:
+          AVANT: ${{ github.event.before }}
+        run: |
+          # Au tout premier push d'une branche, `before` vaut le SHA nul :
+          # il n'y a pas de plage à vérifier.
+          if [ "$AVANT" = "0000000000000000000000000000000000000000" ]; then
+            echo "Premier push : aucune plage de commits à vérifier."
+            exit 0
+          fi
+          pnpm exec commitlint --from "$AVANT" --to "${{ github.sha }}" --verbose
+
+  # ---------------------------------------------------------------------------
+  # Étape 9 — paquets natifs
+  # ---------------------------------------------------------------------------
+  # `tauri build` est le poste de coût dominant de la CI : plusieurs minutes
+  # par système. Le lancer sur chaque PR rendrait la boucle de retour
+  # inutilisable pour un gain quasi nul — d'où la restriction à `main`
+  # (jalon 000 §8). Les tags sont couverts par release.yml.
+  paquets:
+    name: Paquets natifs (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [qualite]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Construction des paquets
+        run: pnpm tauri build
