@@ -1,0 +1,36 @@
+# Rust
+/target/
+**/target/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Environnement et secrets (jamais commités — cf. guide §17.1)
+.env
+.env.local
+*.pem
+*.p12
+*.key
+
+# Bases locales et journaux
+*.db
+*.db-shm
+*.db-wal
+logs/
+*.log
+
+# Systèmes de fichiers
+.DS_Store
+Thumbs.db
+
+# Éditeurs
+.idea/
+.vscode/*
+!.vscode/extensions.json
