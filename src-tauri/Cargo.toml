@@ -14,6 +14,13 @@ publish.workspace = true
 name = "shinobismpp_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The IPC type generator. `scripts/check-ipc-types.sh` keys off the presence of
+# `src/bin/gen_ipc.rs` to switch CI step 4 from "vacuously green" to "really
+# checks" — the path is part of the contract, do not move it.
+[[bin]]
+name = "gen_ipc"
+path = "src/bin/gen_ipc.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -21,15 +28,38 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror.workspace = true
 
 # `anyhow` is allowed HERE and nowhere else: this is the application boundary
 # (CLAUDE.md §4). Business crates expose typed `thiserror` errors; only the
 # entry point may aggregate them.
 anyhow = "1"
 
-# NOTE — no business crate is wired in yet: `src-tauri` holds no logic and so
-# has nothing to call. Dependencies on `messaging`, `contacts`, `numbers-gen`
-# and `logging-export` appear at milestone 001, along with the IPC contract.
+# Structured logging (CLAUDE.md §4): `tracing` exclusively, with a rolling
+# file appender in the OS log directory plus a console layer in development.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+
+# Only the `sync` feature: `tokio::sync::RwLock` guards the in-memory
+# configuration. The runtime itself is Tauri's (`tauri::async_runtime`), we do
+# not start a second one.
+tokio = { version = "1", features = ["sync"] }
+
+# IPC type generation — ADR 0003. Still `2.0.0-rc`, which the ADR records as
+# accepted debt: the output is ordinary TypeScript, committed to the repo, so
+# a disappearance upstream would not block the build.
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "=0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+
+# NOTE — no business crate is wired in yet: milestone 001 only carries the
+# application shell and the IPC contract. Dependencies on `messaging`,
+# `contacts`, `numbers-gen` and `logging-export` appear with their commands.
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

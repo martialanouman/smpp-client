@@ -14,10 +14,12 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
     "i18next": "^26.3.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-i18next": "^17.0.11"
+    "react-i18next": "^17.0.11",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
