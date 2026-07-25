@@ -1,6 +1,6 @@
 # Jalon 000 — Fondations du dépôt, tooling, CI et release
 
-> **Statut :** Terminé (2026-07-25) — 11 critères sur 14 vérifiés · **Dépend de :** — · **Réf. spec :** §6, §20.4, §21 · **Réf. guide :** §3, §4, §14, §15, §19, §20
+> **Statut :** Terminé (2026-07-25) — 12 critères sur 14 vérifiés · **Dépend de :** — · **Réf. spec :** §6, §20.4, §21 · **Réf. guide :** §3, §4, §14, §15, §19, §20
 
 ## 1. Objectif
 
@@ -59,20 +59,19 @@ Ce jalon ne produit **aucune fonctionnalité SMPP**. Il met en place le squelett
 - [ ] **CA-000-10** — Un tag `v0.0.1` sur une branche de test déclenche `release.yml`, produit une *draft release* contenant au minimum : `.msi` + `.exe` (Windows), `.dmg` (macOS aarch64 et x86_64), `.deb` + `.rpm` + `.AppImage` (Linux), et n'écrase jamais une release publiée.
 - [x] **CA-000-11** — Un commit dont le message ne respecte pas Conventional Commits est rejeté localement (hook) et en CI (job `commitlint`).
 - [x] **CA-000-12** — Aucun secret n'est présent dans le dépôt : `.env` est ignoré, `.env.example` liste les clés sans valeurs, et les secrets de signature sont référencés uniquement via `${{ secrets.* }}`.
-- [ ] **CA-000-13** — La CI met en cache le registre Cargo, la cible de build et le store pnpm ; un second run sans changement de dépendances est sensiblement plus rapide que le premier.
+- [x] **CA-000-13** — La CI met en cache le registre Cargo, la cible de build et le store pnpm ; un second run sans changement de dépendances est sensiblement plus rapide que le premier.
 - [x] **CA-000-14** — Les ADR 0001 à 0004 existent et sont référencées depuis `README.md`.
 
-> **Trois critères en attente, pas abandonnés.** CA-000-09 (PR de démonstration
+> **Deux critères en attente, pas abandonnés.** CA-000-09 (PR de démonstration
 > cassant volontairement la CI) et CA-000-10 (tag `v0.0.1` produisant une
 > *draft release*) exigent des opérations distantes — pousser des commits
 > volontairement fautifs, créer puis supprimer un tag. La portée accordée pour
 > ce jalon se limitait au push de la branche et à une PR en brouillon.
 >
-> CA-000-13 (les caches accélèrent un second run) est du même ordre : la
-> mise en cache est configurée — `Swatinem/rust-cache@v2` et
-> `actions/setup-node` avec `cache: pnpm` — mais l'affirmation « un second
-> run est sensiblement plus rapide » demande deux exécutions à comparer, et
-> une seule aura eu lieu.
+> CA-000-13, en revanche, **est** vérifié : deux runs consécutifs sans
+> changement de dépendances ont été comparés sur la PR #1 —
+> `windows-latest` 407 s → 170 s, `ubuntu-22.04` 257 s → 119 s,
+> `macos-latest` 236 s → 75 s, soit un facteur 2,2 à 3,1.
 >
 > Les deux protocoles sont rédigés intégralement, commandes comprises, dans
 > [CONTRIBUTING.md §6](../CONTRIBUTING.md#6-vérification-des-pipelines). Ils y
