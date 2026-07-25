@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+authors = ["Martial Anouman"]
+repository = "https://github.com/martialanouman/smpp-client"
+publish = false
+
+[workspace.dependencies]
+thiserror = "2.0.19"
+
+# ---------------------------------------------------------------------------
+# Règles de code, appliquées par la machine
+# ---------------------------------------------------------------------------
+#
+# Ce bloc est le cœur du jalon 000. Les règles « non négociables » de
+# CLAUDE.md §4 et du guide §5.4 y cessent d'être des conventions que l'on
+# découvre violées trois jalons plus tard : elles deviennent des erreurs de
+# compilation dès la première ligne écrite.
+#
+# Chaque crate s'y rattache par un `[lints] workspace = true`.
+# La configuration fine (assouplissements en test, listes d'interdits) vit
+# dans `clippy.toml`, qui *configure* les lints sans les sélectionner.
+
+[workspace.lints.rust]
+# `forbid` et non `deny` : un `#[allow(unsafe_code)]` local ne peut pas le
+# lever. La seule échappatoire passe par ce fichier, couvert par CODEOWNERS —
+# ce qui transforme le « revue par un mainteneur » de CLAUDE.md §4 d'intention
+# en mécanisme.
+unsafe_code = "forbid"
+
+# Combiné à `-D warnings` en CI, rend obligatoire le `///` sur chaque item
+# public exigé par CLAUDE.md §4 et le guide §5.5.
+missing_docs = "warn"
+
+# « Visibilité minimale » (CLAUDE.md §4) : signale un `pub` qui n'est en fait
+# atteignable que dans la crate et devrait donc être `pub(crate)`.
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# `priority = -1` laisse les lints nommés plus bas surcharger le groupe.
+all = { level = "deny", priority = -1 }
+
+# Interdits de CLAUDE.md §4. `clippy.toml` les rouvre dans les tests, où ils
+# sont explicitement autorisés — sans quoi chaque `mod tests` devrait porter
+# une grappe de `#[allow]`.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# « `tracing` exclusivement, jamais `println!`/`eprintln!` » (CLAUDE.md §4).
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+
+# Support des listes d'interdits de `clippy.toml` (I/O bloquante en async,
+# `std::sync::Mutex`). Activés nommément pour ne pas dépendre de leur
+# appartenance à un groupe.
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+# Conversions numériques : le codec SMPP manipule en permanence des champs
+# `u8`/`u16`/`u32` de largeur imposée par le protocole. Une troncature
+# silencieuse y produit un PDU malformé qu'aucun test de haut niveau ne
+# rattrape. Ces quatre lints appartiennent à `clippy::pedantic`, dont le reste
+# n'est délibérément PAS activé : sous `-D warnings`, le groupe complet
+# transformerait chaque fonction publique en négociation.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+cast_lossless = "warn"

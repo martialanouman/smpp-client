@@ -1,0 +1,32 @@
+# Configuration des lints clippy — leur *sélection* vit dans
+# `[workspace.lints.clippy]` du Cargo.toml racine.
+#
+# Sans ce fichier, il n'existe pas de façon propre de tenir simultanément les
+# deux règles de CLAUDE.md §4 : « `unwrap()` interdit en production » et
+# « autorisés en tests ». On y arriverait à coups de `#[allow]` répétés dans
+# chaque `mod tests`, ce qui finit par masquer les vrais cas.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# `dbg!` reste interdit partout, y compris en test : c'est une trace de
+# débogage oubliée, jamais une intention.
+allow-dbg-in-tests = false
+
+# Seuil de complexité cognitive, aligné sur le guide §5.3.
+cognitive-complexity-threshold = 20
+
+# --- Interdits transverses --------------------------------------------------
+# Traduction mécanique des règles de concurrence de CLAUDE.md §4.
+
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "bloque un thread du runtime Tokio — utiliser tokio::time::sleep" },
+  { path = "futures::executor::block_on", reason = "block_on imbriqué dans un contexte async : interblocage" },
+  { path = "tokio::runtime::Runtime::block_on", reason = "réservé au point d'entrée du binaire ; ailleurs, propager l'async" },
+]
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "ne doit jamais être tenu à travers un .await — utiliser tokio::sync::Mutex" },
+  { path = "std::sync::RwLock", reason = "idem — utiliser tokio::sync::RwLock" },
+]

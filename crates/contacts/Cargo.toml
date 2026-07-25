@@ -1,0 +1,15 @@
+[package]
+name = "contacts"
+description = "Import CSV et XLSX, validation E.164 et gestion des listes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true
