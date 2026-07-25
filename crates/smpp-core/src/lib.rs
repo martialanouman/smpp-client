@@ -10,6 +10,7 @@
 //! [`0001-choix-de-la-pile-smpp`](../../../docs/adr/0001-choix-de-la-pile-smpp.md).
 
 mod error;
+pub mod values;
 
 pub use error::SmppCoreError;
 
