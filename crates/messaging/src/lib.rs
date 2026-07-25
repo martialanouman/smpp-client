@@ -1,21 +1,22 @@
-//! Encodage, segmentation et orchestration des envois.
+//! Encoding, segmentation and send orchestration.
 //!
-//! Point d'entrée métier de l'émission : choisit le DCS, segmente les
-//! messages longs (UDH ou TLV `sar_*`), persiste avant émission puis confie
-//! les PDU à [`smpp_session`]. Orchestre également les campagnes de masse —
-//! reprise après interruption, suivi de progression, plafonds de volume.
+//! The business entry point for sending: picks the DCS, segments long
+//! messages (UDH or `sar_*` TLVs), persists before sending, then hands PDUs
+//! to [`smpp_session`]. Also orchestrates bulk campaigns — resume after
+//! interruption, progress tracking, volume caps.
 //!
-//! Définit les *ports* que [`persistence`] implémente (`MessageRepository`) :
-//! le trait appartient à cette couche, son implémentation SQLx à la couche
-//! basse. C'est ce qui rend l'orchestrateur testable sans base réelle.
+//! Declares the *ports* that [`persistence`] implements
+//! (`MessageRepository`): the trait belongs to this layer, its SQLx
+//! implementation to the lower one. That is what makes the orchestrator
+//! testable without a real database.
 //!
-//! Implémentation aux jalons 004, 006 et 010.
+//! Implemented at milestones 004, 006 and 010.
 
 mod error;
 
 pub use error::MessagingError;
 
-/// Version de la crate, telle que déclarée dans son manifeste.
+/// Crate version, as declared in its manifest.
 ///
 /// ```
 /// assert!(!messaging::VERSION.is_empty());
@@ -27,10 +28,10 @@ mod tests {
     use super::MessagingError;
 
     #[test]
-    fn l_erreur_de_crate_expose_un_message_lisible() {
+    fn crate_error_renders_a_readable_message() {
         assert_eq!(
-            MessagingError::NonImplemente.to_string(),
-            "fonctionnalité non implémentée"
+            MessagingError::NotImplemented.to_string(),
+            "not implemented yet"
         );
     }
 }

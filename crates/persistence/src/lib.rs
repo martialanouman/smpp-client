@@ -1,22 +1,22 @@
-//! Accès SQLite : migrations, repositories et transactions.
+//! SQLite access: migrations, repositories and transactions.
 //!
-//! Implémente les *ports* définis par les couches supérieures — le trait
-//! `MessageRepository` appartient à `messaging`, son implémentation SQLx vit
-//! ici (inversion de dépendance, guide §4.2). La crate ne dépend donc
-//! d'aucune autre crate interne malgré sa position dans le graphe.
+//! Implements the *ports* declared by upper layers — the `MessageRepository`
+//! trait belongs to `messaging`, its SQLx implementation lives here
+//! (dependency inversion, guide §4.2). The crate therefore depends on no
+//! other internal crate despite its position in the graph.
 //!
-//! Base SQLite en mode WAL, accès via SQLx — cf. ADR
+//! SQLite in WAL mode, accessed through SQLx — see ADR
 //! [`0002-persistance-sqlite-sqlx`](../../../docs/adr/0002-persistance-sqlite-sqlx.md).
-//! Elle porte l'invariant *write-ahead* de CLAUDE.md §4 : un message est
-//! persisté **avant** émission, et ses transitions d'état sont idempotentes.
+//! It upholds the write-ahead invariant of CLAUDE.md §4: a message is
+//! persisted **before** being sent, and its state transitions are idempotent.
 //!
-//! Schéma et migrations au jalon 002.
+//! Schema and migrations at milestone 002.
 
 mod error;
 
 pub use error::PersistenceError;
 
-/// Version de la crate, telle que déclarée dans son manifeste.
+/// Crate version, as declared in its manifest.
 ///
 /// ```
 /// assert!(!persistence::VERSION.is_empty());
@@ -28,10 +28,10 @@ mod tests {
     use super::PersistenceError;
 
     #[test]
-    fn l_erreur_de_crate_expose_un_message_lisible() {
+    fn crate_error_renders_a_readable_message() {
         assert_eq!(
-            PersistenceError::NonImplemente.to_string(),
-            "fonctionnalité non implémentée"
+            PersistenceError::NotImplemented.to_string(),
+            "not implemented yet"
         );
     }
 }

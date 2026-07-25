@@ -1,6 +1,6 @@
-# Conventions d'édition partagées — guide §3.5.
-# Les valeurs reprennent les défauts de rustfmt et de prettier : ce fichier
-# aligne les éditeurs sur les formateurs, il ne définit pas un style concurrent.
+# Shared editing conventions — guide §3.5.
+# The values mirror the rustfmt and prettier defaults: this file aligns
+# editors with the formatters, it does not define a competing style.
 root = true
 
 [*]
@@ -19,8 +19,8 @@ max_line_length = 100
 indent_size = 2
 
 [*.md]
-# Deux espaces en fin de ligne sont un retour à la ligne significatif en
-# Markdown : ne pas les supprimer.
+# Two trailing spaces are a meaningful line break in Markdown: do not strip
+# them.
 trim_trailing_whitespace = false
 
 [justfile]

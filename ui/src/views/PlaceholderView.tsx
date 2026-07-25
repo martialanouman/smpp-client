@@ -1,11 +1,11 @@
 import { useTranslation } from "react-i18next";
 
 /**
- * Page d'attente du jalon 000.
+ * Milestone 000 holding page.
  *
- * Elle n'existe que pour prouver que la chaîne complète tient debout —
- * Vite compile, React monte, i18n résout, la WebView Tauri affiche. Le shell
- * applicatif réel (navigation, vues métier) arrive au jalon 001.
+ * It exists only to prove the whole chain stands up — Vite compiles, React
+ * mounts, i18n resolves, the Tauri WebView renders. The real application
+ * shell (navigation, business views) lands at milestone 001.
  */
 export function PlaceholderView() {
   const { t } = useTranslation();

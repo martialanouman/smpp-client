@@ -1,6 +1,6 @@
 [package]
 name = "security"
-description = "Chiffrement des secrets, trousseau OS et configuration TLS"
+description = "Secret encryption, OS keyring and TLS configuration"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

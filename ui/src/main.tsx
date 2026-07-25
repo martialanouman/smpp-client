@@ -5,16 +5,16 @@ import "./i18n";
 import "./styles.css";
 import { PlaceholderView } from "./views/PlaceholderView";
 
-const racine = document.getElementById("root");
+const rootElement = document.getElementById("root");
 
-// `strict` rend ce cas visible plutôt que de le laisser passer sous un `!` :
-// un index.html sans point de montage est un bug de build, pas une situation
-// à rattraper silencieusement.
-if (!racine) {
-  throw new Error("Point de montage #root introuvable dans index.html");
+// `strict` surfaces this case instead of letting it slip under a `!`: an
+// index.html without a mount point is a build bug, not a situation to recover
+// from silently.
+if (!rootElement) {
+  throw new Error("Mount point #root not found in index.html");
 }
 
-createRoot(racine).render(
+createRoot(rootElement).render(
   <StrictMode>
     <PlaceholderView />
   </StrictMode>,

@@ -1,12 +1,12 @@
 {
-  // UN SEUL fichier, délibérément — pas de `references` vers des
-  // tsconfig.app.json / tsconfig.node.json comme le génère `create-vite`.
+  // A SINGLE file, deliberately — no `references` to tsconfig.app.json /
+  // tsconfig.node.json as `create-vite` generates.
   //
-  // Avec une configuration « solution » (`files: []` + `references`),
-  // `tsc --noEmit` ne vérifie RIEN : il ne suit pas les références et sort en
-  // succès sur un projet vide. CA-000-04 exige littéralement
-  // `pnpm -C ui tsc --noEmit` ; le critère serait donc vérifié à vide, ce qui
-  // est pire que pas de vérification du tout.
+  // With a "solution" configuration (`files: []` + `references`),
+  // `tsc --noEmit` checks NOTHING: it does not follow references and exits
+  // successfully on an empty project. CA-000-04 literally requires
+  // `pnpm -C ui tsc --noEmit`, so the criterion would be satisfied vacuously,
+  // which is worse than no check at all.
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
@@ -23,15 +23,15 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
 
-    // Les deux options nommément exigées par CA-000-04 et le guide §10.1.
-    // `noUncheckedIndexedAccess` fait de `tableau[i]` un `T | undefined` :
-    // c'est ce qui empêche les accès non gardés dans les tables virtualisées
-    // de logs et de contacts.
+    // The two options CA-000-04 and guide §10.1 name explicitly.
+    // `noUncheckedIndexedAccess` turns `array[i]` into `T | undefined`, which
+    // is what prevents unguarded access in the virtualised log and contact
+    // tables.
     "strict": true,
     "noUncheckedIndexedAccess": true,
 
-    // Durcissements complémentaires : du code mort ou une branche `switch`
-    // oubliée doivent échouer en CI, pas se remarquer à l'exécution.
+    // Additional hardening: dead code or a forgotten `switch` branch must
+    // fail in CI, not be noticed at runtime.
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,

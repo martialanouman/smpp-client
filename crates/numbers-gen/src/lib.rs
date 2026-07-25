@@ -1,20 +1,20 @@
-//! Génération de numéros valides par pays.
+//! Country-aware phone number generation.
 //!
-//! Produit des MSISDN structurellement valides pour un pays donné en
-//! s'appuyant sur les plages de numérotation de `phonenumber`, avec unicité
-//! garantie sur un lot et reproductibilité par graine.
+//! Produces structurally valid MSISDNs for a given country using the
+//! numbering ranges of `phonenumber`, with uniqueness guaranteed across a
+//! batch and reproducibility from a seed.
 //!
-//! Le générateur aléatoire est **injecté** (CLAUDE.md §7) : à graine égale,
-//! deux exécutions produisent la même suite. C'est ce qui rend les propriétés
-//! d'unicité vérifiables par `proptest`.
+//! The random number generator is **injected** (CLAUDE.md §7): given the same
+//! seed, two runs produce the same sequence. That is what makes the
+//! uniqueness properties checkable with `proptest`.
 //!
-//! Implémentation au jalon 013.
+//! Implemented at milestone 013.
 
 mod error;
 
 pub use error::NumbersGenError;
 
-/// Version de la crate, telle que déclarée dans son manifeste.
+/// Crate version, as declared in its manifest.
 ///
 /// ```
 /// assert!(!numbers_gen::VERSION.is_empty());
@@ -26,10 +26,10 @@ mod tests {
     use super::NumbersGenError;
 
     #[test]
-    fn l_erreur_de_crate_expose_un_message_lisible() {
+    fn crate_error_renders_a_readable_message() {
         assert_eq!(
-            NumbersGenError::NonImplemente.to_string(),
-            "fonctionnalité non implémentée"
+            NumbersGenError::NotImplemented.to_string(),
+            "not implemented yet"
         );
     }
 }

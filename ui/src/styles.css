@@ -1,24 +1,24 @@
 @import "tailwindcss";
 
-/* Tailwind v4 ne pose aucune couleur de texte ni de fond par défaut : sans ces
-   règles, la page hérite du thème de la WebView et le texte s'affiche en noir
-   sur fond sombre. Socle minimal, remplacé par le thème complet au jalon 001. */
+/* Tailwind v4 sets no default text or background colour: without these rules
+   the page inherits the WebView theme and text renders black on a dark
+   background. Minimal baseline, replaced by the full theme at milestone 001. */
 :root {
   color-scheme: light dark;
-  --shinobi-fond: #f8fafc;
-  --shinobi-texte: #0f172a;
+  --shinobi-background: #f8fafc;
+  --shinobi-text: #0f172a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --shinobi-fond: #0f172a;
-    --shinobi-texte: #e2e8f0;
+    --shinobi-background: #0f172a;
+    --shinobi-text: #e2e8f0;
   }
 }
 
 body {
-  background-color: var(--shinobi-fond);
-  color: var(--shinobi-texte);
+  background-color: var(--shinobi-background);
+  color: var(--shinobi-text);
   font-family:
     system-ui,
     -apple-system,

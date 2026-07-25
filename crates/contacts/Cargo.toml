@@ -1,6 +1,6 @@
 [package]
 name = "contacts"
-description = "Import CSV et XLSX, validation E.164 et gestion des listes"
+description = "CSV and XLSX import, E.164 validation and list management"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

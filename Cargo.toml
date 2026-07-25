@@ -1,9 +1,11 @@
 [workspace]
 resolver = "2"
-# `src-tauri` est membre du MÊME workspace que les crates métier, et non un
-# workspace autonome comme le génère `create-tauri-app` : CA-000-01 exige que
-# `cargo metadata --no-deps` les liste ensemble. Conséquence pratique : un seul
-# `target/`, un seul `Cargo.lock`, une seule entrée de cache en CI.
+
+# `src-tauri` belongs to the SAME workspace as the business crates, rather
+# than being a standalone one as `create-tauri-app` generates: CA-000-01
+# requires `cargo metadata --no-deps` to list them together. Practical
+# consequence: a single `target/`, a single `Cargo.lock`, a single CI cache
+# entry.
 members = ["crates/*", "src-tauri"]
 
 [workspace.package]
@@ -18,63 +20,62 @@ publish = false
 thiserror = "2.0.19"
 
 # ---------------------------------------------------------------------------
-# Règles de code, appliquées par la machine
+# Machine-enforced coding rules
 # ---------------------------------------------------------------------------
 #
-# Ce bloc est le cœur du jalon 000. Les règles « non négociables » de
-# CLAUDE.md §4 et du guide §5.4 y cessent d'être des conventions que l'on
-# découvre violées trois jalons plus tard : elles deviennent des erreurs de
-# compilation dès la première ligne écrite.
+# This block is the heart of milestone 000. The "non-negotiable" rules of
+# CLAUDE.md §4 and guide §5.4 stop being conventions that get discovered
+# violated three milestones later: they become compile errors from the very
+# first line written.
 #
-# Chaque crate s'y rattache par un `[lints] workspace = true`.
-# La configuration fine (assouplissements en test, listes d'interdits) vit
-# dans `clippy.toml`, qui *configure* les lints sans les sélectionner.
+# Each crate opts in with `[lints] workspace = true`.
+# Fine-grained configuration (test relaxations, deny lists) lives in
+# `clippy.toml`, which *configures* lints without selecting them.
 
 [workspace.lints.rust]
-# `forbid` et non `deny` : un `#[allow(unsafe_code)]` local ne peut pas le
-# lever. La seule échappatoire passe par ce fichier, couvert par CODEOWNERS —
-# ce qui transforme le « revue par un mainteneur » de CLAUDE.md §4 d'intention
-# en mécanisme.
+# `forbid`, not `deny`: a local `#[allow(unsafe_code)]` cannot lift it. The
+# only escape hatch goes through this file, which CODEOWNERS covers — turning
+# the "reviewed by a maintainer" of CLAUDE.md §4 from intent into mechanism.
 unsafe_code = "forbid"
 
-# Combiné à `-D warnings` en CI, rend obligatoire le `///` sur chaque item
-# public exigé par CLAUDE.md §4 et le guide §5.5.
+# Combined with `-D warnings` in CI, this makes the `///` on every public item
+# required by CLAUDE.md §4 and guide §5.5 mandatory.
 missing_docs = "warn"
 
-# « Visibilité minimale » (CLAUDE.md §4) : signale un `pub` qui n'est en fait
-# atteignable que dans la crate et devrait donc être `pub(crate)`.
+# "Minimal visibility" (CLAUDE.md §4): flags a `pub` item only reachable
+# within the crate, which should be `pub(crate)`.
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]
-# `priority = -1` laisse les lints nommés plus bas surcharger le groupe.
+# `priority = -1` lets the individually named lints below override the group.
 all = { level = "deny", priority = -1 }
 
-# Interdits de CLAUDE.md §4. `clippy.toml` les rouvre dans les tests, où ils
-# sont explicitement autorisés — sans quoi chaque `mod tests` devrait porter
-# une grappe de `#[allow]`.
+# Prohibitions from CLAUDE.md §4. `clippy.toml` reopens them inside tests,
+# where they are explicitly allowed — otherwise every `mod tests` would need
+# a cluster of `#[allow]` attributes.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
 
-# « `tracing` exclusivement, jamais `println!`/`eprintln!` » (CLAUDE.md §4).
+# "`tracing` exclusively, never `println!`/`eprintln!`" (CLAUDE.md §4).
 print_stdout = "deny"
 print_stderr = "deny"
 dbg_macro = "deny"
 
-# Support des listes d'interdits de `clippy.toml` (I/O bloquante en async,
-# `std::sync::Mutex`). Activés nommément pour ne pas dépendre de leur
-# appartenance à un groupe.
+# Backing for the deny lists in `clippy.toml` (blocking I/O in async code,
+# `std::sync::Mutex`). Enabled by name so they do not depend on group
+# membership.
 disallowed_methods = "deny"
 disallowed_types = "deny"
 
-# Conversions numériques : le codec SMPP manipule en permanence des champs
-# `u8`/`u16`/`u32` de largeur imposée par le protocole. Une troncature
-# silencieuse y produit un PDU malformé qu'aucun test de haut niveau ne
-# rattrape. Ces quatre lints appartiennent à `clippy::pedantic`, dont le reste
-# n'est délibérément PAS activé : sous `-D warnings`, le groupe complet
-# transformerait chaque fonction publique en négociation.
+# Numeric conversions: the SMPP codec constantly handles `u8`/`u16`/`u32`
+# fields whose width the protocol fixes. A silent truncation there produces a
+# malformed PDU that no high-level test catches. These four lints belong to
+# `clippy::pedantic`, whose remainder is deliberately NOT enabled: under
+# `-D warnings`, the full group would turn every public function into a
+# negotiation.
 cast_possible_truncation = "deny"
 cast_possible_wrap = "deny"
 cast_sign_loss = "deny"

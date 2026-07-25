@@ -1,19 +1,18 @@
-//! Type d'erreur de la crate.
+//! Error type for this crate.
 
-/// Erreurs produites par cette crate.
+/// Errors produced by this crate.
 ///
-/// Conformément au guide §6.1, chaque crate expose **un** type d'erreur
-/// `thiserror` exhaustif. Aucune API publique ne renvoie de
-/// `Box<dyn Error>` : l'appelant doit pouvoir discriminer les cas.
+/// Per guide §6.1, every crate exposes **one** exhaustive `thiserror` type.
+/// No public API returns a `Box<dyn Error>`: callers must be able to
+/// discriminate between cases.
 ///
-/// `#[non_exhaustive]` permet d'ajouter des variantes aux jalons suivants
-/// sans casser les `match` des crates appelantes.
+/// `#[non_exhaustive]` lets later milestones add variants without breaking
+/// `match` expressions in calling crates.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PersistenceError {
-    /// Point d'extension du jalon 000 : la crate n'expose encore aucune
-    /// logique. Remplacée par des variantes réelles dès le premier jalon
-    /// qui implémente cette couche.
-    #[error("fonctionnalité non implémentée")]
-    NonImplemente,
+    /// Milestone 000 placeholder: this crate exposes no logic yet. Replaced
+    /// by real variants as soon as its layer is implemented.
+    #[error("not implemented yet")]
+    NotImplemented,
 }

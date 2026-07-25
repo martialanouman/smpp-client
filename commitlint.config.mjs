@@ -1,22 +1,23 @@
 /**
- * Vérification des messages de commit — CLAUDE.md §6, guide §14.2.
+ * Commit message linting — CLAUDE.md §6, guide §14.2.
  *
- * Les messages sont rédigés EN FRANÇAIS, mais le `type` reste en anglais
- * (`feat`, `fix`, …) : ce n'est pas de la prose, c'est une grammaire lue par
- * les machines — elle détermine le bump SemVer et alimente le CHANGELOG.
- * Traduire `feat` en `fonc` casserait les deux.
+ * Commit messages are written IN FRENCH, but the `type` stays in English
+ * (`feat`, `fix`, …): it is not prose, it is a grammar machines read — it
+ * drives the SemVer bump and feeds the CHANGELOG. Translating `feat` into
+ * `fonc` would break both.
  *
- * Ce fichier est appliqué à deux endroits, et les deux sont nécessaires :
- *   · localement par `.husky/commit-msg`, qui rejette le commit à l'écriture ;
- *   · en CI par le job `commitlint`, qui rattrape ce qu'un `--no-verify` a
- *     laissé passer.
+ * This config is applied in two places, and both are necessary:
+ *   · locally by `.husky/commit-msg`, which rejects the commit as it is
+ *     written;
+ *   · in CI by the `commitlint` job, which catches whatever slipped through a
+ *     `--no-verify`.
  */
 export default {
   extends: ["@commitlint/config-conventional"],
   rules: {
-    // Les 11 types conventionnels. Le guide §14.2 en cite explicitement cinq
-    // (feat, fix, refactor, test, docs) ; les six autres couvrent les besoins
-    // réels du projet sans ouvrir la porte à des types inventés.
+    // The eleven conventional types. Guide §14.2 names five explicitly (feat,
+    // fix, refactor, test, docs); the other six cover the project's real
+    // needs without opening the door to invented types.
     "type-enum": [
       2,
       "always",
@@ -35,14 +36,14 @@ export default {
       ],
     ],
 
-    // « scope = nom de crate ou de zone » (CLAUDE.md §6). La règle ne se
-    // déclenche que si un scope est présent : `docs: …` sans scope reste
-    // valide, ce qui préserve l'historique existant.
+    // "scope = crate or area name" (CLAUDE.md §6). The rule only fires when a
+    // scope is present, so `docs: …` without a scope stays valid — which
+    // preserves the existing history.
     "scope-enum": [
       2,
       "always",
       [
-        // Les neuf crates métier.
+        // The nine business crates.
         "smpp-core",
         "smpp-session",
         "rate-control",
@@ -52,8 +53,8 @@ export default {
         "persistence",
         "logging-export",
         "security",
-        // Zones transverses.
-        "crates", // le workspace Cargo lui-même, quand aucune crate n'est visée
+        // Cross-cutting areas.
+        "crates", // the Cargo workspace itself, when no single crate is meant
         "app", // src-tauri
         "ui",
         "ipc",
@@ -68,10 +69,10 @@ export default {
       ],
     ],
 
-    // DÉSACTIVÉ VOLONTAIREMENT. `@commitlint/config-conventional` refuse les
-    // sujets en `sentence-case` et `start-case`, ce qui produit des faux
-    // positifs sur un sujet français commençant par un nom propre ou un
-    // acronyme protocolaire : « ajoute le PDU broadcast_sm » serait rejeté.
+    // DELIBERATELY DISABLED. `@commitlint/config-conventional` rejects
+    // `sentence-case` and `start-case` subjects, which produces false
+    // positives on a French subject starting with a proper noun or a protocol
+    // acronym: "ajoute le PDU broadcast_sm" would be refused.
     "subject-case": [0],
 
     "header-max-length": [2, "always", 100],

@@ -1,32 +1,31 @@
-# `src/ipc/` — frontière avec le backend
+# `src/ipc/` — the backend boundary
 
-Deux règles, toutes deux outillées.
+Two rules, both enforced by tooling.
 
-## 1. Les types sont générés, jamais écrits à la main
+## 1. Types are generated, never hand-written
 
-Les DTO sont définis **une seule fois en Rust** (`serde` + `specta`) ; leurs
-équivalents TypeScript sont produits par `tauri-specta` dans
-`src/ipc/generated/` — cf.
+DTOs are declared **once, in Rust** (`serde` + `specta`); their TypeScript
+counterparts are produced by `tauri-specta` into `src/ipc/generated/` — see
 [ADR 0003](../../../docs/adr/0003-generation-des-types-ipc.md).
 
-Redéclarer un type ici à la main crée une divergence silencieuse entre les deux
-côtés de l'IPC : le compilateur Rust et `tsc` sont alors tous les deux verts
-alors que la sérialisation échoue à l'exécution.
+Re-declaring a type here by hand creates a silent divergence between the two
+sides of the IPC: the Rust compiler and `tsc` are then both green while
+serialisation fails at runtime.
 
-L'étape 4 de la CI régénère et compare (`git diff --exit-code`) : un diff non
-commité fait échouer le build.
+CI step 4 regenerates and compares (`git diff --exit-code`): an uncommitted
+diff fails the build.
 
-> Au jalon 000, le générateur n'est pas encore branché — il arrive au
-> **jalon 001**. `scripts/check-ipc-types.sh` le détecte et laisse l'étape
-> passer, mais **échoue** si un fichier généré apparaît ici sans générateur :
-> l'état vide n'est toléré que tant qu'il est réellement vide.
+> At milestone 000 the generator is not wired in yet — it lands at
+> **milestone 001**. `scripts/check-ipc-types.sh` detects this and lets the
+> step pass, but **fails** if a generated file appears here without a
+> generator: the empty state is tolerated only while it is genuinely empty.
 
-## 2. Seul ce répertoire importe `@tauri-apps/api`
+## 2. Only this directory imports `@tauri-apps/api`
 
-Les composants n'appellent jamais `invoke` directement ; ils passent par les
-wrappers typés exposés ici (CLAUDE.md §4). La règle `no-restricted-imports` de
-`eslint.config.js` interdit l'import de `@tauri-apps/*` partout **sauf** dans
-ce répertoire.
+Components never call `invoke` directly; they go through the typed wrappers
+exposed here (CLAUDE.md §4). The `no-restricted-imports` rule in
+`eslint.config.js` bans importing `@tauri-apps/*` everywhere **except** this
+directory.
 
-Un wrapper y valide la forme de la réponse et traduit le DTO d'erreur
-`{ code, message, details }` en type exploitable par l'interface.
+A wrapper validates the shape of the response and translates the
+`{ code, message, details }` error DTO into a type the interface can use.

@@ -35,8 +35,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "Client ESME SMPP",
-    "longDescription": "Client ESME SMPP de qualité production : sessions v3.4 et v5.0, envoi unitaire et en masse, import de contacts, journalisation et export.",
+    "shortDescription": "SMPP ESME client",
+    "longDescription": "Production-grade SMPP ESME client: v3.4 and v5.0 sessions, single and bulk sending, contact import, logging and export.",
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libsecret-1-0"]

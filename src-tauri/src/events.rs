@@ -1,15 +1,15 @@
-//! Événements émis vers le frontend.
+//! Events emitted towards the frontend.
 //!
-//! Le sens inverse de [`crate::commands`] : le backend pousse ici les
-//! changements d'état que l'interface ne peut pas déduire seule — transitions
-//! de session, progression de campagne, métriques.
+//! The reverse direction of [`crate::commands`]: the backend pushes here the
+//! state changes the interface cannot derive on its own — session
+//! transitions, campaign progress, metrics.
 //!
-//! Conventions (guide §9.3) :
+//! Conventions (guide §9.3):
 //!
-//! - nommage `domaine:action` — `sessions:state`, `message:update`,
-//!   `metrics:tick` ;
-//! - les événements à haute fréquence sont **throttlés côté Rust** (1 à 4 Hz
-//!   pour `metrics:tick`). Émettre à la cadence réelle des PDU saturerait le
-//!   pont IPC et rendrait la WebView inutilisable pendant une campagne.
+//! - `domain:action` naming — `sessions:state`, `message:update`,
+//!   `metrics:tick`;
+//! - high-frequency events are **throttled on the Rust side** (1 to 4 Hz for
+//!   `metrics:tick`). Emitting at the real PDU rate would saturate the IPC
+//!   bridge and make the WebView unusable during a campaign.
 //!
-//! Vide au jalon 000.
+//! Empty at milestone 000.

@@ -1,6 +1,6 @@
 [package]
 name = "persistence"
-description = "Accès SQLite, migrations et repositories"
+description = "SQLite access, migrations and repositories"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

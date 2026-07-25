@@ -2,7 +2,7 @@
   "name": "shinobismpp",
   "version": "0.0.1",
   "private": true,
-  "description": "Client ESME SMPP de qualité production — application desktop multiplateforme",
+  "description": "Production-grade SMPP ESME client — cross-platform desktop application",
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.13.0",
   "engines": {

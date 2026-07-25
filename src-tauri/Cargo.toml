@@ -1,6 +1,6 @@
 [package]
 name = "shinobismpp"
-description = "Client ESME SMPP — couche IPC Tauri"
+description = "SMPP ESME client — Tauri IPC layer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [lib]
-# Le suffixe `_lib` évite une collision entre le nom de la bibliothèque et
-# celui du binaire sur Windows (rust-lang/cargo#8519).
+# The `_lib` suffix avoids a collision between the library name and the binary
+# name on Windows (rust-lang/cargo#8519).
 name = "shinobismpp_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -22,15 +22,14 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# `anyhow` est autorisé ICI et nulle part ailleurs : c'est la bordure de
-# l'application (CLAUDE.md §4). Les crates métier exposent des erreurs
-# `thiserror` typées ; seul le point d'entrée a le droit de les agréger.
+# `anyhow` is allowed HERE and nowhere else: this is the application boundary
+# (CLAUDE.md §4). Business crates expose typed `thiserror` errors; only the
+# entry point may aggregate them.
 anyhow = "1"
 
-# NOTE — aucune crate métier n'est encore branchée : `src-tauri` ne contient
-# aucune logique et n'a donc rien à appeler. Les dépendances vers `messaging`,
-# `contacts`, `numbers-gen` et `logging-export` apparaîtront au jalon 001,
-# avec le contrat IPC.
+# NOTE — no business crate is wired in yet: `src-tauri` holds no logic and so
+# has nothing to call. Dependencies on `messaging`, `contacts`, `numbers-gen`
+# and `logging-export` appear at milestone 001, along with the IPC contract.
 
 [lints]
 workspace = true

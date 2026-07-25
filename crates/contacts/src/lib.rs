@@ -1,21 +1,21 @@
-//! Import de contacts, validation E.164 et gestion des listes.
+//! Contact import, E.164 validation and list management.
 //!
-//! Lit des fichiers CSV et XLSX (`csv`, `calamine`), normalise les numéros au
-//! format E.164 via `phonenumber`, déduplique, et matérialise les listes de
-//! diffusion ainsi que la **liste d'exclusion** appliquée avant tout envoi
-//! (garde-fou d'usage, CLAUDE.md §8).
+//! Reads CSV and XLSX files (`csv`, `calamine`), normalises numbers to E.164
+//! through `phonenumber`, deduplicates, and materialises distribution lists
+//! as well as the **exclusion list** applied before any send (usage
+//! safeguard, CLAUDE.md §8).
 //!
-//! *Parse, don't validate* : un numéro qui franchit la frontière de cette
-//! crate est un `Msisdn`, pas une `String` — l'invalidité est impossible à
-//! représenter en aval.
+//! *Parse, don't validate*: a number crossing this crate's boundary is an
+//! `Msisdn`, not a `String` — invalid state becomes unrepresentable
+//! downstream.
 //!
-//! Implémentation au jalon 009.
+//! Implemented at milestone 009.
 
 mod error;
 
 pub use error::ContactsError;
 
-/// Version de la crate, telle que déclarée dans son manifeste.
+/// Crate version, as declared in its manifest.
 ///
 /// ```
 /// assert!(!contacts::VERSION.is_empty());
@@ -27,10 +27,10 @@ mod tests {
     use super::ContactsError;
 
     #[test]
-    fn l_erreur_de_crate_expose_un_message_lisible() {
+    fn crate_error_renders_a_readable_message() {
         assert_eq!(
-            ContactsError::NonImplemente.to_string(),
-            "fonctionnalité non implémentée"
+            ContactsError::NotImplemented.to_string(),
+            "not implemented yet"
         );
     }
 }

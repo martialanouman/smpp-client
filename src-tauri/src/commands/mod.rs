@@ -1,13 +1,13 @@
-//! Commandes IPC exposées au frontend.
+//! IPC commands exposed to the frontend.
 //!
-//! Chaque commande suit le même contrat (guide §9.1) :
+//! Every command follows the same contract (guide §9.1):
 //!
-//! - nommage `domaine_action` en `snake_case` — `session_bind`, `message_send` ;
-//! - signature `Result<Dto, ErrorDto>`, jamais de `panic!` ni de type opaque ;
-//! - validation des entrées **ici**, jamais côté frontend : la WebView est
-//!   traitée comme non fiable (CLAUDE.md §3) ;
-//! - le DTO d'erreur `{ code, message, details }` est stable et ne laisse
-//!   fuir ni chemin de fichier, ni secret.
+//! - `domain_action` naming in `snake_case` — `session_bind`, `message_send`;
+//! - `Result<Dto, ErrorDto>` signature, never a `panic!` nor an opaque type;
+//! - input validation happens **here**, never in the frontend: the WebView is
+//!   treated as untrusted (CLAUDE.md §3);
+//! - the `{ code, message, details }` error DTO is stable and leaks neither
+//!   file paths nor secrets.
 //!
-//! Vide au jalon 000 : le contrat IPC et la génération des types TypeScript
-//! arrivent au jalon 001.
+//! Empty at milestone 000: the IPC contract and TypeScript type generation
+//! land at milestone 001.

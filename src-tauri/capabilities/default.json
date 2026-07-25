@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions de la fenêtre principale. Volontairement réduites au strict nécessaire (CLAUDE.md §8) : pas de shell, pas d'accès système de fichiers, pas de plugin réseau. Chaque ajout ultérieur doit être justifié en revue — une capacité accordée « pour plus tard » est une surface d'attaque acquise sans contrepartie.",
+  "description": "Main window permissions. Deliberately reduced to the strict minimum (CLAUDE.md §8): no shell, no filesystem access, no network plugin. Every later addition must be justified in review — a capability granted 'for later' is attack surface acquired for nothing in return.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

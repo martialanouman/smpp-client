@@ -22,25 +22,25 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
-      // « Pas d'`any` » (CLAUDE.md §4). En `error` et non `warn` : un `any`
-      // toléré se propage, et le typage fort de l'IPC perd tout son sens.
+      // "No `any`" (CLAUDE.md §4). `error` rather than `warn`: a tolerated
+      // `any` spreads, and the whole point of the typed IPC is lost.
       "@typescript-eslint/no-explicit-any": "error",
 
-      // Miroir frontend de l'interdiction de `println!` côté Rust.
+      // Frontend mirror of the ban on `println!` on the Rust side.
       "no-console": "error",
 
-      // « Tout appel backend passe par les wrappers typés de ui/src/ipc/ —
-      // jamais d'`invoke` brut dans un composant » (CLAUDE.md §4).
-      // La règle est globale ; l'exception pour `src/ipc/` est déclarée plus
-      // bas. Sans ce garde-fou, la frontière IPC n'est qu'une convention de
-      // revue, et elle finit par céder.
+      // "Every backend call goes through the typed wrappers in ui/src/ipc/ —
+      // never a raw `invoke` in a component" (CLAUDE.md §4). The rule is
+      // global; the exception for `src/ipc/` is declared below. Without this
+      // guard the IPC boundary is only a review convention, and it eventually
+      // gives way.
       "no-restricted-imports": [
         "error",
         {
           patterns: [
             {
               group: ["@tauri-apps/api", "@tauri-apps/api/*", "@tauri-apps/plugin-*"],
-              message: "Les appels Tauri passent exclusivement par les wrappers typés de src/ipc/.",
+              message: "Tauri calls go exclusively through the typed wrappers in src/ipc/.",
             },
           ],
         },
@@ -48,21 +48,19 @@ export default tseslint.config(
     },
   },
 
-  // Seul le répertoire des wrappers a le droit de toucher l'API Tauri : c'est
-  // sa raison d'être.
+  // Only the wrapper directory may touch the Tauri API: that is its purpose.
   {
     files: ["src/ipc/**/*.{ts,tsx}"],
     rules: { "no-restricted-imports": "off" },
   },
 
-  // Les fichiers de configuration tournent sous Node, pas dans la WebView.
+  // Configuration files run under Node, not inside the WebView.
   {
     files: ["vite.config.ts", "eslint.config.js"],
     languageOptions: { globals: globals.node },
   },
 
-  // Les tests peuvent produire de la sortie console et manipuler des doubles
-  // faiblement typés.
+  // Tests may write to the console and handle loosely typed doubles.
   {
     files: ["**/*.test.{ts,tsx}", "src/test/**"],
     rules: { "no-console": "off" },

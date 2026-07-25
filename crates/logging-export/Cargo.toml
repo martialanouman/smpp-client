@@ -1,6 +1,6 @@
 [package]
 name = "logging-export"
-description = "Journal métier et export CSV, XLSX et JSON"
+description = "Business activity log and CSV, XLSX and JSON export"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,14 +1,14 @@
 name: Release
 
-# Déclenché par un tag `vX.Y.Z` (guide §19.3). `workflow_dispatch` permet de
-# rejouer une release à partir d'un tag existant sans le recréer.
+# Triggered by a `vX.Y.Z` tag (guide §19.3). `workflow_dispatch` allows
+# replaying a release from an existing tag without recreating it.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag existant à publier (ex. v0.1.0)"
+        description: "Existing tag to publish (e.g. v0.1.0)"
         required: true
         type: string
 
@@ -20,71 +20,70 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Garde-fou — CA-000-10 : « n'écrase jamais une release publiée »
+  # Guard — CA-000-10: "never overwrites a published release"
   # ---------------------------------------------------------------------------
-  # `tauri-action` réutilise une release existante correspondant au tagName ;
-  # rien dans son comportement ne distingue un brouillon d'une release
-  # publiée. Sans ce job, la clause du critère resterait une intention. Ici,
-  # elle devient une propriété testable : le pipeline s'arrête avant d'avoir
-  # produit quoi que ce soit.
-  garde:
-    name: Vérifications préalables
+  # `tauri-action` reuses an existing release matching tagName; nothing in its
+  # behaviour distinguishes a draft from a published release. Without this job
+  # the criterion's clause would remain an intention. Here it becomes a
+  # testable property: the pipeline stops before producing anything.
+  guard:
+    name: Pre-flight checks
     runs-on: ubuntu-22.04
     outputs:
-      tag: ${{ steps.resolution.outputs.tag }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Résolution du tag
-        id: resolution
+      - name: Resolve the tag
+        id: resolve
         env:
-          TAG_MANUEL: ${{ inputs.tag }}
+          MANUAL_TAG: ${{ inputs.tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="$TAG_MANUEL"
+            tag="$MANUAL_TAG"
           else
             tag="${{ github.ref_name }}"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Tag ciblé : $tag"
+          echo "Target tag: $tag"
 
-      - name: Refus d'écraser une release publiée
+      - name: Refuse to overwrite a published release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.resolution.outputs.tag }}
+          TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           if ! gh release view "$TAG" --json isDraft > /tmp/release.json 2>/dev/null; then
-            echo "Aucune release existante pour $TAG : publication possible."
+            echo "No existing release for $TAG: publishing is safe."
             exit 0
           fi
 
           if [ "$(jq -r .isDraft /tmp/release.json)" = "true" ]; then
-            echo "Une release BROUILLON existe déjà pour $TAG : elle sera complétée."
+            echo "A DRAFT release already exists for $TAG: it will be completed."
             exit 0
           fi
 
-          echo "::error::La release $TAG est déjà PUBLIÉE. Refus de l'écraser." >&2
-          echo "Pour republier, supprimez-la explicitement ou choisissez un nouveau tag." >&2
+          echo "::error::Release $TAG is already PUBLISHED. Refusing to overwrite it." >&2
+          echo "To republish, delete it explicitly or choose a new tag." >&2
           exit 1
 
-      - name: Cohérence entre le tag et la version applicative
+      - name: Tag and application version must agree
         env:
-          TAG: ${{ steps.resolution.outputs.tag }}
+          TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           version="$(jq -r .version src-tauri/tauri.conf.json)"
           if [ "$TAG" != "v$version" ]; then
-            echo "::error::Le tag $TAG ne correspond pas à la version $version de tauri.conf.json." >&2
-            echo "Un artefact portant un numéro différent de son tag est intraçable." >&2
+            echo "::error::Tag $TAG does not match version $version in tauri.conf.json." >&2
+            echo "An artifact whose number differs from its tag is untraceable." >&2
             exit 1
           fi
-          echo "Tag et version concordent : $TAG"
+          echo "Tag and version agree: $TAG"
 
   # ---------------------------------------------------------------------------
-  # Construction et publication
+  # Build and publish
   # ---------------------------------------------------------------------------
-  publication:
-    name: ${{ matrix.etiquette }}
-    needs: [garde]
+  publish:
+    name: ${{ matrix.label }}
+    needs: [guard]
     permissions:
       contents: write
     strategy:
@@ -93,23 +92,23 @@ jobs:
         include:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
-            etiquette: macOS (Apple Silicon)
+            label: macOS (Apple Silicon)
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
-            etiquette: macOS (Intel)
+            label: macOS (Intel)
           - platform: ubuntu-22.04
             args: ""
-            etiquette: Linux (.deb, .rpm, .AppImage)
+            label: Linux (.deb, .rpm, .AppImage)
           - platform: windows-latest
             args: ""
-            etiquette: Windows (.msi, .exe)
+            label: Windows (.msi, .exe)
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Dépendances système (Linux)
+      - name: System dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -131,43 +130,43 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Les deux cibles Apple ne servent que sur les runners macOS.
+          # Both Apple targets are only needed on macOS runners.
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
 
       - run: pnpm install --frozen-lockfile
 
-      # Le jalon 016 renseignera les secrets de signature. En leur absence, on
-      # produit des artefacts NON SIGNÉS et on le dit franchement dans les
-      # logs, plutôt que de laisser croire à une release distribuable
-      # (jalon 000 §5.2).
-      - name: État de la signature
+      # Milestone 016 will populate the signing secrets. Without them we
+      # produce UNSIGNED artifacts and say so plainly in the logs, rather than
+      # letting anyone believe the release is distributable
+      # (milestone 000 §5.2).
+      - name: Signing status
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          manquants=""
-          [ -z "$APPLE_CERTIFICATE" ]         && manquants="$manquants APPLE_CERTIFICATE"
-          [ -z "$WINDOWS_CERTIFICATE" ]       && manquants="$manquants WINDOWS_CERTIFICATE"
-          [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] && manquants="$manquants TAURI_SIGNING_PRIVATE_KEY"
+          missing=""
+          [ -z "$APPLE_CERTIFICATE" ]         && missing="$missing APPLE_CERTIFICATE"
+          [ -z "$WINDOWS_CERTIFICATE" ]       && missing="$missing WINDOWS_CERTIFICATE"
+          [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] && missing="$missing TAURI_SIGNING_PRIVATE_KEY"
 
-          if [ -n "$manquants" ]; then
-            echo "::warning::Secrets de signature absents :$manquants"
-            echo "::warning::Les artefacts produits seront NON SIGNÉS et NON NOTARISÉS."
-            echo "::warning::Ils ne sont pas distribuables en l'état — cf. jalon 016."
+          if [ -n "$missing" ]; then
+            echo "::warning::Signing secrets missing:$missing"
+            echo "::warning::The produced artifacts will be UNSIGNED and UNNOTARISED."
+            echo "::warning::They are not distributable as they stand — see milestone 016."
           else
-            echo "Tous les secrets de signature sont présents."
+            echo "All signing secrets are present."
           fi
 
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signature et notarisation — renseignés au jalon 016. Référencés
-          # exclusivement via `secrets` : aucune valeur n'apparaît dans le
-          # dépôt (CA-000-12).
+          # Signing and notarisation — populated at milestone 016. Referenced
+          # exclusively through `secrets`: no value appears in the repository
+          # (CA-000-12).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -178,17 +177,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # Le tag existe déjà — c'est lui qui a déclenché le workflow. On ne
-          # laisse donc pas l'action le fabriquer depuis `v__VERSION__`.
-          tagName: ${{ needs.garde.outputs.tag }}
-          releaseName: ShinobiSMPP ${{ needs.garde.outputs.tag }}
+          # The tag already exists — it is what triggered the workflow. So we
+          # do not let the action build one from `v__VERSION__`.
+          tagName: ${{ needs.guard.outputs.tag }}
+          releaseName: ShinobiSMPP ${{ needs.guard.outputs.tag }}
           releaseBody: |
-            Consultez le CHANGELOG pour le détail des changements.
+            See the CHANGELOG for the detailed list of changes.
 
-            Les artefacts ci-dessous sont produits automatiquement.
-            Vérifiez leur signature avant installation.
-          # Brouillon : une release n'est publiée qu'après vérification
-          # manuelle des artefacts sur chaque système (guide §19.3, étape 6).
+            The artifacts below are produced automatically.
+            Verify their signature before installing.
+          # Draft: a release is only published after manually verifying the
+          # artifacts on each operating system (guide §19.3, step 6).
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

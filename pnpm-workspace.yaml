@@ -1,16 +1,16 @@
-# Le frontend vit dans `ui/`, mais le `package.json` racine reste nécessaire :
-# c'est lui qui porte `@tauri-apps/cli` (`pnpm tauri dev` se lance depuis la
-# racine, cf. CLAUDE.md §5) et husky, dont le chemin de hooks est relatif à la
-# racine du dépôt git. Cf. docs/adr/0004-gestionnaire-de-paquets-frontend.md.
+# The frontend lives in `ui/`, but the root `package.json` is still required:
+# it is the one carrying `@tauri-apps/cli` (`pnpm tauri dev` runs from the
+# root, see CLAUDE.md §5) and husky, whose hooks path is relative to the git
+# repository root. See docs/adr/0004-gestionnaire-de-paquets-frontend.md.
 packages:
   - "ui"
 
 minimumReleaseAgeExclude:
   - eslint@10.8.0
 
-# pnpm ≥ 10 bloque par défaut les scripts de post-installation des dépendances.
-# Sans cette liste, esbuild n'écrit pas son binaire et `vite build` échoue sur
-# un exécutable introuvable. N'ajouter ici qu'un paquet dont on a vérifié le
-# besoin réel — c'est une surface d'exécution de code à l'installation.
+# pnpm ≥ 10 blocks dependency post-install scripts by default. Without this
+# allow-list esbuild never writes its binary and `vite build` fails on a
+# missing executable. Only add a package whose need has been verified — this
+# is code execution at install time.
 onlyBuiltDependencies:
   - esbuild

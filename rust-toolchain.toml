@@ -1,13 +1,13 @@
 [toolchain]
-# `stable` non épinglé : le poste de développement et la CI
-# (`dtolnay/rust-toolchain@stable`) restent alignés sans churn de version.
-# Contrepartie assumée : une nouvelle version de Rust peut introduire des
-# lints clippy inédits et rougir une CI qui était verte la veille. Le remède
-# est alors de corriger le code, pas d'épingler la toolchain.
+# Unpinned `stable`: the development machine and CI
+# (`dtolnay/rust-toolchain@stable`) stay aligned without version churn.
+# Accepted trade-off: a new Rust release may introduce fresh clippy lints and
+# turn a green CI red overnight. The remedy is to fix the code, not to pin the
+# toolchain.
 channel = "stable"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
 
-# `x86_64-apple-darwin` est requis par la matrice de release (deux .dmg
-# séparés, Intel et Apple Silicon — cf. .github/workflows/release.yml).
+# `x86_64-apple-darwin` is required by the release matrix (two separate .dmg
+# files, Intel and Apple Silicon — see .github/workflows/release.yml).
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]

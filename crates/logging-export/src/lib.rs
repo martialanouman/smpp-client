@@ -1,20 +1,20 @@
-//! Journal métier et exports CSV, XLSX et JSON.
+//! Business activity log and CSV, XLSX and JSON exports.
 //!
-//! Distincte de la journalisation technique (`tracing`) : cette crate produit
-//! le journal *fonctionnel* consultable par l'utilisateur — envois, accusés
-//! de réception, transitions de session — et ses exports.
+//! Distinct from technical logging (`tracing`): this crate produces the
+//! *functional* log the user consults — sends, delivery receipts, session
+//! transitions — and its exports.
 //!
-//! Contrainte de confidentialité (CLAUDE.md §8) : le contenu des messages est
-//! masqué ou tronqué par défaut dans tout journal destiné au partage, et le
-//! dump hexadécimal des PDU reste réservé à un mode debug explicite.
+//! Confidentiality constraint (CLAUDE.md §8): message content is masked or
+//! truncated by default in any log meant to be shared, and hexadecimal PDU
+//! dumps stay behind an explicit debug mode.
 //!
-//! Implémentation au jalon 014.
+//! Implemented at milestone 014.
 
 mod error;
 
 pub use error::LoggingExportError;
 
-/// Version de la crate, telle que déclarée dans son manifeste.
+/// Crate version, as declared in its manifest.
 ///
 /// ```
 /// assert!(!logging_export::VERSION.is_empty());
@@ -26,10 +26,10 @@ mod tests {
     use super::LoggingExportError;
 
     #[test]
-    fn l_erreur_de_crate_expose_un_message_lisible() {
+    fn crate_error_renders_a_readable_message() {
         assert_eq!(
-            LoggingExportError::NonImplemente.to_string(),
-            "fonctionnalité non implémentée"
+            LoggingExportError::NotImplemented.to_string(),
+            "not implemented yet"
         );
     }
 }

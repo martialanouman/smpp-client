@@ -1,6 +1,6 @@
 [package]
 name = "numbers-gen"
-description = "Génération de numéros valides par pays"
+description = "Country-aware phone number generation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

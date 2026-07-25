@@ -1,6 +1,6 @@
 [package]
 name = "smpp-session"
-description = "Gestion des sessions SMPP, fenêtrage et reconnexion"
+description = "SMPP session management, windowing and reconnection"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,8 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
-# Frontières de dépendance du guide §4.2 : les dépendances vont du haut vers
-# le bas, jamais l'inverse. Toute violation devient une erreur de compilation.
+# Layering boundaries from guide §4.2: dependencies always point
+# downwards, never up. Any violation becomes a compile error.
 smpp-core = { path = "../smpp-core" }
 rate-control = { path = "../rate-control" }
 

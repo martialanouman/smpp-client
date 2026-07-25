@@ -1,79 +1,78 @@
-# Tâches standardisées — guide §3.4, CLAUDE.md §5.
+# Standardised tasks — guide §3.4, CLAUDE.md §5.
 #
-# ATTENTION — ces recettes et .github/workflows/ci.yml doivent rester
-# alignées. La CI n'appelle délibérément PAS `just` : elle reprend les
-# commandes verbatim, ce qui évite d'installer un outil de plus sur trois OS.
-# La contrepartie est un risque de dérive, sans garde-fou automatique
-# satisfaisant. Toute modification ici impose de vérifier ci.yml, et
-# réciproquement.
+# WARNING — these recipes and .github/workflows/ci.yml must stay aligned. CI
+# deliberately does NOT call `just`: it repeats the commands verbatim, which
+# avoids installing one more tool on three operating systems. The trade-off is
+# a drift risk with no satisfying automatic guard. Any change here means
+# checking ci.yml, and the other way round.
 #
-# Chaque recette est une suite de commandes simples, sans construction shell :
-# elles doivent s'exécuter à l'identique sous sh et sous PowerShell.
+# Every recipe is a sequence of plain commands with no shell constructs: they
+# must run identically under sh and under PowerShell.
 
-# Liste les recettes disponibles.
+# List the available recipes.
 default:
     @just --list
 
-# --- Formatage --------------------------------------------------------------
+# --- Formatting -------------------------------------------------------------
 
-# Formate le code Rust et TypeScript.
+# Format Rust and TypeScript code.
 fmt:
     cargo fmt --all
     pnpm -C ui format
 
-# Vérifie le formatage sans rien modifier (étape 1 de la CI).
+# Check formatting without modifying anything (CI step 1).
 fmt-check:
     cargo fmt --all --check
     pnpm -C ui format:check
 
-# --- Qualité ----------------------------------------------------------------
+# --- Quality ----------------------------------------------------------------
 
-# Lint Rust et TypeScript, plus le typage (étapes 2 et 3 de la CI).
+# Lint Rust and TypeScript, plus type checking (CI steps 2 and 3).
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     pnpm -C ui typecheck
     pnpm -C ui lint
 
-# Vérifie que les types IPC générés sont à jour (étape 4 de la CI).
+# Check that the generated IPC types are up to date (CI step 4).
 ipc-check:
     bash scripts/check-ipc-types.sh
 
 # --- Tests ------------------------------------------------------------------
 
-# Tests unitaires, doctests et tests frontend (étapes 5 et 6 de la CI).
+# Unit tests, doctests and frontend tests (CI steps 5 and 6).
 test:
     cargo nextest run --workspace
     cargo test --doc --workspace
     pnpm -C ui test --run
 
-# --- Chaîne d'approvisionnement ---------------------------------------------
+# --- Supply chain -----------------------------------------------------------
 
-# Vulnérabilités et licences (étape 7 de la CI).
+# Vulnerabilities and licences (CI step 7).
 audit:
     cargo audit
     cargo deny check advisories bans licenses sources
 
-# --- Base de données --------------------------------------------------------
+# --- Database ---------------------------------------------------------------
 
-# Applique les migrations (inactif jusqu'au jalon 002).
+# Apply migrations (inactive until milestone 002).
 migrate:
     sqlx migrate run
 
-# Vérifie les migrations sur une base neuve (étape 8 de la CI).
+# Check migrations against a fresh database (CI step 8).
 migrate-check:
     bash scripts/check-migrations.sh
 
 # --- Application ------------------------------------------------------------
 
-# Lance l'application en rechargement à chaud.
+# Run the application with hot reload.
 dev:
     pnpm tauri dev
 
-# Produit les paquets natifs (étape 9 de la CI).
+# Produce the native packages (CI step 9).
 build:
     pnpm tauri build
 
-# --- Raccourci ---------------------------------------------------------------
+# --- Shortcut ---------------------------------------------------------------
 
-# Tout ce qui doit être vert avant un commit (CLAUDE.md §5).
+# Everything that must be green before a commit (CLAUDE.md §5).
 check: fmt-check lint test audit

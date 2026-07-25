@@ -1,6 +1,6 @@
 [package]
 name = "smpp-core"
-description = "Codec PDU et machine à états SMPP v3.4 et v5.0"
+description = "SMPP v3.4 and v5.0 PDU codec and state machine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

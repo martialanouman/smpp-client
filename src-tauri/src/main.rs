@@ -1,18 +1,18 @@
-//! Point d'entrée du binaire ShinobiSMPP.
+//! ShinobiSMPP binary entry point.
 //!
-//! Se contente de déléguer à [`shinobismpp_lib::run`] : toute la construction
-//! de l'application vit dans la bibliothèque, qui est seule testable et seule
-//! utilisable comme point d'entrée mobile.
+//! Only delegates to [`shinobismpp_lib::run`]: the whole application setup
+//! lives in the library, which alone is testable and alone usable as a mobile
+//! entry point.
 
-// Empêche l'ouverture d'une console supplémentaire sous Windows en release.
-// NE PAS RETIRER : sans cet attribut, l'application distribuée affiche une
-// fenêtre de terminal noire derrière son interface.
+// Prevents an extra console window on Windows in release builds.
+// DO NOT REMOVE: without this attribute the shipped application shows a black
+// terminal window behind its interface.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> anyhow::Result<()> {
-    // L'erreur est propagée plutôt qu'attrapée : `main` renvoyant un
-    // `Result`, le runtime l'affiche et positionne un code de sortie non nul.
-    // C'est ce qui permet de se passer du `.expect()` du modèle Tauri, que
-    // nos lints interdisent (CLAUDE.md §4).
+    // The error is propagated rather than caught: because `main` returns a
+    // `Result`, the runtime prints it and sets a non-zero exit code. That is
+    // what lets us do without the Tauri template's `.expect()`, which our
+    // lints forbid (CLAUDE.md §4).
     shinobismpp_lib::run()
 }

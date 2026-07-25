@@ -1,20 +1,20 @@
-# Le guide §5.1 impose « rustfmt par défaut » : ce fichier ne change donc
-# aucune règle de style. Il ne fixe que deux paramètres d'environnement, sans
-# lesquels le formatage n'est pas reproductible.
+# Guide §5.1 mandates "rustfmt with defaults": this file therefore changes no
+# formatting rule. It only pins two environment parameters, without which
+# formatting is not reproducible.
 
-# `cargo fmt` lit l'édition du manifeste, mais `rustfmt` invoqué directement —
-# ce que fait rust-analyzer au format-à-la-sauvegarde — retombe sur l'édition
-# 2015 et formate notamment `async`/`await` autrement. Sans cette ligne,
-# l'éditeur défait à chaque sauvegarde ce que la CI exige.
+# `cargo fmt` reads the edition from the manifest, but `rustfmt` invoked
+# directly — which is what rust-analyzer does on format-on-save — falls back
+# to edition 2015 and formats `async`/`await` differently. Without this line
+# the editor undoes on every save what CI demands.
 edition = "2021"
 
-# `cargo fmt --all --check` tourne aussi sur windows-latest. Combiné au
-# `* text=auto eol=lf` de .gitattributes, ce réglage supprime toute une classe
-# de faux diffs CRLF sur ce seul runner (CA-000-02).
+# `cargo fmt --all --check` also runs on windows-latest. Together with
+# `* text=auto eol=lf` in .gitattributes, this setting removes a whole class
+# of spurious CRLF diffs on that runner alone (CA-000-02).
 newline_style = "Unix"
 
-# NOTE — les options de tri et de regroupement des imports
-# (`group_imports`, `imports_granularity`) sont réservées à rustfmt nightly.
-# Sur stable, elles sont ignorées SANS ERREUR : les écrire ici donnerait
-# l'illusion d'une règle appliquée. Elles supposent un job
-# `cargo +nightly fmt` dédié — hors périmètre du jalon 000.
+# NOTE — import sorting and grouping options (`group_imports`,
+# `imports_granularity`) are nightly-only. On stable they are ignored WITHOUT
+# ERROR, so writing them here would give the illusion of an enforced rule.
+# They require a dedicated `cargo +nightly fmt` job — out of scope for
+# milestone 000.

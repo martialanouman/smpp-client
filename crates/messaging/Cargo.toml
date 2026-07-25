@@ -1,6 +1,6 @@
 [package]
 name = "messaging"
-description = "Encodage, segmentation et orchestration des envois"
+description = "Encoding, segmentation and send orchestration"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,8 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
-# Frontières de dépendance du guide §4.2 : les dépendances vont du haut vers
-# le bas, jamais l'inverse. Toute violation devient une erreur de compilation.
+# Layering boundaries from guide §4.2: dependencies always point
+# downwards, never up. Any violation becomes a compile error.
 smpp-session = { path = "../smpp-session" }
 persistence = { path = "../persistence" }
 

@@ -1,6 +1,6 @@
 [package]
 name = "rate-control"
-description = "Limitation de débit et adaptation à la congestion"
+description = "Throughput limiting and congestion adaptation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

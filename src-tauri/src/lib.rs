@@ -1,34 +1,33 @@
-//! Couche IPC de ShinobiSMPP — la seule à connaître Tauri.
+//! ShinobiSMPP IPC layer — the only crate that knows about Tauri.
 //!
-//! Cette crate est une **bordure**, pas une couche métier (guide §8.3). Son
-//! rôle se limite à quatre gestes : désérialiser et valider une entrée IPC,
-//! appeler un service métier, sérialiser la sortie, émettre un événement.
-//! Tout ce qui déborde de ces quatre gestes descend dans une crate de
-//! `crates/`.
+//! This crate is a **boundary**, not a business layer (guide §8.3). Its role
+//! is limited to four moves: deserialise and validate an IPC input, call a
+//! business service, serialise the output, emit an event. Anything beyond
+//! those four moves belongs in a crate under `crates/`.
 //!
-//! C'est aussi le seul endroit du dépôt où `anyhow` est autorisé : les crates
-//! métier exposent des erreurs `thiserror` typées, que le point d'entrée
-//! agrège (CLAUDE.md §4).
+//! It is also the only place in the repository where `anyhow` is allowed:
+//! business crates expose typed `thiserror` errors, which the entry point
+//! aggregates (CLAUDE.md §4).
 //!
-//! Au jalon 000, l'application se contente de démarrer et d'afficher la page
-//! d'attente. Le contrat IPC arrive au jalon 001.
+//! At milestone 000 the application merely starts and shows the placeholder
+//! page. The IPC contract lands at milestone 001.
 
 use anyhow::Context as _;
 
 mod commands;
 mod events;
 
-/// Construit puis lance l'application Tauri.
+/// Builds and runs the Tauri application.
 ///
-/// # Erreurs
+/// # Errors
 ///
-/// Renvoie une erreur si le contexte généré à la compilation est invalide ou
-/// si la WebView ne peut pas être initialisée — typiquement une dépendance
-/// système absente (WebView2 sur Windows, `webkit2gtk` sur Linux).
+/// Returns an error if the context generated at build time is invalid, or if
+/// the WebView cannot be initialised — typically a missing system dependency
+/// (WebView2 on Windows, `webkit2gtk` on Linux).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![])
         .run(tauri::generate_context!())
-        .context("échec du démarrage de l'application Tauri")
+        .context("failed to start the Tauri application")
 }

@@ -1,9 +1,9 @@
-//! Script de construction Tauri.
+//! Tauri build script.
 //!
-//! `tauri_build::build()` produit le contexte compilé à partir de
-//! `tauri.conf.json` et des `capabilities/` : c'est lui qui transforme la
-//! liste de permissions en vérifications intégrées au binaire, plutôt qu'en
-//! contrôles évaluables à l'exécution.
+//! `tauri_build::build()` produces the compiled context from
+//! `tauri.conf.json` and `capabilities/`: it is what turns the permission
+//! list into checks baked into the binary, rather than controls evaluated at
+//! runtime.
 
 fn main() {
     tauri_build::build();
