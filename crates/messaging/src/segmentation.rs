@@ -596,7 +596,7 @@ pub fn reassemble(segments: &[Segment]) -> Result<String, EncodingError> {
 /// exact alignment, is indistinguishable from a padded one — and loses it.
 /// TS 23.038 has the same ambiguity and tells the *sender* to write the
 /// carriage return twice. It cannot arise under
-/// [`Gsm7BitPacking::Unpacked`](crate::encoding::Gsm7BitPacking::Unpacked),
+/// [`Gsm7BitPacking::Unpacked`],
 /// where the octet count is the septet count.
 fn strip_padding_septet(septets: &mut Vec<u8>, segment: &Segment, fill_bits: usize) {
     let is_last = segment.sequence_number == segment.total_segments;
