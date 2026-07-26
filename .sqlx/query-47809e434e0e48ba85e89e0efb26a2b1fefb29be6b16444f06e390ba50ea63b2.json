@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO contact_list_members (list_id, contact_id) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "47809e434e0e48ba85e89e0efb26a2b1fefb29be6b16444f06e390ba50ea63b2"
+}

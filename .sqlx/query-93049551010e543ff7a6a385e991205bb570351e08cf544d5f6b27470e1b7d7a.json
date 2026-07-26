@@ -1,0 +1,230 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT session_id, name, host, port, bind_type, interface_version,\n                      system_id, password_enc, system_type, tls_config,\n                      window_size, throughput_tps, enquire_link_s, response_timeout_s,\n                      reconnect_config, bind_count, created_at, updated_at\n               FROM session_profiles\n               WHERE session_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "host",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "name": "port",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "name": "bind_type",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "bind_type"
+          }
+        }
+      },
+      {
+        "name": "interface_version",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "interface_version"
+          }
+        }
+      },
+      {
+        "name": "system_id",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "system_id"
+          }
+        }
+      },
+      {
+        "name": "password_enc",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "password_enc"
+          }
+        }
+      },
+      {
+        "name": "system_type",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "system_type"
+          }
+        }
+      },
+      {
+        "name": "tls_config",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "tls_config"
+          }
+        }
+      },
+      {
+        "name": "window_size",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "window_size"
+          }
+        }
+      },
+      {
+        "name": "throughput_tps",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "throughput_tps"
+          }
+        }
+      },
+      {
+        "name": "enquire_link_s",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "enquire_link_s"
+          }
+        }
+      },
+      {
+        "name": "response_timeout_s",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "response_timeout_s"
+          }
+        }
+      },
+      {
+        "name": "reconnect_config",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "reconnect_config"
+          }
+        }
+      },
+      {
+        "name": "bind_count",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "bind_count"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 17,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "93049551010e543ff7a6a385e991205bb570351e08cf544d5f6b27470e1b7d7a"
+}

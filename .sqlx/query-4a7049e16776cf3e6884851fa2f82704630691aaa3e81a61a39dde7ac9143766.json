@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_profiles (\n                   session_id, name, host, port, bind_type, interface_version,\n                   system_id, password_enc, system_type, tls_config,\n                   window_size, throughput_tps, enquire_link_s, response_timeout_s,\n                   reconnect_config, bind_count, created_at, updated_at\n               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n               ON CONFLICT (session_id) DO UPDATE SET\n                   name = excluded.name,\n                   host = excluded.host,\n                   port = excluded.port,\n                   bind_type = excluded.bind_type,\n                   interface_version = excluded.interface_version,\n                   system_id = excluded.system_id,\n                   password_enc = excluded.password_enc,\n                   system_type = excluded.system_type,\n                   tls_config = excluded.tls_config,\n                   window_size = excluded.window_size,\n                   throughput_tps = excluded.throughput_tps,\n                   enquire_link_s = excluded.enquire_link_s,\n                   response_timeout_s = excluded.response_timeout_s,\n                   reconnect_config = excluded.reconnect_config,\n                   bind_count = excluded.bind_count,\n                   updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 18
+    },
+    "nullable": []
+  },
+  "hash": "4a7049e16776cf3e6884851fa2f82704630691aaa3e81a61a39dde7ac9143766"
+}

@@ -59,8 +59,80 @@ majeur.
   graphe complet et vérifiée par une toolchain épinglée. Elle était déclarée
   à 1.78 depuis le jalon 000, valeur jamais vraie et que rien ne vérifiait.
 
+### Ajouté — jalon 002, persistance SQLite
+
+- **Base SQLite en mode WAL** : `Database::open` applique `journal_mode=WAL`,
+  `synchronous=NORMAL`, `busy_timeout` et `foreign_keys` par les options de
+  connexion du pool, donc sur **chaque** connexion. Un test lit les pragmas
+  huit fois de suite pour le prouver : WAL est une demande que SQLite peut
+  décliner en silence.
+- **Schéma de la spec §14.2** dans une migration réversible unique, embarquée
+  dans le binaire par `sqlx::migrate!()` — une application packagée n'a aucun
+  fichier à emporter à côté.
+- **Cinq repositories typés** (messages, contacts, campagnes, profils de
+  session, journal PDU) derrière autant de traits de port. Pagination **par
+  curseur**, jamais par `OFFSET`, qui reparcourt les lignes qu'il saute ;
+  parcours en flux dont la mémoire ne grandit pas avec le nombre de lignes,
+  mesuré sur 100 000 messages avec un allocateur compteur.
+- **Écritures groupées en une transaction** : un lot de N transitions d'état
+  produit un commit, pas N. La propriété est vérifiée par son observable —
+  l'atomicité — puisque SQLite n'expose aucun compteur de transactions.
+- **Aucun SQL hors de `persistence`** : le pool est `pub(crate)`, donc la règle
+  est tenue par le compilateur et non par la revue. Toutes les requêtes passent
+  par `query!`/`query_as!` et le cache `.sqlx/` est commité, ce qui rend la
+  compilation possible sans base accessible.
+- **Étape 8 de la CI réellement vérifiante** : migrations appliquées sur base
+  neuve, réappliquées pour l'idempotence et la validation des empreintes, puis
+  cache `.sqlx` comparé au schéma obtenu. Les empreintes SHA-256 des migrations
+  livrées sont aussi épinglées dans un test — `sqlx` ne détecte une migration
+  éditée que sur une base déjà migrée, jamais sur un clone neuf.
+
+### Corrigé — revue du jalon 002
+
+- **Les index de `messages` étaient inatteignables.** Écrite
+  `(? IS NULL OR colonne = ?)` pour tenir en un seul littéral vérifié à la
+  compilation, la clause interdisait à SQLite d'utiliser un index :
+  `count_messages` scannait la table entière et la pagination par curseur
+  reparcourait depuis le curseur à chaque page — le coût linéaire qu'elle
+  existe pour supprimer. Les colonnes indexées sont maintenant discriminées
+  côté Rust vers des requêtes littérales distinctes. Un test compare
+  désormais les **plans**, pas seulement les résultats, en lisant les requêtes
+  depuis `.sqlx/` pour qu'il ne puisse pas dériver.
+- **Une transition rejouée comptait une tentative de trop.** `attempts` était
+  incrémenté ; un lot committé puis réappliqué après une coupure amputait en
+  silence le budget de rejeu. Devient `MAX(attempts, ?)` avec un numéro de
+  tentative explicite. Le test de rejeu passait à côté : il empruntait le seul
+  constructeur qui ne touche aucun compteur.
+- **`smsc_message_id` ne pouvait plus être corrigé une fois écrit.** Sur un
+  réenvoi après timeout le SMSC attribue un nouvel identifiant ; la fusion
+  refusait de l'écrire par-dessus l'ancien, et le DLR du second envoi
+  n'aurait jamais corrélé. Le champ devient un `Keep`/`Set` explicite.
+- **La mesure mémoire de CA-002-05 ne pouvait pas échouer** : elle lisait des
+  compteurs cumulés après coup, donc mesurait « le résultat s'échappe-t-il »
+  et non « est-il matérialisé ». Prise flux vivant désormais, et vérifiée par
+  mutation.
+- **CA-002-06 est compté, plus seulement déduit** : l'atomicité ne réfute pas
+  une implémentation qui committe ligne par ligne après validation. Le volume
+  écrit dans le journal WAL, lui, compte les commits. `PRAGMA data_version` a
+  été essayé et écarté : SQLite ne promet qu'une différence, pas un compte.
+- **L'étape 8 de la CI n'avait jamais tourné sous Windows** : `mktemp -d`
+  renvoie un chemin MSYS que Git-bash ne traduit pas à l'intérieur d'une URL.
+- **`sqlx` émettait un `WARN` portant le SQL entier** à chaque parcours long.
+
+### Modifié
+
+- **MSRV portée de 1.93 à 1.94** : `sqlx` 0.9 la déclare et 1.93 refuse la
+  compilation. Le processus de l'[ADR 0006](docs/adr/0006-version-minimale-de-rust.md)
+  a fonctionné — plancher lu dans le graphe, puis vérifié en compilant. Le job
+  CI `msrv` lit la valeur depuis `Cargo.toml` et n'a rien demandé.
+
 ### Décisions
 
+- [ADR 0007](docs/adr/0007-emplacement-des-traits-de-port.md) : les traits de
+  port vivent dans `persistence` jusqu'à ce que `messaging` et `contacts`
+  existent. L'inversion de dépendance n'a de valeur que pour un consommateur
+  qui l'utilise ; en payer le coût — l'arête remontante — face à une crate vide
+  imite la forme du principe sans en obtenir le bénéfice.
 - [ADR 0001](docs/adr/0001-choix-de-la-pile-smpp.md) passe en **Accepté** :
   niveau d'API rusmpp tranché au **niveau bas** (`CommandCodec`), `rusmppc`
   écarté. Le critère décisif est la propriété de la corrélation des

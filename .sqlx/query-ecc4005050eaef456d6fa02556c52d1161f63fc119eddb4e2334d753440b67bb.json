@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO messages (\n               client_message_id, campaign_id, session_id, smsc_message_id,\n               source_addr, source_ton, source_npi,\n               dest_addr, dest_ton, dest_npi,\n               data_coding, segments, text, state, command_status,\n               dlr_stat, dlr_err, attempts,\n               created_at, sent_at, resp_at, dlr_at\n           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 22
+    },
+    "nullable": []
+  },
+  "hash": "ecc4005050eaef456d6fa02556c52d1161f63fc119eddb4e2334d753440b67bb"
+}

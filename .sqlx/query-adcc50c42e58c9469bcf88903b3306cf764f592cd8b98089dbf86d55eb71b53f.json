@@ -1,0 +1,170 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                      campaign_id, name, status, template, send_config,\n                      total_count, sent_count, delivered_count, failed_count,\n                      created_at, started_at, completed_at\n               FROM campaigns\n               WHERE campaign_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "campaign_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "campaign_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "template",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "template"
+          }
+        }
+      },
+      {
+        "name": "send_config",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "send_config"
+          }
+        }
+      },
+      {
+        "name": "total_count",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "total_count"
+          }
+        }
+      },
+      {
+        "name": "sent_count",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "sent_count"
+          }
+        }
+      },
+      {
+        "name": "delivered_count",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "delivered_count"
+          }
+        }
+      },
+      {
+        "name": "failed_count",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "failed_count"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "completed_at",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "campaigns",
+            "name": "completed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "adcc50c42e58c9469bcf88903b3306cf764f592cd8b98089dbf86d55eb71b53f"
+}

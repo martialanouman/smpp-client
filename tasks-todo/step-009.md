@@ -58,6 +58,7 @@ L'import est la porte d'entrée des données réelles : un fichier client contie
 - [ ] **CA-009-10** — L'import est annulable en cours ; l'annulation laisse la base cohérente (transaction ou marquage explicite de l'import partiel), jamais à moitié écrite sans trace.
 - [ ] **CA-009-11** — `import:progress` est throttlé et n'inonde pas l'IPC ; l'UI reste réactive pendant l'import.
 - [ ] **CA-009-12** — Les listes supportent union et intersection, et servent de source sélectionnable.
+- [ ] **CA-009-13** — Le port `ContactRepository` est **défini côté `contacts`** et implémenté côté `persistence` (inversion de dépendance, guide §8.1). Le jalon 002 l'a placé provisoirement dans `persistence::ports` faute de consommateur — voir [ADR 0007](../docs/adr/0007-emplacement-des-traits-de-port.md), dont c'est le point de réexamen. Le déplacement retire l'arête provisoire ; rien d'autre ne change.
 
 ## 5. Tests attendus
 

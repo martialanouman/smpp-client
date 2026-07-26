@@ -54,9 +54,24 @@ audit:
 
 # --- Database ---------------------------------------------------------------
 
-# Apply migrations (inactive until milestone 002).
+# Requires `sqlx-cli` and a DATABASE_URL — see .env.example. The application
+# itself never calls this: it embeds the same migrations through
+# `sqlx::migrate!()` and applies them on open. This recipe is for the
+# developer database the compile-time checked queries are built against.
+
+# Apply migrations to the database DATABASE_URL points at.
 migrate:
     sqlx migrate run
+
+# `.sqlx/` is committed so the workspace compiles with no database in reach
+# (ADR 0002). Changing a `query!` without running this makes the build fail
+# with "no cached data for this query"; changing the SCHEMA without running it
+# is worse — the build passes on stale metadata, which is what CI step 8
+# catches.
+
+# Regenerate the offline query cache after changing a query or the schema.
+sqlx-prepare:
+    cargo sqlx prepare --workspace -- --all-targets
 
 # Check migrations against a fresh database (CI step 8).
 migrate-check:

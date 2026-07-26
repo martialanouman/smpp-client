@@ -16,19 +16,22 @@ numéros valides par pays, journalise et exporte.
 
 | Outil | Version | Rôle |
 |---|---|---|
-| Rust (via `rustup`) | ≥ 1.93 | Backend et crates métier |
+| Rust (via `rustup`) | ≥ 1.94 | Backend et crates métier |
 | Node.js | 24 (voir [`.nvmrc`](.nvmrc)) | Build du frontend |
 | pnpm | ≥ 11 | Dépendances frontend |
 | `just` | — | Recettes de tâches |
-| SQLite | ≥ 3.40 | Base embarquée (à partir du jalon 002) |
+| SQLite | — | Compilé et embarqué par `sqlx` ; rien à installer |
 
 Outils Rust complémentaires :
 
 ```bash
 rustup component add rustfmt clippy
 cargo install cargo-binstall --locked
-cargo binstall -y cargo-nextest cargo-deny cargo-audit
+cargo binstall -y cargo-nextest cargo-deny cargo-audit sqlx-cli
 ```
+
+`sqlx-cli` sert à `just migrate` et à `just sqlx-prepare` ; il n'est pas
+nécessaire pour compiler, le cache de requêtes `.sqlx/` étant commité.
 
 Dépendances système : **Linux** `libwebkit2gtk-4.1-dev`, `libssl-dev`,
 `libsecret-1-dev`, `build-essential`, `pkg-config` · **macOS** Xcode Command
@@ -53,6 +56,8 @@ pnpm tauri dev
 | `just audit` | `cargo audit` et `cargo deny` |
 | `just check` | Les quatre précédentes — à passer avant tout commit |
 | `just dev` | Application en rechargement à chaud |
+| `just migrate` | Applique les migrations à `DATABASE_URL` |
+| `just sqlx-prepare` | Régénère le cache de requêtes `.sqlx/` |
 | `just build` | Paquets natifs |
 
 `just lint` et `just test` doivent être verts **avant** tout commit.
