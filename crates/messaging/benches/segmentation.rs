@@ -29,8 +29,10 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use messaging::{
-    encoding::{preview::preview, Encoding, EncodingChoice},
-    segmentation::{reassemble, segment, ConcatenationReference, SegmentationMode},
+    encoding::{preview::preview, Encoding, EncodingChoice, Gsm7BitPacking},
+    segmentation::{
+        reassemble, segment, ConcatenationReference, SegmentationMode, SegmentationOptions,
+    },
 };
 
 const REFERENCE: ConcatenationReference = ConcatenationReference::new(0x1234);
@@ -69,13 +71,7 @@ fn bench_preview(criterion: &mut Criterion) {
             BenchmarkId::from_parameter(&name),
             &text,
             |bencher, text| {
-                bencher.iter(|| {
-                    preview(
-                        black_box(text),
-                        EncodingChoice::Automatic,
-                        SegmentationMode::Udh,
-                    )
-                });
+                bencher.iter(|| preview(black_box(text), &SegmentationOptions::default()));
             },
         );
     }
@@ -93,12 +89,12 @@ fn bench_segment(criterion: &mut Criterion) {
         SegmentationMode::MessagePayload,
     ] {
         for (name, text) in corpus() {
+            let options = SegmentationOptions::default().with_mode(mode);
             let id = BenchmarkId::new(format!("{mode:?}"), &name);
 
             group.throughput(Throughput::Elements(characters(&text)));
             group.bench_with_input(id, &text, |bencher, text| {
-                bencher
-                    .iter(|| segment(black_box(text), EncodingChoice::Automatic, mode, REFERENCE));
+                bencher.iter(|| segment(black_box(text), &options, REFERENCE));
             });
         }
     }
@@ -111,12 +107,7 @@ fn bench_reassemble(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("reassemble");
 
     for (name, text) in corpus() {
-        let Ok(message) = segment(
-            &text,
-            EncodingChoice::Automatic,
-            SegmentationMode::Udh,
-            REFERENCE,
-        ) else {
+        let Ok(message) = segment(&text, &SegmentationOptions::default(), REFERENCE) else {
             continue;
         };
 
@@ -137,17 +128,32 @@ fn bench_reassemble(criterion: &mut Criterion) {
 /// twice the octets for the same characters.
 fn bench_forced_ucs2(criterion: &mut Criterion) {
     let text = "a".repeat(1_600);
+    let options =
+        SegmentationOptions::default().with_encoding(EncodingChoice::Forced(Encoding::Ucs2));
 
     criterion.bench_function("segment/forced-ucs2-1600", |bencher| {
-        bencher.iter(|| {
-            segment(
-                black_box(&text),
-                EncodingChoice::Forced(Encoding::Ucs2),
-                SegmentationMode::Udh,
-                REFERENCE,
-            )
-        });
+        bencher.iter(|| segment(black_box(&text), &options, REFERENCE));
     });
+}
+
+/// The packed layout against the unpacked one. The gap is what a message
+/// centre that insists on packed bodies costs in bit-shifting.
+fn bench_packing(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("segment/packing");
+
+    for (name, text) in corpus() {
+        for gsm_packing in [Gsm7BitPacking::Unpacked, Gsm7BitPacking::Packed] {
+            let options = SegmentationOptions::default().with_gsm_packing(gsm_packing);
+            let id = BenchmarkId::new(format!("{gsm_packing:?}"), &name);
+
+            group.throughput(Throughput::Elements(characters(&text)));
+            group.bench_with_input(id, &text, |bencher, text| {
+                bencher.iter(|| segment(black_box(text), &options, REFERENCE));
+            });
+        }
+    }
+
+    group.finish();
 }
 
 criterion_group!(
@@ -155,6 +161,7 @@ criterion_group!(
     bench_preview,
     bench_segment,
     bench_reassemble,
-    bench_forced_ucs2
+    bench_forced_ucs2,
+    bench_packing
 );
 criterion_main!(benches);

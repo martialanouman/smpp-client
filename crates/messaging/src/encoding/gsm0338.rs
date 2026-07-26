@@ -304,6 +304,27 @@ pub(crate) const fn fill_bits_after(header_octets: usize) -> usize {
     boundary - header_bits
 }
 
+/// Septets a receiver recovers from `octets` octets behind `fill_bits`.
+///
+/// This is the whole of the packed format's fragility over SMPP, in one line.
+/// `sm_length` counts **octets**; the septet count is not transmitted, so the
+/// receiver divides. Over the radio interface the equivalent field, TP-UDL,
+/// counts septets and the question does not arise.
+pub(crate) const fn septets_in(octets: usize, fill_bits: usize) -> usize {
+    (octets * OCTET_BITS).saturating_sub(fill_bits) / SEPTET_BITS
+}
+
+/// Whether a receiver counting octets recovers exactly `septets` septets.
+///
+/// False when the packing leaves seven spare bits, which the receiver reads as
+/// one septet too many — a carriage return, since that is what [`pack`] puts
+/// there. Harmless at the very end of a message, corruption in the middle of a
+/// concatenated one, which is why the segmenter refuses to close a non-final
+/// segment on such a count.
+pub(crate) const fn septet_count_is_recoverable(septets: usize, fill_bits: usize) -> bool {
+    septets_in(packed_len(septets, fill_bits), fill_bits) == septets
+}
+
 /// Packs septets into octets, seven bits at a time, least significant first.
 ///
 /// `fill_bits` zero bits are emitted first — see [`fill_bits_after`].
@@ -380,6 +401,30 @@ pub(crate) fn unpack(
     }
 
     Ok(septets)
+}
+
+/// Reads an **unpacked** body: one septet per octet, high bit clear.
+///
+/// No count is needed and none can be wrong — the length in octets *is* the
+/// length in septets. That is the whole reason the unpacked layout is the
+/// default over SMPP.
+///
+/// # Errors
+///
+/// [`EncodingError::MalformedUserData`] on an octet with its high bit set: a
+/// septet cannot exceed `0x7F`, so such a body was not written by an unpacked
+/// encoder — most likely it is packed, and decoding it here would produce
+/// silent gibberish.
+pub(crate) fn read_unpacked(octets: &[u8], sequence_number: u8) -> Result<Vec<u8>, EncodingError> {
+    if octets.iter().any(|octet| octet & 0x80 != 0) {
+        return Err(EncodingError::MalformedUserData {
+            sequence_number,
+            encoding: Encoding::Gsm7Bit,
+            reason: "unpacked body holds an octet above 0x7F, which is not a septet",
+        });
+    }
+
+    Ok(octets.to_vec())
 }
 
 #[cfg(test)]
@@ -572,6 +617,76 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The bug this predicate exists to prevent, stated as a table.
+    ///
+    /// With a six-octet UDH the fill is one bit, and a segment of 152 septets
+    /// occupies the same 134 octets as one of 153 — so a receiver counting
+    /// octets reads 153 and finds a carriage return that nobody typed. 152 is
+    /// exactly the count the extension-pair rule produces.
+    #[test]
+    fn a_receiver_counting_octets_recovers_the_septet_count_or_one_too_many() {
+        // Behind a six-octet UDH.
+        assert_eq!(packed_len(153, 1), 134);
+        assert_eq!(packed_len(152, 1), 134);
+        assert_eq!(septets_in(134, 1), 153);
+
+        assert!(septet_count_is_recoverable(153, 1));
+        assert!(!septet_count_is_recoverable(152, 1), "the reported bug");
+        assert!(septet_count_is_recoverable(151, 1));
+        assert!(septet_count_is_recoverable(150, 1));
+
+        // Without a header the fill is zero, and the two counts the segmenter
+        // can produce are both safe — which is why `sar_*` is untouched.
+        assert!(septet_count_is_recoverable(153, 0));
+        assert!(septet_count_is_recoverable(152, 0));
+        // The unsafe counts exist there too, one residue class away.
+        assert!(!septet_count_is_recoverable(7, 0));
+        assert!(!septet_count_is_recoverable(8, 1));
+    }
+
+    /// Whatever the alignment, a receiver never recovers *fewer* septets than
+    /// were written, and never more than one extra. The rewind rule therefore
+    /// only ever has to deal with an off-by-one.
+    #[test]
+    fn the_recovered_count_is_never_short_and_never_more_than_one_long() {
+        for septets in 0..500_usize {
+            for fill_bits in 0..7_usize {
+                let recovered = septets_in(packed_len(septets, fill_bits), fill_bits);
+
+                assert!(
+                    recovered == septets || recovered == septets + 1,
+                    "{septets} septets at fill {fill_bits} came back as {recovered}"
+                );
+                assert_eq!(
+                    septet_count_is_recoverable(septets, fill_bits),
+                    recovered == septets
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unpacked_body_is_its_own_septet_sequence() {
+        assert_eq!(
+            read_unpacked(&[0x41, 0x42, 0x00], 1),
+            Ok(vec![0x41, 0x42, 0x00])
+        );
+        assert_eq!(read_unpacked(&[], 1), Ok(Vec::new()));
+    }
+
+    /// An octet above 0x7F cannot be a septet. Refusing it is what turns
+    /// "packed body decoded as unpacked" from silent gibberish into an error.
+    #[test]
+    fn an_unpacked_body_rejects_an_octet_above_a_septet() {
+        assert!(matches!(
+            read_unpacked(&[0x41, 0xE8], 4),
+            Err(EncodingError::MalformedUserData {
+                sequence_number: 4,
+                ..
+            })
+        ));
     }
 
     #[test]

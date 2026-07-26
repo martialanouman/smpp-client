@@ -34,9 +34,19 @@ use smpp_core::{
 
 use crate::encoding::{
     gsm0338, latin1,
-    preview::{octets_for, plan, SegmentFiller, MAX_SEGMENTS},
-    ucs2, Encoding, EncodingChoice, EncodingError,
+    preview::{concatenated_filler, octets_for, plan, Placement, MAX_SEGMENTS},
+    ucs2, Encoding, EncodingChoice, EncodingError, Gsm7BitPacking,
 };
+
+/// Octets a concatenation UDH takes out of the body.
+///
+/// `05 00 03 ref total index` — spec §7.5, and
+/// [`ConcatenatedShortMessage8Bit::UDH_LENGTH`].
+pub(crate) const CONCATENATION_UDH_OCTETS: usize = ConcatenatedShortMessage8Bit::UDH_LENGTH;
+
+/// The septet a packed body is padded with — position `0x0D` of the base
+/// table, a carriage return.
+const CARRIAGE_RETURN_SEPTET: u8 = 0x0D;
 
 /// How the parts of a long message announce that they belong together.
 ///
@@ -52,6 +62,73 @@ pub enum SegmentationMode {
     Sar,
     /// No splitting: the whole body in the `message_payload` TLV.
     MessagePayload,
+}
+
+/// Everything the segmenter needs to know that is not the text itself.
+///
+/// All three fields are properties of the **session or campaign**, not of the
+/// message: which concatenation form the message centre accepts, how it
+/// expects GSM 7-bit laid out, and whether the operator overrode the encoding.
+/// Grouping them keeps [`segment`] and
+/// [`preview`](crate::encoding::preview::preview) taking the *same* input,
+/// which is what makes their agreement checkable (CA-004-09).
+///
+/// The default is the safe configuration for an unknown message centre:
+/// automatic encoding, concatenation UDH, unpacked GSM 7-bit.
+///
+/// ```
+/// use messaging::{
+///     encoding::{Encoding, EncodingChoice, Gsm7BitPacking},
+///     segmentation::{SegmentationMode, SegmentationOptions},
+/// };
+///
+/// let defaults = SegmentationOptions::default();
+///
+/// assert_eq!(defaults.encoding, EncodingChoice::Automatic);
+/// assert_eq!(defaults.mode, SegmentationMode::Udh);
+/// assert_eq!(defaults.gsm_packing, Gsm7BitPacking::Unpacked);
+///
+/// let legacy = SegmentationOptions::default()
+///     .with_mode(SegmentationMode::Sar)
+///     .with_gsm_packing(Gsm7BitPacking::Packed)
+///     .with_encoding(EncodingChoice::Forced(Encoding::Ucs2));
+///
+/// assert_eq!(legacy.mode, SegmentationMode::Sar);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SegmentationOptions {
+    /// Automatic detection, or the encoding the user forced.
+    pub encoding: EncodingChoice,
+    /// How the parts announce that they belong together.
+    pub mode: SegmentationMode,
+    /// How GSM 7-bit septets sit in the octets of `short_message`.
+    pub gsm_packing: Gsm7BitPacking,
+}
+
+impl SegmentationOptions {
+    /// The same options with another encoding choice.
+    #[must_use]
+    pub const fn with_encoding(mut self, encoding: EncodingChoice) -> Self {
+        self.encoding = encoding;
+
+        self
+    }
+
+    /// The same options with another concatenation mode.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: SegmentationMode) -> Self {
+        self.mode = mode;
+
+        self
+    }
+
+    /// The same options with another GSM 7-bit layout.
+    #[must_use]
+    pub const fn with_gsm_packing(mut self, gsm_packing: Gsm7BitPacking) -> Self {
+        self.gsm_packing = gsm_packing;
+
+        self
+    }
 }
 
 /// The number that ties the parts of one concatenated message together.
@@ -100,13 +177,44 @@ impl ConcatenationReference {
 ///
 /// Atomic so a session can hand out references from several tasks without a
 /// lock, which matters because milestone 006 pipelines submissions.
-#[derive(Debug, Default)]
+///
+/// # Why it does not start at zero
+///
+/// A deterministic start is a real hazard across a restart: the parts of a
+/// message sent just before the process stopped may still be in flight, and a
+/// counter that begins at zero again hands their reference to the very next
+/// message. The handset then merges two unrelated messages, once, at a moment
+/// nobody can reproduce.
+///
+/// [`Default`] therefore seeds the counter randomly.
+/// [`starting_at`](Self::starting_at) exists for tests, which guide §7 requires
+/// to be deterministic.
+#[derive(Debug)]
 pub struct ConcatenationReferenceCounter {
     next: core::sync::atomic::AtomicU16,
 }
 
+impl Default for ConcatenationReferenceCounter {
+    fn default() -> Self {
+        Self::random()
+    }
+}
+
 impl ConcatenationReferenceCounter {
-    /// A counter starting at `start`.
+    /// A counter seeded from the operating system's randomness.
+    ///
+    /// The seed comes from a version 4 UUID rather than a random-number crate:
+    /// `uuid` is already in the dependency graph and draws from the platform
+    /// entropy source, and 16 bits of a v4 UUID are 16 random bits. Adding a
+    /// dependency for two octets would not pass CLAUDE.md §2.
+    #[must_use]
+    pub fn random() -> Self {
+        let [high, low, ..] = uuid::Uuid::new_v4().into_bytes();
+
+        Self::starting_at(u16::from_be_bytes([high, low]))
+    }
+
+    /// A counter starting at `start`, for tests and for resuming a session.
     #[must_use]
     pub const fn starting_at(start: u16) -> Self {
         Self {
@@ -159,6 +267,7 @@ pub struct Segment {
     sequence_number: u8,
     total_segments: u8,
     encoding: Encoding,
+    gsm_packing: Gsm7BitPacking,
     esm_class: EsmClass,
     header_octets: usize,
     content_units: usize,
@@ -205,11 +314,20 @@ impl Segment {
         self.header_octets
     }
 
+    /// How the septets of the body are laid out. GSM 7-bit only.
+    #[must_use]
+    pub const fn gsm_packing(&self) -> Gsm7BitPacking {
+        self.gsm_packing
+    }
+
     /// Encoding units of user data — septets, UTF-16 code units or octets,
     /// depending on [`Self::encoding`].
     ///
-    /// Not derivable from the body length for GSM 7-bit: packing loses the
-    /// count, which is precisely why the padding convention exists.
+    /// What the *encoder* wrote. Under [`Gsm7BitPacking::Packed`] a receiver
+    /// that only has `sm_length` cannot always recover this exact number, and
+    /// [`reassemble`] deliberately does not read it — it recomputes, the way a
+    /// receiver has to. The field remains what the interface and the logs want
+    /// to show.
     #[must_use]
     pub const fn content_units(&self) -> usize {
         self.content_units
@@ -309,12 +427,13 @@ impl SegmentedMessage {
 /// [`SegmentationMode::MessagePayload`].
 pub fn segment(
     text: &str,
-    choice: EncodingChoice,
-    mode: SegmentationMode,
+    options: &SegmentationOptions,
     reference: ConcatenationReference,
 ) -> Result<SegmentedMessage, EncodingError> {
-    let layout = plan(text, choice, mode)?;
+    let layout = plan(text, options)?;
     let encoding = layout.encoding;
+    let mode = options.mode;
+    let packing = options.gsm_packing;
 
     let total_segments =
         u8::try_from(layout.segments).map_err(|_| EncodingError::TooManySegments {
@@ -324,7 +443,7 @@ pub fn segment(
 
     // Same greedy fill as the planner, replayed to find where the cuts fall.
     // `SegmentFiller` is the single statement of the rule (CA-004-09).
-    let cuts = cut_offsets(text, encoding, layout.budget, layout.segments);
+    let cuts = cut_offsets(text, encoding, layout.budget, layout.segments, options)?;
     let concatenated = layout.segments > 1;
 
     let units = EncodedUnits::encode(text, encoding, layout.total_units)?;
@@ -338,29 +457,37 @@ pub fn segment(
         let start = cuts.get(index).copied().unwrap_or(0);
         let end = cuts.get(index + 1).copied().unwrap_or(layout.total_units);
 
-        let header = (concatenated && mode == SegmentationMode::Udh).then(|| {
-            // INVARIANT: `total_segments >= 2` and `sequence_number` is in
-            // 1..=total_segments, which is exactly what `new` checks.
-            ConcatenatedShortMessage8Bit::new_unchecked(
-                reference.as_u8(),
-                total_segments,
-                sequence_number,
-            )
-            .udh_bytes()
-        });
+        let header = match concatenated && mode == SegmentationMode::Udh {
+            // The validating constructor, not the unchecked one: the numbering
+            // above is what it checks, and a future change to it should fail
+            // loudly rather than emit a malformed UDH.
+            true => Some(
+                ConcatenatedShortMessage8Bit::new(
+                    reference.as_u8(),
+                    total_segments,
+                    sequence_number,
+                )
+                .map_err(|_| EncodingError::InvalidConcatenationHeader {
+                    sequence_number,
+                    total_segments,
+                })?
+                .udh_bytes(),
+            ),
+            false => None,
+        };
 
         let header_octets = header.map_or(0, |octets| octets.len());
         let content_units = end - start;
 
         let mut body = Vec::with_capacity(
-            header_octets + octets_for_body(encoding, content_units, header_octets),
+            header_octets + octets_for(encoding, content_units, header_octets, packing),
         );
 
         if let Some(header) = header {
             body.extend_from_slice(&header);
         }
 
-        units.write(start..end, header_octets, &mut body);
+        units.write(start..end, header_octets, packing, &mut body);
 
         let esm_class = if header.is_some() {
             EsmClass::default().with_udhi_indicator()
@@ -384,6 +511,7 @@ pub fn segment(
             sequence_number,
             total_segments,
             encoding,
+            gsm_packing: packing,
             esm_class,
             header_octets,
             content_units,
@@ -450,6 +578,38 @@ pub fn reassemble(segments: &[Segment]) -> Result<String, EncodingError> {
     Ok(text)
 }
 
+/// Drops the padding septet TS 23.038 §6.1.2.3.1 allows on a final segment.
+///
+/// When a packed body leaves exactly seven spare bits, the writer fills them
+/// with a carriage return — zeroes would read as `@` — and a receiver dividing
+/// octets by seven therefore recovers one septet too many.
+///
+/// The segmenter refuses to close a **non-final** segment on such a count, so
+/// there the recovered number is exact and nothing is stripped. On the **last**
+/// segment the count is whatever the text made it, there is no later segment to
+/// push a character into, and this is the case the standard covers by
+/// prescribing `CR` as the pad value.
+///
+/// # The residual ambiguity
+///
+/// A last segment whose genuine final character is a carriage return, at that
+/// exact alignment, is indistinguishable from a padded one — and loses it.
+/// TS 23.038 has the same ambiguity and tells the *sender* to write the
+/// carriage return twice. It cannot arise under
+/// [`Gsm7BitPacking::Unpacked`](crate::encoding::Gsm7BitPacking::Unpacked),
+/// where the octet count is the septet count.
+fn strip_padding_septet(septets: &mut Vec<u8>, segment: &Segment, fill_bits: usize) {
+    let is_last = segment.sequence_number == segment.total_segments;
+    let could_be_padding = septets
+        .len()
+        .checked_sub(1)
+        .is_some_and(|written| !gsm0338::septet_count_is_recoverable(written, fill_bits));
+
+    if is_last && could_be_padding && septets.last() == Some(&CARRIAGE_RETURN_SEPTET) {
+        septets.pop();
+    }
+}
+
 /// Reads one segment's body back into text.
 fn decode_segment(segment: &Segment) -> Result<String, EncodingError> {
     let octets = match &segment.body {
@@ -467,12 +627,27 @@ fn decode_segment(segment: &Segment) -> Result<String, EncodingError> {
 
     match segment.encoding {
         Encoding::Gsm7Bit => {
-            let septets = gsm0338::unpack(
-                user_data,
-                gsm0338::fill_bits_after(segment.header_octets),
-                segment.content_units,
-                segment.sequence_number,
-            )?;
+            let septets = match segment.gsm_packing {
+                Gsm7BitPacking::Unpacked => {
+                    gsm0338::read_unpacked(user_data, segment.sequence_number)?
+                }
+                Gsm7BitPacking::Packed => {
+                    let fill_bits = gsm0338::fill_bits_after(segment.header_octets);
+
+                    // Deliberately NOT `segment.content_units`. A receiver has
+                    // `sm_length` in octets and nothing else, so it divides —
+                    // and reading the count out of our own structure would
+                    // make this function blind to exactly the class of bug
+                    // that division introduces.
+                    let available = gsm0338::septets_in(user_data.len(), fill_bits);
+                    let mut septets =
+                        gsm0338::unpack(user_data, fill_bits, available, segment.sequence_number)?;
+
+                    strip_padding_septet(&mut septets, segment, fill_bits);
+
+                    septets
+                }
+            };
 
             // CA-004-05, GSM half: an escape is the first septet of a pair.
             // Finding one at the very end means the pair was cut in two, and
@@ -501,38 +676,43 @@ fn decode_segment(segment: &Segment) -> Result<String, EncodingError> {
 /// Empty when the message is not split: a single segment starts at zero and
 /// runs to the end, and building a vector to say so would be one allocation
 /// on the most common path.
-fn cut_offsets(text: &str, encoding: Encoding, budget: usize, segments: usize) -> Vec<usize> {
+fn cut_offsets(
+    text: &str,
+    encoding: Encoding,
+    budget: usize,
+    segments: usize,
+    options: &SegmentationOptions,
+) -> Result<Vec<usize>, EncodingError> {
     if segments <= 1 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut offsets = Vec::with_capacity(segments);
     offsets.push(0);
 
-    let mut filler = SegmentFiller::new(budget);
+    let mut filler = concatenated_filler(budget, encoding, options);
     let mut offset = 0_usize;
 
-    for character in text.chars() {
-        let cost = encoding.unit_cost(character).unwrap_or(0);
+    for (index, character) in text.chars().enumerate() {
+        // The planner already proved every character representable; raising
+        // the error rather than defaulting to zero keeps that a fact.
+        let cost =
+            encoding
+                .unit_cost(character)
+                .ok_or(EncodingError::UnrepresentableCharacter {
+                    character,
+                    index,
+                    encoding,
+                })?;
 
-        if filler.accept(cost) {
-            offsets.push(offset);
+        if let Placement::Opened { rewound } = filler.accept(cost) {
+            offsets.push(offset - rewound);
         }
 
         offset += cost;
     }
 
-    offsets
-}
-
-/// Octets a body of `content_units` occupies behind `header_octets` of header.
-fn octets_for_body(encoding: Encoding, content_units: usize, header_octets: usize) -> usize {
-    match encoding {
-        Encoding::Gsm7Bit => {
-            gsm0338::packed_len(content_units, gsm0338::fill_bits_after(header_octets))
-        }
-        _ => octets_for(encoding, content_units),
-    }
+    Ok(offsets)
 }
 
 /// The whole text encoded once, in the unit its encoding counts in.
@@ -579,14 +759,35 @@ impl EncodedUnits {
 
     /// Appends the units of `range` to `out`, in wire form.
     ///
-    /// `header_octets` only matters for GSM 7-bit, where it decides how many
-    /// fill bits come before the first septet.
-    fn write(&self, range: core::ops::Range<usize>, header_octets: usize, out: &mut Vec<u8>) {
+    /// `header_octets` and `packing` only matter for GSM 7-bit, where together
+    /// they decide whether the septets are packed and behind how many fill
+    /// bits.
+    ///
+    /// `range` comes from the planner and is always within the buffer the
+    /// planner sized; the `debug_assert!` states that rather than leaving the
+    /// empty-slice fallback to be discovered as a silently truncated body.
+    fn write(
+        &self,
+        range: core::ops::Range<usize>,
+        header_octets: usize,
+        packing: Gsm7BitPacking,
+        out: &mut Vec<u8>,
+    ) {
+        debug_assert!(
+            range.end <= self.len(),
+            "segment range {range:?} is out of bounds"
+        );
+
         match self {
             Self::Septets(septets) => {
                 let slice = septets.get(range).unwrap_or_default();
 
-                gsm0338::pack(slice, gsm0338::fill_bits_after(header_octets), out);
+                match packing {
+                    Gsm7BitPacking::Unpacked => out.extend_from_slice(slice),
+                    Gsm7BitPacking::Packed => {
+                        gsm0338::pack(slice, gsm0338::fill_bits_after(header_octets), out);
+                    }
+                }
             }
             Self::CodeUnits(code_units) => {
                 let slice = code_units.get(range).unwrap_or_default();
@@ -598,6 +799,14 @@ impl EncodedUnits {
 
                 out.extend_from_slice(slice);
             }
+        }
+    }
+
+    /// Units held, whatever the variant.
+    fn len(&self) -> usize {
+        match self {
+            Self::Septets(septets) | Self::Octets(septets) => septets.len(),
+            Self::CodeUnits(code_units) => code_units.len(),
         }
     }
 }
@@ -639,6 +848,17 @@ mod tests {
         assert_eq!(SegmentationMode::default(), SegmentationMode::Udh);
     }
 
+    /// The default configuration is the safe one for an unknown message
+    /// centre. Changing it is a protocol decision, not a preference.
+    #[test]
+    fn the_defaults_are_udh_and_unpacked_gsm() {
+        let defaults = SegmentationOptions::default();
+
+        assert_eq!(defaults.mode, SegmentationMode::Udh);
+        assert_eq!(defaults.gsm_packing, Gsm7BitPacking::Unpacked);
+        assert_eq!(defaults.encoding, EncodingChoice::Automatic);
+    }
+
     /// The mode is a property of the message centre, not of the text, so the
     /// same text under two modes is cut in the same places — only the
     /// concatenation information differs.
@@ -647,17 +867,10 @@ mod tests {
         let text = "a".repeat(400);
         let reference = ConcatenationReference::new(7);
 
-        let udh = segment(
-            &text,
-            EncodingChoice::Automatic,
-            SegmentationMode::Udh,
-            reference,
-        )
-        .expect("plain ASCII");
+        let udh = segment(&text, &SegmentationOptions::default(), reference).expect("plain ASCII");
         let sar = segment(
             &text,
-            EncodingChoice::Automatic,
-            SegmentationMode::Sar,
+            &SegmentationOptions::default().with_mode(SegmentationMode::Sar),
             reference,
         )
         .expect("plain ASCII");
@@ -672,5 +885,120 @@ mod tests {
 
         assert_eq!(units(&udh), units(&sar));
         assert_eq!(units(&udh), vec![153, 153, 94]);
+    }
+
+    /// Two references drawn at random from two counters are almost certainly
+    /// different, which is the whole point of not starting at zero. One
+    /// collision in 65 536 is expected; the test would have to be very
+    /// unlucky twice to be flaky in a way that matters.
+    #[test]
+    fn the_default_counter_does_not_start_at_a_fixed_value() {
+        let draws: std::collections::HashSet<u16> = (0..16)
+            .map(|_| ConcatenationReferenceCounter::default().next().as_u16())
+            .collect();
+
+        assert!(
+            draws.len() > 1,
+            "sixteen counters all started on the same reference"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Bodies the segmenter would never produce
+    // -----------------------------------------------------------------
+
+    impl Segment {
+        /// A segment assembled from raw parts, for tests only.
+        ///
+        /// [`reassemble`] rejects bodies that cannot have come out of
+        /// [`segment`] — a dangling GSM escape, half a UCS2 code unit. Nothing
+        /// in the public API can build one, so without this the guards have no
+        /// coverage at all and could be deleted without a test noticing.
+        fn from_raw_parts(encoding: Encoding, octets: Vec<u8>, header_octets: usize) -> Self {
+            let content_units = octets.len().saturating_sub(header_octets);
+
+            Self {
+                sequence_number: 1,
+                total_segments: 1,
+                encoding,
+                gsm_packing: Gsm7BitPacking::Unpacked,
+                esm_class: EsmClass::default(),
+                header_octets,
+                content_units,
+                body: SegmentBody::ShortMessage(octets),
+                sar: None,
+            }
+        }
+    }
+
+    /// CA-004-05, read from the receiving end: a body whose last septet is an
+    /// escape lost the character it was escaping.
+    #[test]
+    fn a_body_ending_on_a_dangling_escape_is_refused() {
+        let segment = Segment::from_raw_parts(Encoding::Gsm7Bit, vec![b'a', gsm0338::ESCAPE], 0);
+
+        assert_eq!(
+            reassemble(&[segment]),
+            Err(EncodingError::MalformedUserData {
+                sequence_number: 1,
+                encoding: Encoding::Gsm7Bit,
+                reason: "body ends on an escape septet with nothing to escape",
+            })
+        );
+    }
+
+    /// An unpacked body cannot hold an octet above 0x7F. Refusing it is what
+    /// turns "a packed body read as unpacked" into an error instead of
+    /// gibberish.
+    #[test]
+    fn an_unpacked_gsm_body_above_a_septet_is_refused() {
+        let segment = Segment::from_raw_parts(Encoding::Gsm7Bit, vec![0xE8, 0x32], 0);
+
+        assert!(matches!(
+            reassemble(&[segment]),
+            Err(EncodingError::MalformedUserData {
+                encoding: Encoding::Gsm7Bit,
+                ..
+            })
+        ));
+    }
+
+    /// CA-004-05, UCS2 half: an odd octet count cut a code unit in two.
+    #[test]
+    fn a_ucs2_body_of_odd_length_is_refused() {
+        let segment = Segment::from_raw_parts(Encoding::Ucs2, vec![0x00, 0x41, 0x00], 0);
+
+        assert!(matches!(
+            reassemble(&[segment]),
+            Err(EncodingError::MalformedUserData {
+                encoding: Encoding::Ucs2,
+                ..
+            })
+        ));
+    }
+
+    /// The other UCS2 half: both code units are whole, but the pair is not.
+    #[test]
+    fn a_ucs2_body_holding_half_a_surrogate_pair_is_refused() {
+        // The high surrogate of U+1F600, with nothing after it.
+        let segment = Segment::from_raw_parts(Encoding::Ucs2, vec![0xD8, 0x3D], 0);
+
+        assert!(matches!(
+            reassemble(&[segment]),
+            Err(EncodingError::MalformedUserData {
+                encoding: Encoding::Ucs2,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_body_shorter_than_its_own_header_is_refused() {
+        let segment = Segment::from_raw_parts(Encoding::Gsm7Bit, vec![0x05, 0x00], 6);
+
+        assert!(matches!(
+            reassemble(&[segment]),
+            Err(EncodingError::MalformedUserData { .. })
+        ));
     }
 }

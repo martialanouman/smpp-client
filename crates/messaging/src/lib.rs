@@ -22,22 +22,26 @@
 //! * [`segmentation`] cuts a long message into parts and gives each one the
 //!   concatenation information its mode calls for.
 //!
+//! Both take the same
+//! [`SegmentationOptions`](segmentation::SegmentationOptions), which carry
+//! what the message centre expects rather than what the message contains.
+//!
 //! ```
 //! use messaging::{
-//!     encoding::{Encoding, EncodingChoice},
-//!     segmentation::{segment, ConcatenationReference, SegmentationMode},
+//!     encoding::Encoding,
+//!     segmentation::{segment, ConcatenationReference, SegmentationOptions},
 //! };
 //!
 //! let text = "a".repeat(161);
 //! let split = segment(
 //!     &text,
-//!     EncodingChoice::Automatic,
-//!     SegmentationMode::Udh,
+//!     &SegmentationOptions::default(),
 //!     ConcatenationReference::new(42),
 //! )?;
 //!
 //! assert_eq!(split.encoding(), Encoding::Gsm7Bit);
 //! assert_eq!(split.segments().len(), 2);
+//! // Septets, not characters: `€` would count for two.
 //! assert_eq!(split.segments()[0].content_units(), 153);
 //! assert_eq!(split.segments()[1].content_units(), 8);
 //! # Ok::<(), messaging::encoding::EncodingError>(())

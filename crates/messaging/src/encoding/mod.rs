@@ -18,10 +18,14 @@
 //!
 //! The single most common bug in this area is comparing a count in one unit
 //! against a limit in another. GSM 7-bit counts **septets** *after* the
-//! extension escapes have been expanded and *before* packing; UCS2 counts
-//! **UTF-16 code units**, of which an emoji costs two; Latin-1 counts
+//! extension escapes have been expanded and *independently of packing*; UCS2
+//! counts **UTF-16 code units**, of which an emoji costs two; Latin-1 counts
 //! **octets**. [`SegmentBudget`] carries its [`BudgetUnit`] so a limit can
 //! never be read in the wrong one.
+//!
+//! The figures of spec §7.5 — 160 and 153 — are therefore **septets**, not
+//! characters: a text of 153 characters containing one `€` is 154 septets and
+//! does not fit a concatenated segment.
 
 pub mod error;
 pub(crate) mod gsm0338;
@@ -41,12 +45,57 @@ use smpp_core::values::DataCoding;
 /// limits the manual override to these three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Encoding {
-    /// GSM 03.38 7-bit, packed. The default, and the densest.
+    /// GSM 03.38 7-bit. The default, and the densest.
+    ///
+    /// How the septets are laid out in the octets of `short_message` is a
+    /// separate question — see [`Gsm7BitPacking`].
     Gsm7Bit,
     /// ISO-8859-1, one octet per character.
     Latin1,
     /// UTF-16 big endian. Covers the whole of Unicode.
     Ucs2,
+}
+
+/// How GSM 7-bit septets are laid out in the octets of `short_message`.
+///
+/// # Why this is a choice at all
+///
+/// GSM 03.38 §6.1.2.1.1 describes the **over-the-air** format, where eight
+/// septets are squeezed into seven octets. That format applies between the
+/// message centre and the handset — *not* to the `short_message` field of a
+/// `submit_sm`. On the SMPP link the near-universal convention is the opposite
+/// one: **one septet per octet**, high bit clear, and the message centre packs
+/// before the radio interface. Kannel, Jasmin, CloudHopper and the large
+/// commercial aggregators all expect that. Packing on the SMPP link exists —
+/// some ZTE and legacy operator equipment — but it is the documented exception.
+///
+/// Getting it wrong is silent in both directions: the message centre answers
+/// `ESME_ROK`, the delivery receipt says `DELIVRD`, and the handset shows
+/// gibberish. Nothing ever comes back. Hence the default, and hence the fact
+/// that this is configured per session rather than guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Gsm7BitPacking {
+    /// One septet per octet, high bit clear. The default and the common case.
+    ///
+    /// `sm_length` counts one octet per septet, so a full single segment is
+    /// 160 octets — well within the 254 the field allows. The message centre
+    /// packs before the radio interface.
+    #[default]
+    Unpacked,
+    /// Eight septets in seven octets, as GSM 03.38 §6.1.2.1.1 packs them.
+    ///
+    /// For the message centres that require it. Two consequences worth knowing
+    /// before turning it on:
+    ///
+    /// * `sm_length` is in octets, so the receiver has to *recompute* the
+    ///   septet count from it. The segmenter therefore refuses to close a
+    ///   non-final segment on a count that would not come back exactly.
+    /// * on the **last** segment the recomputation can still yield one septet
+    ///   too many, which the padding makes a carriage return. That case is
+    ///   unavoidable — there is no later segment to push a character into —
+    ///   and it is the one TS 23.038 §6.1.2.3.1 covers by prescribing `CR` as
+    ///   the pad value precisely so it stays harmless.
+    Packed,
 }
 
 impl Encoding {
@@ -122,11 +171,13 @@ impl core::fmt::Display for Encoding {
 /// What a [`SegmentBudget`] counts.
 ///
 /// Exists so a number can never be read in the wrong unit: a GSM budget of 160
-/// is 160 *septets*, which pack into 140 octets, and comparing it against an
-/// octet count would allow a 14 % overflow that only shows up on a handset.
+/// is 160 *septets*, and a septet is not a character — `€` is one character
+/// and two septets. Counting characters against it lets a message overflow by
+/// as much as it contains extended characters, and the overflow only shows up
+/// on a handset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BudgetUnit {
-    /// GSM 03.38 septets, escapes expanded, before packing.
+    /// GSM 03.38 septets, escapes expanded, whatever the packing.
     Septets,
     /// UTF-16 code units — two for a character outside the basic plane.
     Utf16CodeUnits,

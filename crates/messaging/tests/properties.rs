@@ -12,8 +12,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use messaging::{
-    encoding::{preview::preview, Encoding, EncodingChoice},
-    segmentation::{reassemble, segment, ConcatenationReference, Segment, SegmentationMode},
+    encoding::{preview::preview, Encoding, EncodingChoice, Gsm7BitPacking},
+    segmentation::{
+        reassemble, segment, ConcatenationReference, Segment, SegmentationMode, SegmentationOptions,
+    },
 };
 use proptest::prelude::*;
 
@@ -35,6 +37,10 @@ const GSM_ALPHABET: &[char] = &[
     '}', '\\', '[', '~', ']', '|', '€',
 ];
 
+/// The ten characters that cost two septets rather than one.
+const GSM_EXTENSION_CHARACTERS: &[char] =
+    &['\u{000C}', '^', '{', '}', '\\', '[', '~', ']', '|', '€'];
+
 /// Texts written entirely in the GSM alphabet, extension characters included.
 fn gsm_text(max_characters: usize) -> impl Strategy<Value = String> {
     prop::collection::vec(prop::sample::select(GSM_ALPHABET), 0..=max_characters)
@@ -45,6 +51,15 @@ fn gsm_text(max_characters: usize) -> impl Strategy<Value = String> {
 fn any_text(max_characters: usize) -> impl Strategy<Value = String> {
     prop::collection::vec(any::<char>(), 0..=max_characters)
         .prop_map(|characters| characters.into_iter().collect())
+}
+
+/// Texts Latin-1 can write. CA-004-08 names three encodings, and this is the
+/// one the other two strategies never reach: `€` is GSM-only, `ç` is
+/// Latin-1-only, and neither generator produces a text that is exactly the
+/// intersection.
+fn latin1_text(max_characters: usize) -> impl Strategy<Value = String> {
+    prop::collection::vec(0..=0xFF_u32, 0..=max_characters)
+        .prop_map(|code_points| code_points.into_iter().filter_map(char::from_u32).collect())
 }
 
 /// The three modes, so every property is checked against all of them.
@@ -58,6 +73,16 @@ fn any_mode() -> impl Strategy<Value = SegmentationMode> {
     )
 }
 
+/// Both GSM layouts. The packed one moves where the cuts fall, so every
+/// property has to hold under it too.
+fn any_packing() -> impl Strategy<Value = Gsm7BitPacking> {
+    prop::sample::select(&[Gsm7BitPacking::Unpacked, Gsm7BitPacking::Packed][..])
+}
+
+fn options(mode: SegmentationMode) -> SegmentationOptions {
+    SegmentationOptions::default().with_mode(mode)
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -66,20 +91,52 @@ proptest! {
     /// Bounded to a single segment so this really is the encoder round trip
     /// and not the concatenation one, which the next property covers.
     #[test]
-    fn a_short_gsm_text_survives_encoding_and_decoding(text in gsm_text(70)) {
-        let message = segment(&text, EncodingChoice::Automatic, SegmentationMode::Udh, REFERENCE)
-            .unwrap();
+    fn a_short_gsm_text_survives_encoding_and_decoding(
+        text in gsm_text(70),
+        gsm_packing in any_packing(),
+    ) {
+        let options = SegmentationOptions::default().with_gsm_packing(gsm_packing);
+        let message = segment(&text, &options, REFERENCE).unwrap();
 
         prop_assert_eq!(message.encoding(), Encoding::Gsm7Bit);
-        prop_assert_eq!(message.segments().len(), 1);
+
+        // The septet count is what the budget is expressed in, and it is not
+        // the character count — every extension character costs two. Stating
+        // it independently is what makes this more than a tautology.
+        let expected_septets: usize = text
+            .chars()
+            .map(|character| usize::from(GSM_EXTENSION_CHARACTERS.contains(&character)) + 1)
+            .sum();
+
+        prop_assert_eq!(message.segments()[0].content_units(), expected_septets);
+        prop_assert_eq!(reassemble(message.segments()), Ok(text));
+    }
+
+    /// The Latin-1 round trip, which neither of the other two generators
+    /// reaches (CA-004-08 names three encodings).
+    #[test]
+    fn a_latin1_text_survives_encoding_and_decoding(
+        text in latin1_text(400),
+        mode in any_mode(),
+    ) {
+        let options = options(mode).with_encoding(EncodingChoice::Forced(Encoding::Latin1));
+        let message = segment(&text, &options, REFERENCE).unwrap();
+
+        prop_assert_eq!(message.encoding(), Encoding::Latin1);
+        // Latin-1 has no escape and no surrogate: one octet per character.
+        prop_assert_eq!(
+            message.segments().iter().map(Segment::content_units).sum::<usize>(),
+            text.chars().count()
+        );
         prop_assert_eq!(reassemble(message.segments()), Ok(text));
     }
 
     /// The same, for UCS2: a text with at least one foreign character.
     #[test]
     fn a_short_ucs2_text_survives_encoding_and_decoding(text in any_text(30)) {
-        let message = segment(&text, EncodingChoice::Forced(Encoding::Ucs2), SegmentationMode::Udh, REFERENCE)
-            .unwrap();
+        let options = SegmentationOptions::default()
+            .with_encoding(EncodingChoice::Forced(Encoding::Ucs2));
+        let message = segment(&text, &options, REFERENCE).unwrap();
 
         prop_assert_eq!(message.encoding(), Encoding::Ucs2);
         prop_assert_eq!(reassemble(message.segments()), Ok(text));
@@ -93,7 +150,7 @@ proptest! {
         text in any_text(600),
         mode in any_mode(),
     ) {
-        let message = segment(&text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+        let message = segment(&text, &options(mode), REFERENCE).unwrap();
 
         prop_assert_eq!(reassemble(message.segments()), Ok(text));
     }
@@ -104,11 +161,47 @@ proptest! {
     fn concatenating_the_segments_restores_a_gsm_message(
         text in gsm_text(900),
         mode in any_mode(),
+        gsm_packing in any_packing(),
     ) {
-        let message = segment(&text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+        // The one documented limit of the packed layout: a genuine trailing
+        // carriage return at the padding alignment is indistinguishable from
+        // padding. Unpacked — the default — has no such case, and the
+        // acceptance suite pins the packed one by example.
+        prop_assume!(
+            gsm_packing == Gsm7BitPacking::Unpacked || !text.ends_with('\r')
+        );
+
+        let options = options(mode).with_gsm_packing(gsm_packing);
+        let message = segment(&text, &options, REFERENCE).unwrap();
 
         prop_assert_eq!(message.encoding(), Encoding::Gsm7Bit);
         prop_assert_eq!(reassemble(message.segments()), Ok(text));
+    }
+
+    /// The oracle of the packed layout, as a property: a receiver that only
+    /// has `sm_length` recovers exactly what the encoder wrote — for every
+    /// segment but the last, where the padding septet is allowed and dropped.
+    #[test]
+    fn a_receiver_counting_octets_recovers_every_non_final_packed_segment(
+        text in gsm_text(900),
+        mode in prop::sample::select(&[SegmentationMode::Udh, SegmentationMode::Sar][..]),
+    ) {
+        let options = options(mode).with_gsm_packing(Gsm7BitPacking::Packed);
+        let message = segment(&text, &options, REFERENCE).unwrap();
+        let segments = message.segments();
+
+        for part in &segments[..segments.len() - 1] {
+            let body = part.short_message().unwrap();
+            let user_data = body.len() - part.header_octets();
+            let fill_bits = usize::from(part.header_octets() > 0);
+
+            prop_assert_eq!(
+                (user_data * 8 - fill_bits) / 7,
+                part.content_units(),
+                "segment {} would be over-read",
+                part.sequence_number()
+            );
+        }
     }
 
     /// CA-004-09: the counter the editor draws and the segments actually sent
@@ -117,9 +210,11 @@ proptest! {
     fn the_preview_agrees_with_the_segmentation(
         text in any_text(500),
         mode in any_mode(),
+        gsm_packing in any_packing(),
     ) {
-        let preview = preview(&text, EncodingChoice::Automatic, mode).unwrap();
-        let message = segment(&text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+        let options = options(mode).with_gsm_packing(gsm_packing);
+        let preview = preview(&text, &options).unwrap();
+        let message = segment(&text, &options, REFERENCE).unwrap();
 
         prop_assert_eq!(preview.encoding(), message.encoding());
         prop_assert_eq!(preview.segments(), message.segments().len());
@@ -141,14 +236,14 @@ proptest! {
         text in any_text(400),
         appended in any::<char>(),
     ) {
-        let before = preview(&text, EncodingChoice::Automatic, SegmentationMode::Udh)
+        let before = preview(&text, &SegmentationOptions::default())
             .unwrap()
             .segments();
 
         let mut longer = text;
         longer.push(appended);
 
-        let after = preview(&longer, EncodingChoice::Automatic, SegmentationMode::Udh)
+        let after = preview(&longer, &SegmentationOptions::default())
             .unwrap()
             .segments();
 
@@ -160,7 +255,7 @@ proptest! {
     /// early would still round-trip, and would still be wrong.
     #[test]
     fn no_segment_exceeds_its_budget(text in any_text(500), mode in any_mode()) {
-        let message = segment(&text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+        let message = segment(&text, &options(mode), REFERENCE).unwrap();
         let segments = message.segments();
 
         if mode == SegmentationMode::MessagePayload {
@@ -197,7 +292,7 @@ proptest! {
     /// message, and absent from a message that did not split.
     #[test]
     fn the_concatenation_information_is_coherent(text in any_text(600), mode in any_mode()) {
-        let message = segment(&text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+        let message = segment(&text, &options(mode), REFERENCE).unwrap();
         let segments = message.segments();
         let total = u8::try_from(segments.len()).unwrap();
         let split = segments.len() > 1;

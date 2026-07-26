@@ -12,10 +12,11 @@
 use messaging::{
     encoding::{
         preview::{preview, MAX_MESSAGE_PAYLOAD_OCTETS},
-        Encoding, EncodingChoice, EncodingError,
+        Encoding, EncodingChoice, EncodingError, Gsm7BitPacking,
     },
     segmentation::{
-        reassemble, segment, ConcatenationReference, SegmentationMode, SegmentedMessage,
+        reassemble, segment, ConcatenationReference, SegmentationMode, SegmentationOptions,
+        SegmentedMessage,
     },
 };
 
@@ -23,8 +24,12 @@ use messaging::{
 /// varying one would make a failure harder to read.
 const REFERENCE: ConcatenationReference = ConcatenationReference::new(0xAB_CD);
 
+fn options(mode: SegmentationMode) -> SegmentationOptions {
+    SegmentationOptions::default().with_mode(mode)
+}
+
 fn split(text: &str, mode: SegmentationMode) -> SegmentedMessage {
-    segment(text, EncodingChoice::Automatic, mode, REFERENCE).expect("automatic encoding")
+    segment(text, &options(mode), REFERENCE).expect("automatic encoding")
 }
 
 /// Units carried by each segment, in the order they will be sent.
@@ -48,7 +53,8 @@ fn ca_004_01_one_hundred_and_sixty_gsm_characters_are_one_segment() {
     assert_eq!(units_per_segment(&message), vec![160]);
     // A lone segment carries no concatenation header at all.
     assert_eq!(message.segments()[0].header_octets(), 0);
-    assert_eq!(message.segments()[0].short_message().unwrap().len(), 140);
+    // Unpacked: one octet per septet, and `sm_length` allows 254.
+    assert_eq!(message.segments()[0].short_message().unwrap().len(), 160);
     assert_eq!(message.reference(), None);
 }
 
@@ -194,8 +200,7 @@ fn ca_004_03_the_ucs2_boundaries_are_where_the_specification_puts_them() {
 fn ca_004_04_forcing_gsm_on_an_unrepresentable_text_is_an_error() {
     let error = segment(
         "prix: 10 zł",
-        EncodingChoice::Forced(Encoding::Gsm7Bit),
-        SegmentationMode::Udh,
+        &SegmentationOptions::default().with_encoding(EncodingChoice::Forced(Encoding::Gsm7Bit)),
         REFERENCE,
     )
     .unwrap_err();
@@ -218,8 +223,7 @@ fn ca_004_04_forcing_an_encoding_overrides_detection() {
     // Plain ASCII would be detected as GSM 7-bit and fit in one segment.
     let message = segment(
         &"a".repeat(100),
-        EncodingChoice::Forced(Encoding::Ucs2),
-        SegmentationMode::Udh,
+        &SegmentationOptions::default().with_encoding(EncodingChoice::Forced(Encoding::Ucs2)),
         REFERENCE,
     )
     .expect("UCS2 represents everything");
@@ -229,8 +233,7 @@ fn ca_004_04_forcing_an_encoding_overrides_detection() {
 
     let message = segment(
         "caf\u{00E9} \u{00E7}a va",
-        EncodingChoice::Forced(Encoding::Latin1),
-        SegmentationMode::Udh,
+        &SegmentationOptions::default().with_encoding(EncodingChoice::Forced(Encoding::Latin1)),
         REFERENCE,
     )
     .expect("Latin-1 covers it");
@@ -245,8 +248,7 @@ fn ca_004_04_forcing_latin1_on_a_gsm_only_character_is_an_error() {
     assert!(matches!(
         segment(
             "10 €",
-            EncodingChoice::Forced(Encoding::Latin1),
-            SegmentationMode::Udh,
+            &SegmentationOptions::default().with_encoding(EncodingChoice::Forced(Encoding::Latin1)),
             REFERENCE
         ),
         Err(EncodingError::UnrepresentableCharacter {
@@ -311,8 +313,7 @@ fn ca_004_06_every_udh_segment_carries_six_octets_a_shared_reference_and_its_ind
     let text = "a".repeat(400);
     let message = segment(
         &text,
-        EncodingChoice::Automatic,
-        SegmentationMode::Udh,
+        &SegmentationOptions::default(),
         ConcatenationReference::new(0x00_2A),
     )
     .expect("plain ASCII");
@@ -353,16 +354,35 @@ fn ca_004_06_a_single_segment_carries_no_udh_and_no_udhi_bit() {
     assert_eq!(segment.total_segments(), 1);
 }
 
-/// The six octets of header come out of the body, and the septets that follow
-/// them start one bit late. If the fill bit were forgotten the body would
-/// still be 134 octets and every character would be wrong.
+/// The six octets of header come out of the body. Unpacked, the rest is one
+/// octet per septet, so a full concatenated segment is 6 + 153 octets.
 #[test]
-fn ca_004_06_a_udh_segment_body_is_six_octets_of_header_and_one_hundred_and_thirty_four_of_data() {
+fn ca_004_06_a_udh_segment_body_is_six_octets_of_header_then_the_septets() {
     let message = split(&"a".repeat(161), SegmentationMode::Udh);
-    let body = message.segments()[0].short_message().unwrap();
+    let segment = &message.segments()[0];
 
-    assert_eq!(body.len(), 140);
-    assert_eq!(message.segments()[0].content_units(), 153);
+    assert_eq!(segment.header_octets(), 6);
+    assert_eq!(segment.content_units(), 153);
+    assert_eq!(segment.short_message().unwrap().len(), 6 + 153);
+}
+
+/// Packed, the same segment is 6 octets of header and 134 of body — the
+/// figure the specification's 140 octets comes from. The septets start one
+/// bit late, because six octets of header are not a whole number of septets.
+#[test]
+fn ca_004_06_a_packed_udh_segment_body_is_six_octets_of_header_and_one_hundred_and_thirty_four() {
+    let message = segment(
+        &"a".repeat(161),
+        &SegmentationOptions::default().with_gsm_packing(Gsm7BitPacking::Packed),
+        REFERENCE,
+    )
+    .expect("plain ASCII");
+    let first = &message.segments()[0];
+
+    assert_eq!(first.header_octets(), 6);
+    assert_eq!(first.content_units(), 153);
+    assert_eq!(first.short_message().unwrap().len(), 6 + 134);
+    assert_eq!(reassemble(message.segments()), Ok("a".repeat(161)));
 }
 
 // ---------------------------------------------------------------------------
@@ -374,8 +394,7 @@ fn ca_004_07_every_sar_segment_carries_the_three_tlvs_and_no_udhi_bit() {
     let text = "a".repeat(400);
     let message = segment(
         &text,
-        EncodingChoice::Automatic,
-        SegmentationMode::Sar,
+        &options(SegmentationMode::Sar),
         ConcatenationReference::new(0xBE_EF),
     )
     .expect("plain ASCII");
@@ -414,22 +433,10 @@ fn ca_004_07_the_sar_reference_is_sixteen_bits_wide() {
     let text = "a".repeat(400);
     let reference = ConcatenationReference::new(0x12_34);
 
-    let sar = segment(
-        &text,
-        EncodingChoice::Automatic,
-        SegmentationMode::Sar,
-        reference,
-    )
-    .unwrap();
+    let sar = segment(&text, &options(SegmentationMode::Sar), reference).unwrap();
     assert_eq!(sar.segments()[0].sar().unwrap().msg_ref_num, 0x12_34);
 
-    let udh = segment(
-        &text,
-        EncodingChoice::Automatic,
-        SegmentationMode::Udh,
-        reference,
-    )
-    .unwrap();
+    let udh = segment(&text, &options(SegmentationMode::Udh), reference).unwrap();
     assert_eq!(udh.segments()[0].short_message().unwrap()[3], 0x34);
 }
 
@@ -456,12 +463,7 @@ fn a_message_payload_beyond_sixty_four_kibibytes_is_refused() {
     let text = "你".repeat(MAX_MESSAGE_PAYLOAD_OCTETS / 2 + 1);
 
     assert!(matches!(
-        segment(
-            &text,
-            EncodingChoice::Automatic,
-            SegmentationMode::MessagePayload,
-            REFERENCE
-        ),
+        segment(&text, &options(SegmentationMode::MessagePayload), REFERENCE),
         Err(EncodingError::PayloadTooLarge { .. })
     ));
 }
@@ -498,7 +500,14 @@ fn ca_004_08_reassembly_restores_the_text_for_every_mode_and_encoding() {
         SegmentationMode::MessagePayload,
     ] {
         for (choice, text) in &cases {
-            let message = segment(text, *choice, mode, REFERENCE).expect("representable");
+            let message = segment(
+                text,
+                &SegmentationOptions::default()
+                    .with_mode(mode)
+                    .with_encoding(*choice),
+                REFERENCE,
+            )
+            .expect("representable");
 
             assert_eq!(
                 reassemble(message.segments()),
@@ -584,8 +593,8 @@ fn ca_004_09_the_preview_matches_the_segmentation_on_the_documented_boundaries()
 
     for mode in [SegmentationMode::Udh, SegmentationMode::Sar] {
         for text in &texts {
-            let preview = preview(text, EncodingChoice::Automatic, mode).unwrap();
-            let message = segment(text, EncodingChoice::Automatic, mode, REFERENCE).unwrap();
+            let preview = preview(text, &options(mode)).unwrap();
+            let message = segment(text, &options(mode), REFERENCE).unwrap();
 
             assert_eq!(preview.encoding(), message.encoding());
             assert_eq!(preview.segments(), message.segments().len());
@@ -600,5 +609,168 @@ fn ca_004_09_the_preview_matches_the_segmentation_on_the_documented_boundaries()
                 text.chars().count()
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Packed GSM 7-bit — the optional legacy layout
+// ---------------------------------------------------------------------------
+
+fn packed(mode: SegmentationMode) -> SegmentationOptions {
+    options(mode).with_gsm_packing(Gsm7BitPacking::Packed)
+}
+
+/// Septets a receiver holding only `sm_length` recovers from a segment.
+///
+/// The oracle. It reads the **octets**, never `content_units`, because a
+/// receiver has no access to what the encoder happened to know. `reassemble`
+/// does the same thing internally; this function states the count on its own
+/// so that a failure names the wrong number instead of only showing two
+/// strings that differ.
+fn septets_a_receiver_reads(segment: &messaging::segmentation::Segment) -> usize {
+    let body = segment.short_message().expect("short_message mode");
+    let user_data = body.len() - segment.header_octets();
+
+    match segment.gsm_packing() {
+        Gsm7BitPacking::Unpacked => user_data,
+        // Six octets of concatenation UDH are 48 bits, so the septets start
+        // one bit late; without a header they start on the first bit.
+        Gsm7BitPacking::Packed => {
+            let fill_bits = usize::from(segment.header_octets() > 0);
+
+            (user_data * 8 - fill_bits) / 7
+        }
+    }
+}
+
+/// The reported bug, reproduced and pinned.
+///
+/// `"a"×152 + "€"` is the text the extension-pair rule brings to exactly 152
+/// septets — which, packed behind a six-octet UDH, occupies the same 134
+/// octets as 153 would. A receiver dividing octets therefore reads 153 and
+/// finds a carriage return nobody typed, in the middle of the message.
+///
+/// The segmenter now closes that segment on 151 septets instead.
+#[test]
+fn a_packed_non_final_segment_is_never_over_read_by_one_septet() {
+    let text = format!("{}€{}", "a".repeat(152), "b".repeat(20));
+    let message = segment(&text, &packed(SegmentationMode::Udh), REFERENCE).expect("plain GSM");
+
+    let first = &message.segments()[0];
+
+    // 151, not 152: the last `a` was handed to the next segment.
+    assert_eq!(first.content_units(), 151);
+    assert_eq!(first.short_message().unwrap().len(), 6 + 133);
+    assert_eq!(septets_a_receiver_reads(first), 151);
+    assert_eq!(reassemble(message.segments()), Ok(text));
+}
+
+/// The same text unpacked, where the count cannot be wrong: one octet per
+/// septet, so the segmenter keeps the greedy 152.
+#[test]
+fn the_unpacked_layout_keeps_the_greedy_count() {
+    let text = format!("{}€{}", "a".repeat(152), "b".repeat(20));
+    let message = split(&text, SegmentationMode::Udh);
+
+    let first = &message.segments()[0];
+
+    assert_eq!(first.content_units(), 152);
+    assert_eq!(septets_a_receiver_reads(first), 152);
+    assert_eq!(reassemble(message.segments()), Ok(text));
+}
+
+/// Every prefix around the boundary, in both layouts and both concatenation
+/// modes: no **non-final** segment may ever be over-read, and the text must
+/// come back exactly.
+#[test]
+fn no_packed_non_final_segment_is_ever_over_read() {
+    for mode in [SegmentationMode::Udh, SegmentationMode::Sar] {
+        for gsm_packing in [Gsm7BitPacking::Unpacked, Gsm7BitPacking::Packed] {
+            let options = options(mode).with_gsm_packing(gsm_packing);
+
+            for prefix in 0..400_usize {
+                let text = format!("{}€{}", "a".repeat(prefix), "b".repeat(20));
+                let message = segment(&text, &options, REFERENCE).expect("plain GSM");
+                let segments = message.segments();
+
+                for part in &segments[..segments.len() - 1] {
+                    assert_eq!(
+                        septets_a_receiver_reads(part),
+                        part.content_units(),
+                        "prefix {prefix}, {mode:?}, {gsm_packing:?}, segment {}",
+                        part.sequence_number()
+                    );
+                }
+
+                assert_eq!(
+                    reassemble(segments),
+                    Ok(text),
+                    "prefix {prefix}, {mode:?}, {gsm_packing:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The last segment is the one case that cannot be repaired — there is no
+/// later segment to push a character into. TS 23.038 §6.1.2.3.1 covers it by
+/// prescribing `CR` as the pad value, and the reassembler drops it again.
+///
+/// `"a"×161` splits into 153 + 8, and 8 septets behind a one-bit fill leave
+/// exactly seven spare bits.
+#[test]
+fn a_packed_last_segment_may_be_padded_and_the_padding_is_dropped_again() {
+    let text = "a".repeat(161);
+    let message = segment(&text, &packed(SegmentationMode::Udh), REFERENCE).expect("plain GSM");
+
+    let last = &message.segments()[1];
+
+    assert_eq!(last.content_units(), 8);
+    // The receiver reads one septet more than was written…
+    assert_eq!(septets_a_receiver_reads(last), 9);
+    // …and it is the padding, which does not reach the text.
+    assert_eq!(reassemble(message.segments()), Ok(text));
+}
+
+/// The documented residual ambiguity of the packed layout, pinned so that it
+/// is a known limit and not a surprise: a genuine trailing carriage return at
+/// the padding alignment is indistinguishable from padding and is lost.
+/// Unpacked, the same text round-trips exactly.
+#[test]
+fn a_packed_message_can_lose_a_genuine_trailing_carriage_return() {
+    let text = format!("{}\r", "a".repeat(7));
+
+    let packed_message =
+        segment(&text, &packed(SegmentationMode::Udh), REFERENCE).expect("plain GSM");
+    assert_eq!(reassemble(packed_message.segments()), Ok("a".repeat(7)));
+
+    let unpacked_message = split(&text, SegmentationMode::Udh);
+    assert_eq!(reassemble(unpacked_message.segments()), Ok(text));
+}
+
+/// A packed body read as unpacked would be silent gibberish. The high bit of
+/// a septet is always clear, so the reassembler can refuse instead.
+#[test]
+fn a_packed_body_is_not_silently_read_as_unpacked() {
+    let text = "hellohello";
+    let message = segment(text, &packed(SegmentationMode::Udh), REFERENCE).expect("plain GSM");
+
+    // 0xE8 is the first octet of the packed form: not a septet.
+    assert_eq!(message.segments()[0].short_message().unwrap()[0], 0xE8);
+    assert_eq!(reassemble(message.segments()), Ok(text.to_owned()));
+}
+
+/// CA-004-01 is stated in septets, and septets do not change with the layout.
+/// Only the octet count does.
+#[test]
+fn the_segment_budget_is_the_same_in_both_layouts() {
+    for gsm_packing in [Gsm7BitPacking::Unpacked, Gsm7BitPacking::Packed] {
+        let options = options(SegmentationMode::Udh).with_gsm_packing(gsm_packing);
+
+        let single = segment(&"a".repeat(160), &options, REFERENCE).unwrap();
+        assert_eq!(units_per_segment(&single), vec![160], "{gsm_packing:?}");
+
+        let split = segment(&"a".repeat(161), &options, REFERENCE).unwrap();
+        assert_eq!(units_per_segment(&split), vec![153, 8], "{gsm_packing:?}");
     }
 }

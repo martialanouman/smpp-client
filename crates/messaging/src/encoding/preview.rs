@@ -15,8 +15,8 @@
 //! a structural fact.
 
 use crate::{
-    encoding::{gsm0338, Encoding, EncodingChoice, EncodingError},
-    segmentation::SegmentationMode,
+    encoding::{gsm0338, Encoding, EncodingError, Gsm7BitPacking},
+    segmentation::{SegmentationMode, SegmentationOptions, CONCATENATION_UDH_OCTETS},
 };
 
 /// Highest addressable segment of a concatenated message.
@@ -85,7 +85,12 @@ impl MessagePreview {
     }
 }
 
-/// The counter for `text` under `choice` and `mode`.
+/// The counter for `text` under `options`.
+///
+/// Takes the same options as [`segment`](crate::segmentation::segment), and on
+/// purpose: the GSM layout decides whether a segment may be closed on certain
+/// septet counts, so a preview that ignored it could disagree with the
+/// segments actually sent (CA-004-09).
 ///
 /// # Errors
 ///
@@ -94,12 +99,8 @@ impl MessagePreview {
 /// [`MAX_SEGMENTS`], [`EncodingError::PayloadTooLarge`] past
 /// [`MAX_MESSAGE_PAYLOAD_OCTETS`] in
 /// [`SegmentationMode::MessagePayload`].
-pub fn preview(
-    text: &str,
-    choice: EncodingChoice,
-    mode: SegmentationMode,
-) -> Result<MessagePreview, EncodingError> {
-    let plan = plan(text, choice, mode)?;
+pub fn preview(text: &str, options: &SegmentationOptions) -> Result<MessagePreview, EncodingError> {
+    let plan = plan(text, options)?;
 
     Ok(MessagePreview {
         encoding: plan.encoding,
@@ -108,6 +109,20 @@ pub fn preview(
         units_remaining_in_segment: plan.budget - plan.units_in_last_segment,
         segments: plan.segments,
     })
+}
+
+/// What the filler did with a character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// It fitted in the segment being filled.
+    Kept,
+    /// It opened a new segment.
+    Opened {
+        /// Units of the character *before* it that moved along with it, so the
+        /// cut falls that many units earlier. Zero in the ordinary case;
+        /// non-zero only under the packed-GSM recoverability rule.
+        rewound: usize,
+    },
 }
 
 /// The greedy fill of one message into segments of `budget` units.
@@ -119,6 +134,8 @@ pub(crate) struct SegmentFiller {
     budget: usize,
     used: usize,
     segments: usize,
+    last_cost: usize,
+    recoverable_fill_bits: Option<usize>,
 }
 
 impl SegmentFiller {
@@ -128,24 +145,69 @@ impl SegmentFiller {
             budget,
             used: 0,
             segments: 1,
+            last_cost: 0,
+            recoverable_fill_bits: None,
         }
     }
 
-    /// Places one character of `cost` units.
+    /// Also requires every **closed** segment to hold a septet count a
+    /// receiver can recover from the octet length, behind `fill_bits`.
     ///
-    /// Returns `true` when the character did not fit and opened a new segment
-    /// — the caller's signal to cut.
-    pub(crate) const fn accept(&mut self, cost: usize) -> bool {
-        if self.used + cost > self.budget {
-            self.segments += 1;
-            self.used = cost;
+    /// Only meaningful for packed GSM 7-bit. Under it, a segment that would
+    /// close on an unrecoverable count hands its last character to the next
+    /// one rather than emit a body a receiver would over-read.
+    pub(crate) const fn requiring_recoverable_septets(mut self, fill_bits: usize) -> Self {
+        self.recoverable_fill_bits = Some(fill_bits);
 
-            return true;
+        self
+    }
+
+    /// Places one character of `cost` units.
+    pub(crate) fn accept(&mut self, cost: usize) -> Placement {
+        if self.used + cost <= self.budget {
+            self.used += cost;
+            self.last_cost = cost;
+
+            return Placement::Kept;
         }
 
-        self.used += cost;
+        let rewound = self.units_to_give_back();
 
-        false
+        self.segments += 1;
+        self.used = rewound + cost;
+        self.last_cost = cost;
+
+        Placement::Opened { rewound }
+    }
+
+    /// Units the closing segment has to hand back to the next one, if any.
+    fn units_to_give_back(&self) -> usize {
+        let Some(fill_bits) = self.recoverable_fill_bits else {
+            return 0;
+        };
+
+        if gsm0338::septet_count_is_recoverable(self.used, fill_bits) {
+            return 0;
+        }
+
+        // Nothing to give back if the segment holds a single character. That
+        // cannot arise at any realistic budget — one or two septets are always
+        // recoverable — but an empty segment would be worse than a padded one.
+        if self.last_cost == 0 || self.used <= self.last_cost {
+            return 0;
+        }
+
+        // One character is enough. A closing segment is at most one unit short
+        // of the budget, so the only unrecoverable count it can reach is
+        // `budget - 1`, and dropping one or two units from it lands on a
+        // recoverable one.
+        debug_assert!(
+            gsm0338::septet_count_is_recoverable(self.used - self.last_cost, fill_bits),
+            "giving one character back left {} septets, still unrecoverable at fill {fill_bits}",
+            self.used - self.last_cost
+        );
+
+        self.last_cost
     }
 
     /// Segments opened so far.
@@ -187,11 +249,11 @@ pub(crate) struct SegmentPlan {
 /// See [`preview`].
 pub(crate) fn plan(
     text: &str,
-    choice: EncodingChoice,
-    mode: SegmentationMode,
+    options: &SegmentationOptions,
 ) -> Result<SegmentPlan, EncodingError> {
-    let encoding = super::resolve(choice, text)?;
-    let (single, concatenated) = capacities(encoding, mode);
+    let encoding = super::resolve(options.encoding, text)?;
+    let mode = options.mode;
+    let (single, concatenated) = capacities(encoding, options);
 
     let mut total_units = 0_usize;
     let mut characters = 0_usize;
@@ -225,15 +287,24 @@ pub(crate) fn plan(
 
     if mode == SegmentationMode::MessagePayload {
         return Err(EncodingError::PayloadTooLarge {
-            octets: octets_for(encoding, total_units),
+            octets: octets_for(encoding, total_units, 0, options.gsm_packing),
             maximum: MAX_MESSAGE_PAYLOAD_OCTETS,
         });
     }
 
-    let mut filler = SegmentFiller::new(concatenated);
+    let mut filler = concatenated_filler(concatenated, encoding, options);
 
-    for character in text.chars() {
-        let cost = encoding.unit_cost(character).unwrap_or(0);
+    for (index, character) in text.chars().enumerate() {
+        // The first pass proved every character representable; raising the
+        // error rather than defaulting to zero keeps that a fact.
+        let cost =
+            encoding
+                .unit_cost(character)
+                .ok_or(EncodingError::UnrepresentableCharacter {
+                    character,
+                    index,
+                    encoding,
+                })?;
 
         filler.accept(cost);
     }
@@ -255,13 +326,42 @@ pub(crate) fn plan(
     })
 }
 
-/// The single-segment and concatenated capacities that apply under `mode`.
-fn capacities(encoding: Encoding, mode: SegmentationMode) -> (usize, usize) {
-    if mode == SegmentationMode::MessagePayload {
+/// The filler a concatenated message is laid out with.
+///
+/// Shared by the planner and the segmenter so that the recoverability rule,
+/// which moves where the cuts fall, cannot apply to one and not the other.
+pub(crate) fn concatenated_filler(
+    budget: usize,
+    encoding: Encoding,
+    options: &SegmentationOptions,
+) -> SegmentFiller {
+    let filler = SegmentFiller::new(budget);
+
+    if encoding != Encoding::Gsm7Bit || options.gsm_packing != Gsm7BitPacking::Packed {
+        return filler;
+    }
+
+    filler.requiring_recoverable_septets(fill_bits_for(options.mode))
+}
+
+/// Bits of padding before the first septet of a segment body.
+///
+/// Only the concatenation UDH shifts them: six octets are not a whole number
+/// of septets.
+pub(crate) const fn fill_bits_for(mode: SegmentationMode) -> usize {
+    match mode {
+        SegmentationMode::Udh => gsm0338::fill_bits_after(CONCATENATION_UDH_OCTETS),
+        SegmentationMode::Sar | SegmentationMode::MessagePayload => 0,
+    }
+}
+
+/// The single-segment and concatenated capacities that apply under `options`.
+fn capacities(encoding: Encoding, options: &SegmentationOptions) -> (usize, usize) {
+    if options.mode == SegmentationMode::MessagePayload {
         // One "segment" that happens to be very large. Expressing the TLV
         // ceiling in the encoding's own unit keeps the counter meaningful:
         // 32 767 characters of UCS2, not 65 535 octets of something.
-        let capacity = message_payload_capacity(encoding);
+        let capacity = message_payload_capacity(encoding, options.gsm_packing);
 
         return (capacity, capacity);
     }
@@ -272,18 +372,33 @@ fn capacities(encoding: Encoding, mode: SegmentationMode) -> (usize, usize) {
 }
 
 /// Units of `encoding` that fit in a full `message_payload` TLV.
-const fn message_payload_capacity(encoding: Encoding) -> usize {
+const fn message_payload_capacity(encoding: Encoding, packing: Gsm7BitPacking) -> usize {
     match encoding {
-        Encoding::Gsm7Bit => MAX_MESSAGE_PAYLOAD_OCTETS * 8 / 7,
+        Encoding::Gsm7Bit => match packing {
+            Gsm7BitPacking::Unpacked => MAX_MESSAGE_PAYLOAD_OCTETS,
+            Gsm7BitPacking::Packed => MAX_MESSAGE_PAYLOAD_OCTETS * 8 / 7,
+        },
         Encoding::Latin1 => MAX_MESSAGE_PAYLOAD_OCTETS,
         Encoding::Ucs2 => MAX_MESSAGE_PAYLOAD_OCTETS / 2,
     }
 }
 
-/// Octets `units` of `encoding` occupy on the wire, headers excluded.
-pub(crate) const fn octets_for(encoding: Encoding, units: usize) -> usize {
+/// Octets `units` of `encoding` occupy behind `header_octets` of header.
+pub(crate) const fn octets_for(
+    encoding: Encoding,
+    units: usize,
+    header_octets: usize,
+    packing: Gsm7BitPacking,
+) -> usize {
     match encoding {
-        Encoding::Gsm7Bit => gsm0338::packed_len(units, 0),
+        Encoding::Gsm7Bit => match packing {
+            // One septet per octet: the count *is* the length, which is what
+            // frees the unpacked layout of every ambiguity above.
+            Gsm7BitPacking::Unpacked => units,
+            Gsm7BitPacking::Packed => {
+                gsm0338::packed_len(units, gsm0338::fill_bits_after(header_octets))
+            }
+        },
         Encoding::Latin1 => units,
         Encoding::Ucs2 => units * 2,
     }
@@ -291,10 +406,12 @@ pub(crate) const fn octets_for(encoding: Encoding, units: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use crate::encoding::EncodingChoice;
+
     use super::*;
 
     fn automatic(text: &str) -> MessagePreview {
-        preview(text, EncodingChoice::Automatic, SegmentationMode::Udh)
+        preview(text, &SegmentationOptions::default())
             .expect("automatic detection never fails on a concatenable text")
     }
 
@@ -388,8 +505,8 @@ mod tests {
         assert!(matches!(
             preview(
                 "你",
-                EncodingChoice::Forced(Encoding::Gsm7Bit),
-                SegmentationMode::Udh
+                &SegmentationOptions::default()
+                    .with_encoding(EncodingChoice::Forced(Encoding::Gsm7Bit))
             ),
             Err(EncodingError::UnrepresentableCharacter { .. })
         ));
@@ -400,7 +517,7 @@ mod tests {
         let text = "a".repeat(153 * MAX_SEGMENTS + 1);
 
         assert_eq!(
-            preview(&text, EncodingChoice::Automatic, SegmentationMode::Udh),
+            preview(&text, &SegmentationOptions::default()),
             Err(EncodingError::TooManySegments {
                 segments: MAX_SEGMENTS + 1,
                 maximum: MAX_SEGMENTS,
@@ -413,8 +530,7 @@ mod tests {
         let text = "a".repeat(10_000);
         let preview = preview(
             &text,
-            EncodingChoice::Automatic,
-            SegmentationMode::MessagePayload,
+            &SegmentationOptions::default().with_mode(SegmentationMode::MessagePayload),
         )
         .expect("well within 64 KiB");
 
@@ -429,8 +545,7 @@ mod tests {
         assert!(matches!(
             preview(
                 &text,
-                EncodingChoice::Automatic,
-                SegmentationMode::MessagePayload
+                &SegmentationOptions::default().with_mode(SegmentationMode::MessagePayload)
             ),
             Err(EncodingError::PayloadTooLarge { .. })
         ));
@@ -443,12 +558,78 @@ mod tests {
         let mut filler = SegmentFiller::new(10);
 
         for _ in 0..9 {
-            assert!(!filler.accept(1));
+            assert_eq!(filler.accept(1), Placement::Kept);
         }
 
         assert_eq!(filler.used_in_current_segment(), 9);
-        assert!(filler.accept(2), "the pair must open a new segment");
+        assert_eq!(
+            filler.accept(2),
+            Placement::Opened { rewound: 0 },
+            "the pair must open a new segment"
+        );
         assert_eq!(filler.segments(), 2);
         assert_eq!(filler.used_in_current_segment(), 2);
+    }
+
+    /// The reported bug, at the level of the rule that causes it.
+    ///
+    /// Under packed GSM behind a six-octet UDH, a segment closing on 152
+    /// septets occupies the same 134 octets as one of 153 — so the receiver
+    /// reads a carriage return nobody typed, in the middle of the message. The
+    /// filler hands the last character back rather than emit it.
+    #[test]
+    fn a_packed_segment_never_closes_on_an_unrecoverable_septet_count() {
+        let fill_bits = fill_bits_for(SegmentationMode::Udh);
+        let mut filler = SegmentFiller::new(153).requiring_recoverable_septets(fill_bits);
+
+        for _ in 0..152 {
+            assert_eq!(filler.accept(1), Placement::Kept);
+        }
+
+        // 152 septets used, one free, and a euro sign needs two.
+        assert_eq!(filler.used_in_current_segment(), 152);
+        assert_eq!(
+            filler.accept(2),
+            Placement::Opened { rewound: 1 },
+            "the closing segment must hand a character back"
+        );
+
+        // 151 septets closed — 133 octets, six spare bits, recovered exactly.
+        assert!(gsm0338::septet_count_is_recoverable(151, fill_bits));
+        // The rewound character plus the euro sign opened the next segment.
+        assert_eq!(filler.used_in_current_segment(), 3);
+    }
+
+    /// The same filler without the constraint closes on 152 — which is what
+    /// the unpacked layout does, and is correct there.
+    #[test]
+    fn an_unconstrained_segment_closes_on_the_greedy_count() {
+        let mut filler = SegmentFiller::new(153);
+
+        for _ in 0..152 {
+            filler.accept(1);
+        }
+
+        assert_eq!(filler.accept(2), Placement::Opened { rewound: 0 });
+        assert_eq!(filler.used_in_current_segment(), 2);
+    }
+
+    /// The constraint moves where the cuts fall, so the counter has to know
+    /// about the packing — hence the shared options.
+    #[test]
+    fn the_packing_changes_the_counter() {
+        let text = format!("{}€{}", "a".repeat(152), "b".repeat(20));
+
+        let unpacked = preview(&text, &SegmentationOptions::default()).expect("plain GSM");
+        let packed = preview(
+            &text,
+            &SegmentationOptions::default().with_gsm_packing(Gsm7BitPacking::Packed),
+        )
+        .expect("plain GSM");
+
+        assert_eq!((unpacked.segments(), packed.segments()), (2, 2));
+        // 152 + 22 unpacked, 151 + 23 packed.
+        assert_eq!(unpacked.units_remaining_in_segment(), 153 - 22);
+        assert_eq!(packed.units_remaining_in_segment(), 153 - 23);
     }
 }

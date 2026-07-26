@@ -58,6 +58,23 @@ pub enum EncodingError {
         maximum: usize,
     },
 
+    /// The concatenation header of a segment could not be built.
+    ///
+    /// Unreachable through [`segment`](crate::segmentation::segment), which
+    /// numbers the parts itself. It exists so that the *validating*
+    /// constructor can be used rather than the unchecked one: should the
+    /// numbering ever change, a malformed UDH becomes an error here instead of
+    /// six wrong octets on the wire.
+    #[error(
+        "cannot build the concatenation header of segment {sequence_number} of {total_segments}"
+    )]
+    InvalidConcatenationHeader {
+        /// The segment at fault, 1-based.
+        sequence_number: u8,
+        /// The total it was numbered against.
+        total_segments: u8,
+    },
+
     /// Segments handed to the reassembler do not form one message.
     ///
     /// Raised on a missing or duplicated part, on parts that disagree about
