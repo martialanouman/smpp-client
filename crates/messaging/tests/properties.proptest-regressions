@@ -4,6 +4,20 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
+#
+# ---------------------------------------------------------------------------
+# Provenance of the cases below: none of them ever failed against the committed
+# code. They were produced while DELIBERATELY breaking the segmenter — cutting
+# on unit boundaries instead of character boundaries — to check that these
+# property tests actually catch the bug this milestone is about. The mutation
+# was reverted; the seeds were kept.
+#
+# They are worth keeping because that is exactly the shrinking proptest is good
+# at: the inputs below are dense in the two characters that cost two units and
+# are easy to split in half — U+000C FORM FEED, the only one-byte character of
+# the GSM extension table, and U+10000-and-above, written as a UTF-16 surrogate
+# pair. Replaying them first on every run costs milliseconds.
+# ---------------------------------------------------------------------------
 cc 0b2c90851d1663738c8e1f014a067098e0849c97a9dfc3b26e1d61303297c30b # shrinks to text = "¡𐀀0a𐀀𐀀𐀀0¡𐀀𐀀𐀀 𐀀\0𐀀 a AAa𐀀𐀀0𐀀A¡𐀀  ¡ 𐀀𐀀aa¡A𐀀𐀀¡\0 A𐀀0\0¡ 𐀀0", mode = Udh
 cc 5303c7a76d5f45dae8111b9fd5740b0713299394f5952313dd65e449833f8e7a # shrinks to text = "𐀀0A0𐀀A¡𐀀𐀀0𐀀𐀀¡0𐀀¡0A\0  0¡\0a0𐀀0A𐀀a𐀀\0  \0 a𐀀AAa 𐀀 A\00𐀀A¡ \00A  \0¡ 𐀀 00 𐀀 0𐀀𐀀A ¡aa𐀀¡¡ 𐀀¡ 𐀀𐀀Aa𐀀\0𐀀𐀀¡𐀀¡ 𐀀𐀀\0Aa ¡¡\0 ¡ ¡\0𐀀A𐀀 𐀀aA0\0𐀀\0¡𐀀  A¡ A¡aa\0𐀀0A𐀀 𐀀¡A 𐀀AA¡0¡A𐀀\0𐀀00¡¡𐀀 00\0𐀀𐀀", mode = Udh
 cc 47228b3a51147b9052a189203c5d53f9453d8935690d17a0be23c970567078fb # shrinks to text = " 𐀀Aa\0𐀀0 A0¡0 a \0  A0¡0𐀀𐀀 ¡𐀀 𐀀A \0 A 𐀀aa 𐀀  \0\00¡\0A0𐀀 𐀀 AA 𐀀0¡A 𐀀𐀀a aA¡A𐀀𐀀𐀀¡¡0 00𐀀\0\0𐀀aa¡ a𐀀¡ a\0 ¡𐀀\0 𐀀𐀀𐀀 a¡¡¡ ¡𐀀𐀀 A𐀀𐀀¡𐀀𐀀0A¡A0 A\0 𐀀a 𐀀 𐀀aA  a¡𐀀𐀀A𐀀a𐀀𐀀A¡\0¡a𐀀¡ 0  0A Aa¡0a0A𐀀 \0𐀀 0𐀀aA 𐀀0𐀀\0\u{1022b}\u{feff}'<¥\t\u{107d1e}Ѩ/¥\u{b863a}\u{a7bfd}\rT$\u{202e}'=.\u{5abc0}?}<==�\0\u{d7725}\tg81\"\u{1b}\\\u{202e}`\0$/\0..\u{10a4d3}\u{1b}%*.\u{f0a29}.\u{b6405}\u{feff}\u{eef37}Ⱥ\u{55169}.\u{4b0db}mOѨ\u{37f4d}\u{c862c}\u{1b}+:%.%\u{d13f5}\u{feff}¥{`𧄂[`/�&='\u{5e1e5}¥\u{7f}?\u{cc11d}%/&k\t\rÍC", mode = Udh
