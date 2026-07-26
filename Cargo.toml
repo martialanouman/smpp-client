@@ -72,6 +72,15 @@ uuid = { version = "1.18", default-features = false, features = ["std", "v4"] }
 
 proptest = "1.8"
 
+# CA-004-10 wants a reference micro-benchmark for the encoding/segmentation
+# hot path, to compare against at milestone 017. `default-features = false`
+# drops `plotters` and the HTML report: the numbers are read from stdout and
+# from `target/criterion`, and the graph rendering would pull a dozen crates
+# whose licences would have to be reviewed for nothing.
+criterion = { version = "0.7", default-features = false, features = [
+  "cargo_bench_support",
+] }
+
 # ---------------------------------------------------------------------------
 # Machine-enforced coding rules
 # ---------------------------------------------------------------------------
