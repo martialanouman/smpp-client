@@ -195,6 +195,31 @@ pub enum SubmitError {
     },
 }
 
+impl SubmitError {
+    /// Whether the implementation refused **before** the PDU reached the wire.
+    ///
+    /// Part of the port's contract, not a hint: an implementor returning
+    /// [`Self::NotBound`] or [`Self::OperationNotAllowed`] guarantees nothing
+    /// was written to the socket, and every other variant leaves it open.
+    ///
+    /// # What it is for
+    ///
+    /// The journal records `sent_at` and an attempt number, and both are
+    /// claims about the wire. A message refused because the session is a
+    /// receiver bind was never emitted, so stamping it with an emission
+    /// instant would put a departure time on a message that never left — the
+    /// log of milestone 013 would show one, and the retry budget of spec
+    /// §10.7 would have spent an attempt on nothing.
+    ///
+    /// [`Self::ResponseTimeout`] is deliberately **not** in this set: the PDU
+    /// did leave, only the answer never came. That is exactly the case spec
+    /// §10.7 retries.
+    #[must_use]
+    pub const fn prevented_emission(&self) -> bool {
+        matches!(self, Self::NotBound { .. } | Self::OperationNotAllowed)
+    }
+}
+
 /// One live SMPP session, seen from the send orchestrator.
 ///
 /// Narrow on purpose: everything a session also does — connecting, binding,

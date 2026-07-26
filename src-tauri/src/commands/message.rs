@@ -310,15 +310,20 @@ impl MessageSendInput {
         let mut submit = SubmitOptions::to(destination);
 
         if let Some(raw) = self.source.as_deref().filter(|raw| !raw.trim().is_empty()) {
-            // TON and NPI are derived from the address unless the operator
-            // overrode BOTH: a sender ID announced as `International` is a
-            // rejection waiting to happen, and half an override is worse than
-            // none.
-            let source = match (self.source_ton, self.source_npi) {
-                (Some(ton), Some(npi)) => SourceAddress::parse_with(raw, ton.into(), npi.into()),
-                _ => SourceAddress::parse(raw),
+            // TON and NPI are derived from the address, then **each** is
+            // replaced if the operator chose one. They are two independent
+            // selectors in the form, so honouring an override only when both
+            // are set would silently discard a choice that was made — which is
+            // exactly what CA-006-06 forbids.
+            let mut source = SourceAddress::parse(raw).map_err(|error| ErrorDto::from(&error))?;
+
+            if let Some(ton) = self.source_ton {
+                source = source.with_ton(ton.into());
             }
-            .map_err(|error| ErrorDto::from(&error))?;
+
+            if let Some(npi) = self.source_npi {
+                source = source.with_npi(npi.into());
+            }
 
             submit = submit.with_source(source);
         }
@@ -397,6 +402,13 @@ pub(crate) struct MessageSendResultDto {
     pub(crate) status_is_vendor_specific: bool,
     /// Whether sending the same message again could succeed.
     pub(crate) retryable: bool,
+    /// Whether the journal recorded the outcome.
+    ///
+    /// `false` means the message **was** submitted and answered, but its
+    /// transitions could not be written: the row is still `QUEUED`. The
+    /// interface has to say so, because "sent and unrecorded" is the one
+    /// state where doing nothing is right and resending is wrong.
+    pub(crate) journalled: bool,
     /// One entry per segment.
     pub(crate) outcomes: Vec<SegmentOutcomeDto>,
 }
@@ -419,6 +431,7 @@ impl From<&SendReport> for MessageSendResultDto {
                 .map(u32::from)
                 .is_some_and(status_codes::is_vendor_specific),
             retryable: report.retryable,
+            journalled: report.journalled,
             outcomes: report
                 .outcomes
                 .iter()
@@ -507,11 +520,18 @@ pub(crate) struct MessagePreviewDto {
 /// * `MESSAGE_ENCODING` — the text cannot be written under the chosen
 ///   encoding, or needs more than 255 segments;
 /// * `MESSAGE_SESSION_NOT_BOUND` — no live session carries that identifier;
-/// * `MESSAGE_STORAGE` — the journal refused the write-ahead insert, in which
-///   case nothing was sent.
+/// * `MESSAGE_DUPLICATE` — a message already exists under that
+///   `client_message_id`, which is the guard that makes a replay idempotent;
+/// * `MESSAGE_STORAGE` — the journal refused the **write-ahead insert**, in
+///   which case nothing was sent.
 ///
-/// A message the centre **rejected** is not an error: it comes back as a
-/// result whose `state` is `FAILED`.
+/// Two outcomes that are deliberately **not** errors:
+///
+/// * a message the centre **rejected** comes back as a result whose `state` is
+///   `FAILED`, carrying the raw `command_status` (ENF-UTI-02);
+/// * a journal failure *after* the send comes back as a successful result with
+///   `journalled: false`. Reporting it as `MESSAGE_STORAGE` would tell the
+///   operator nothing was sent, and the message would be sent twice.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn message_send(
@@ -548,7 +568,7 @@ pub(crate) async fn message_send(
 ///
 /// # Errors
 ///
-/// * `MESSAGE_INVALID_ID` — the session identifier is malformed;
+/// * `SESSION_INVALID_ID` — the session identifier is malformed;
 /// * `MESSAGE_ENCODING` — a forced encoding cannot write the text.
 #[tauri::command]
 #[specta::specta]
@@ -599,6 +619,9 @@ impl From<&MessagingError> for ErrorDto {
             MessagingError::Address(inner) => Self::from(inner),
             MessagingError::Encoding(inner) => Self::message_encoding(&inner.to_string()),
             MessagingError::Submit(inner) => Self::from(inner),
+            MessagingError::Store(messaging::ports::MessageStoreError::Conflict) => {
+                Self::message_duplicate()
+            }
             MessagingError::Store(_) => Self::message_storage(),
             // `MessagingError` is `#[non_exhaustive]`, so a wildcard is
             // required. It reports the most conservative code rather than
@@ -792,10 +815,11 @@ mod tests {
         assert_eq!(u8::from(Npi::from(NpiDto::National)), 8);
     }
 
-    /// Half an override is refused in favour of the derived pair: a sender ID
-    /// announced as `International` is a rejection waiting to happen.
+    /// Each selector is honoured on its own. The form offers two, so dropping
+    /// one because the other was left alone would discard a choice the
+    /// operator made without telling them (CA-006-06).
     #[test]
-    fn overriding_only_one_of_the_two_sender_fields_falls_back_to_the_derived_pair() {
+    fn each_sender_field_is_honoured_independently_of_the_other() {
         let mut input = an_input();
         input.source_ton = Some(TonDto::International);
         input.source_npi = None;
@@ -807,7 +831,36 @@ mod tests {
             .source
             .expect("a sender");
 
+        assert_eq!(source.ton(), Ton::International, "the chosen TON is used");
+        assert_eq!(source.npi(), Npi::Unknown, "and the derived NPI stands");
+
+        let mut input = an_input();
+        input.source_ton = None;
+        input.source_npi = Some(NpiDto::Isdn);
+
+        let source = input
+            .parse()
+            .expect("valid")
+            .submit
+            .source
+            .expect("a sender");
+
         assert_eq!(source.ton(), Ton::Alphanumeric, "derived from the address");
+        assert_eq!(source.npi(), Npi::Isdn, "the chosen NPI is used");
+    }
+
+    /// With neither chosen, both come from the address.
+    #[test]
+    fn an_unspecified_sender_type_is_derived_from_the_address() {
+        let source = an_input()
+            .parse()
+            .expect("valid")
+            .submit
+            .source
+            .expect("a sender");
+
+        assert_eq!(source.ton(), Ton::Alphanumeric);
+        assert_eq!(source.npi(), Npi::Unknown);
     }
 
     #[test]
@@ -820,6 +873,7 @@ mod tests {
             smsc_message_id: None,
             command_status: Some(CommandStatus::EsmeRthrottled),
             retryable: true,
+            journalled: true,
             outcomes: vec![SegmentOutcome::Answered {
                 status: CommandStatus::EsmeRthrottled,
                 smsc_message_id: None,

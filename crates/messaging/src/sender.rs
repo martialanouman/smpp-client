@@ -19,13 +19,24 @@
 //! which milestone 010 resumes, and no PDU went out, so nothing is duplicated
 //! (CA-006-03).
 //!
-//! The residual window is stated rather than glossed over. A crash **after**
-//! the last `submit_sm` left and before the transitions commit leaves the row
-//! `QUEUED` for a message the message centre did accept, so a resume would
-//! send it twice. Closing that would mean writing `SENT` before the socket,
-//! which is the other trade — no duplicate, but a message lost whenever the
-//! write succeeds and the send does not. ENF-FIA-01 asks for "no message
-//! lost", so this is the side the ordering falls on.
+//! The residual window is stated rather than glossed over, and it is wider
+//! than "after the last segment": it opens the moment the **first**
+//! `submit_sm` is accepted. A crash after segment 1 of a message of three
+//! leaves the row `QUEUED`, and a resume re-sends all three — so the message
+//! centre receives segment 1 twice. The same is true of the whole message
+//! once every segment has been accepted and the transitions have not
+//! committed.
+//!
+//! Closing that would mean writing `SENT` before the socket, which is the
+//! other trade — no duplicate, but a message lost whenever the write succeeds
+//! and the send does not. ENF-FIA-01 asks for "no message lost", so this is
+//! the side the ordering falls on.
+//!
+//! One case is **not** in that window, because it is handled rather than
+//! traded: a journal that refuses the *final* transitions after a successful
+//! send. That is reported through [`SendReport::journalled`] rather than as an
+//! error, so the caller learns the message went out — the opposite of what an
+//! `Err` would tell it. See the comment at the call site.
 //!
 //! # One row per message, N PDUs
 //!
@@ -174,7 +185,13 @@ pub struct SendReport {
     pub state: MessageState,
     /// Segments the message was split into.
     pub segments: u32,
-    /// The identifier of the **first** segment, the one an operator quotes.
+    /// The identifier of the **first** segment, when the whole message was
+    /// accepted.
+    ///
+    /// `None` on a failure, **including a partial one** where some segments
+    /// were accepted and carry an identifier of their own. See
+    /// [`Sender::aggregate`] for why; the per-segment identifiers are still in
+    /// [`Self::outcomes`], which is where an operator reads them.
     pub smsc_message_id: Option<String>,
     /// The status the whole message is reported under.
     ///
@@ -190,6 +207,18 @@ pub struct SendReport {
     /// itself on a fatal status is a button that sends the same rejection
     /// twice.
     pub retryable: bool,
+    /// Whether the journal recorded the outcome.
+    ///
+    /// `false` means the message **was** submitted and the message centre
+    /// answered, but the transitions could not be written: the row is still
+    /// `QUEUED`, so a resume would send it again.
+    ///
+    /// It is a field of the report rather than an error because the two say
+    /// opposite things. An error means "nothing was sent"; this means
+    /// "everything was sent and the record is missing". Reporting the second
+    /// as the first is how an operator resends a message that already went
+    /// out.
+    pub journalled: bool,
     /// One entry per segment, in order.
     pub outcomes: Vec<SegmentOutcome>,
 }
@@ -357,22 +386,55 @@ where
         // header rules out.
         observer.state_changed(request.client_message_id, MessageState::Sent);
 
-        let outcomes = submit_all(session, pdus).await;
+        let Submission { outcomes, emitted } = submit_all(session, pdus).await;
         let responded_at = self.clock.now();
 
         // --- 5. Record what happened ----------------------------------------
-        let report = self.aggregate(request, session.session_id(), total, outcomes);
+        let mut report = self.aggregate(request, session.session_id(), total, outcomes);
 
-        let transitions = [
-            MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
-                .sent_at(sent_at, request.attempt),
-            self.final_transition(&report, responded_at),
-        ];
+        // `SENT` is a claim about the wire, so it is only written when
+        // something actually reached it. A submission the session refused —
+        // a receiver bind, a session that went down between the insert and
+        // here — leaves the row `QUEUED` with no `sent_at` and no attempt
+        // consumed, which is the truth and what spec §10.7 budgets against.
+        let mut transitions = Vec::with_capacity(2);
 
-        // ONE transaction: the two transitions are a single fact about a
-        // single message, and a reader must never see `SENT` for a message
-        // whose response has already been read.
-        self.repository.update_states(&transitions).await?;
+        if emitted {
+            transitions.push(
+                MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
+                    .sent_at(sent_at, request.attempt),
+            );
+        }
+
+        transitions.push(self.final_transition(&report, responded_at));
+
+        // ONE transaction: the transitions are a single fact about a single
+        // message, and a reader must never see `SENT` for a message whose
+        // response has already been read.
+        //
+        // A FAILURE HERE IS NOT THE FAILURE OF THE INSERT, and must not be
+        // reported as one. By this point the `submit_sm` have left and the
+        // message centre has answered; the send happened. Propagating the
+        // error would throw the report away — the `smsc_message_id` with it —
+        // and hand the caller a code whose whole meaning is "nothing was
+        // sent". The operator would resend, and the message would go out
+        // twice.
+        //
+        // So the failure is logged with its full context and carried on the
+        // report instead: the send is reported as what it was, plus the fact
+        // that the journal does not know about it.
+        if let Err(error) = self.repository.update_states(&transitions).await {
+            tracing::error!(
+                error = ?error,
+                state = %report.state,
+                segments = total,
+                smsc_message_id = ?report.smsc_message_id,
+                "the message was submitted but its transitions could not be journalled; \
+                 the row stays QUEUED and a resume would send it again"
+            );
+
+            report.journalled = false;
+        }
 
         observer.state_changed(request.client_message_id, report.state);
 
@@ -380,6 +442,7 @@ where
             state = %report.state,
             segments = total,
             retryable = report.retryable,
+            journalled = report.journalled,
             "message submitted"
         );
 
@@ -454,6 +517,29 @@ where
     /// is a migration and a change to every screen that groups by state — for
     /// a distinction the operator can already read, segment by segment, in
     /// [`SendReport::outcomes`].
+    ///
+    /// # And its `smsc_message_id` is dropped
+    ///
+    /// A partially failed message keeps **no** `smsc_message_id`, even though
+    /// its accepted segments were each assigned one.
+    ///
+    /// Storing the first segment's identifier on a `FAILED` row would arm a
+    /// bug three milestones out. The message centre will try to deliver that
+    /// fragment and will send a receipt for it; milestone 008 correlates a
+    /// receipt by looking the identifier up
+    /// ([`crate::ports::MessageRepository::find_message_by_smsc_id`]), would
+    /// find this row, and would move it `FAILED → DELIVERED`. A message the
+    /// recipient never saw would be counted as delivered.
+    ///
+    /// The identifiers are not lost: each is on its own
+    /// [`SegmentOutcome`], which is what the interface shows and what an
+    /// operator quotes to their provider.
+    ///
+    /// What this does **not** do is undo the accepted fragment. Nothing
+    /// cancels it and no row records it, so re-sending the message produces a
+    /// second copy of that segment at the message centre. Cancelling a
+    /// submitted segment needs `cancel_sm`, which no milestone has scoped;
+    /// the CHANGELOG says so rather than leaving it implied.
     fn aggregate(
         &self,
         request: &SendRequest,
@@ -491,17 +577,21 @@ where
             ),
         };
 
+        // Only on a whole message. See the note above.
+        let smsc_message_id = (state == MessageState::Accepted)
+            .then(|| outcomes.first().and_then(SegmentOutcome::smsc_message_id))
+            .flatten()
+            .map(ToOwned::to_owned);
+
         SendReport {
             client_message_id: request.client_message_id,
             session_id,
             state,
             segments,
-            smsc_message_id: outcomes
-                .first()
-                .and_then(SegmentOutcome::smsc_message_id)
-                .map(ToOwned::to_owned),
+            smsc_message_id,
             command_status,
             retryable,
+            journalled: true,
             outcomes,
         }
     }
@@ -523,6 +613,20 @@ where
     }
 }
 
+/// What one pass over the segments produced.
+struct Submission {
+    /// One entry per segment, in order.
+    outcomes: Vec<SegmentOutcome>,
+    /// Whether at least one `submit_sm` actually reached the socket.
+    ///
+    /// A flag returned from here rather than re-derived from `outcomes` by the
+    /// caller: this function is the only place that knows, per segment,
+    /// whether the port refused before writing or after. Reconstructing it
+    /// from the outcomes would mean restating [`SubmitError::prevented_emission`]
+    /// somewhere it could drift.
+    emitted: bool,
+}
+
 /// Submits every segment in order, stopping at the first that does not land.
 ///
 /// Sequential, and that is the milestone's scope: windowing and rate control
@@ -533,17 +637,26 @@ where
 async fn submit_all<S: SmscSession>(
     session: &S,
     pdus: Vec<smpp_core::pdus::SubmitSm>,
-) -> Vec<SegmentOutcome> {
+) -> Submission {
     let total = pdus.len();
     let mut outcomes = Vec::with_capacity(total);
+    let mut emitted = false;
 
     for (index, pdu) in pdus.into_iter().enumerate() {
         let outcome = match session.submit(Pdu::SubmitSm(pdu)).await {
-            Ok(response) => SegmentOutcome::Answered {
-                status: response.status(),
-                smsc_message_id: submitted_identifier(&response),
-            },
-            Err(failure) => SegmentOutcome::Unanswered { failure },
+            Ok(response) => {
+                emitted = true;
+
+                SegmentOutcome::Answered {
+                    status: response.status(),
+                    smsc_message_id: submitted_identifier(&response),
+                }
+            }
+            Err(failure) => {
+                emitted |= !failure.prevented_emission();
+
+                SegmentOutcome::Unanswered { failure }
+            }
         };
 
         let landed = outcome.is_accepted();
@@ -561,7 +674,7 @@ async fn submit_all<S: SmscSession>(
         }
     }
 
-    outcomes
+    Submission { outcomes, emitted }
 }
 
 /// The `message_id` a `submit_sm_resp` carried, when it carried one.

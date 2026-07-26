@@ -90,8 +90,18 @@ pub(crate) enum ErrorCode {
     /// The message journal refused a read or a write.
     ///
     /// On the write-ahead insert this means **nothing was sent**: the
-    /// orchestrator does not submit a message it could not persist.
+    /// orchestrator does not submit a message it could not persist. A journal
+    /// failure *after* the send is not reported here at all — it comes back on
+    /// the successful result as `journalled: false`, because the two say
+    /// opposite things.
     MessageStorage,
+    /// A message already exists under that `client_message_id`.
+    ///
+    /// Its own code rather than [`Self::MessageStorage`]: a replay is the
+    /// guard that makes a resumed send idempotent (spec §10.5), and it is not
+    /// a fault the way a full disk is. The interface tells the operator the
+    /// message is already there, not that the database broke.
+    MessageDuplicate,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -262,6 +272,14 @@ impl ErrorDto {
         Self::bare(
             ErrorCode::MessageStorage,
             &"the message journal refused the operation",
+        )
+    }
+
+    /// A message already exists under that identifier.
+    pub(crate) fn message_duplicate() -> Self {
+        Self::bare(
+            ErrorCode::MessageDuplicate,
+            &"a message already exists under this client_message_id",
         )
     }
 }

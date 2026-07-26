@@ -129,11 +129,18 @@ export const commands = {
 	 *  * `MESSAGE_ENCODING` — the text cannot be written under the chosen
 	 *    encoding, or needs more than 255 segments;
 	 *  * `MESSAGE_SESSION_NOT_BOUND` — no live session carries that identifier;
-	 *  * `MESSAGE_STORAGE` — the journal refused the write-ahead insert, in which
-	 *    case nothing was sent.
+	 *  * `MESSAGE_DUPLICATE` — a message already exists under that
+	 *    `client_message_id`, which is the guard that makes a replay idempotent;
+	 *  * `MESSAGE_STORAGE` — the journal refused the **write-ahead insert**, in
+	 *    which case nothing was sent.
 	 * 
-	 *  A message the centre **rejected** is not an error: it comes back as a
-	 *  result whose `state` is `FAILED`.
+	 *  Two outcomes that are deliberately **not** errors:
+	 * 
+	 *  * a message the centre **rejected** comes back as a result whose `state` is
+	 *    `FAILED`, carrying the raw `command_status` (ENF-UTI-02);
+	 *  * a journal failure *after* the send comes back as a successful result with
+	 *    `journalled: false`. Reporting it as `MESSAGE_STORAGE` would tell the
+	 *    operator nothing was sent, and the message would be sent twice.
 	 */
 	messageSend: (input: MessageSendInput) => typedError<MessageSendResultDto, ErrorDto>(__TAURI_INVOKE("message_send", { input })),
 	/**
@@ -146,7 +153,7 @@ export const commands = {
 	 * 
 	 *  # Errors
 	 * 
-	 *  * `MESSAGE_INVALID_ID` — the session identifier is malformed;
+	 *  * `SESSION_INVALID_ID` — the session identifier is malformed;
 	 *  * `MESSAGE_ENCODING` — a forced encoding cannot write the text.
 	 */
 	messagePreview: (input: MessagePreviewInput) => typedError<MessagePreviewDto, ErrorDto>(__TAURI_INVOKE("message_preview", { input })),
@@ -276,9 +283,21 @@ export type ErrorCode =
  *  The message journal refused a read or a write.
  * 
  *  On the write-ahead insert this means **nothing was sent**: the
- *  orchestrator does not submit a message it could not persist.
+ *  orchestrator does not submit a message it could not persist. A journal
+ *  failure *after* the send is not reported here at all — it comes back on
+ *  the successful result as `journalled: false`, because the two say
+ *  opposite things.
  */
-"MESSAGE_STORAGE";
+"MESSAGE_STORAGE" | 
+/**
+ *  A message already exists under that `client_message_id`.
+ * 
+ *  Its own code rather than [`Self::MessageStorage`]: a replay is the
+ *  guard that makes a resumed send idempotent (spec §10.5), and it is not
+ *  a fault the way a full disk is. The interface tells the operator the
+ *  message is already there, not that the database broke.
+ */
+"MESSAGE_DUPLICATE";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -456,6 +475,15 @@ export type MessageSendResultDto = {
 	statusIsVendorSpecific: boolean,
 	/**  Whether sending the same message again could succeed. */
 	retryable: boolean,
+	/**
+	 *  Whether the journal recorded the outcome.
+	 * 
+	 *  `false` means the message **was** submitted and answered, but its
+	 *  transitions could not be written: the row is still `QUEUED`. The
+	 *  interface has to say so, because "sent and unrecorded" is the one
+	 *  state where doing nothing is right and resending is wrong.
+	 */
+	journalled: boolean,
 	/**  One entry per segment. */
 	outcomes: SegmentOutcomeDto[],
 };
