@@ -24,11 +24,13 @@ mod pending;
 pub mod actors;
 pub mod profile;
 pub mod reconnect;
+pub mod registry;
 pub mod state;
 
-pub use actors::transport::{TcpTransport, Transport};
+pub use actors::transport::{self as transport, TcpTransport, Transport};
 pub use actors::{spawn, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS};
 pub use error::{ProfileRejection, SessionError};
+pub use registry::SessionRegistry;
 
 /// Crate version, as declared in its manifest.
 ///

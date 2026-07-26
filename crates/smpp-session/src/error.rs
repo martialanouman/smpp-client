@@ -166,6 +166,17 @@ pub enum SessionError {
     #[error("session is closed")]
     Closed,
 
+    /// Another session is already live.
+    ///
+    /// Milestone 005 runs one at a time; multiple sessions and multi-bind are
+    /// milestone 011's (step-005 §2). A typed refusal rather than a silent
+    /// half-implementation — see [`crate::registry`].
+    #[error("another session is already live ({live} in the registry)")]
+    TooManySessions {
+        /// How many sessions the registry held.
+        live: usize,
+    },
+
     /// A session profile field was refused.
     #[error("invalid value for `{field}`: {reason}")]
     InvalidProfile {

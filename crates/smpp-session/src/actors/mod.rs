@@ -126,6 +126,7 @@ impl core::fmt::Debug for SessionHandle {
 }
 
 /// A running session: its handle, and the queue of unsolicited PDUs.
+#[derive(Debug)]
 pub struct Session {
     /// The handle the application keeps.
     pub handle: SessionHandle,
