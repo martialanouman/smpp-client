@@ -16,7 +16,7 @@ numéros valides par pays, journalise et exporte.
 
 | Outil | Version | Rôle |
 |---|---|---|
-| Rust (via `rustup`) | ≥ 1.85 | Backend et crates métier |
+| Rust (via `rustup`) | ≥ 1.93 | Backend et crates métier |
 | Node.js | 24 (voir [`.nvmrc`](.nvmrc)) | Build du frontend |
 | pnpm | ≥ 11 | Dépendances frontend |
 | `just` | — | Recettes de tâches |

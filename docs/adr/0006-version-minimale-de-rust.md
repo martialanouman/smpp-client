@@ -32,11 +32,27 @@ compile évidemment un projet qui prétend n'exiger que 1.78.
 
 **Deux décisions, indissociables.**
 
-### 1. La MSRV se calcule depuis le graphe complet
+### 1. La MSRV se trouve en compilant, pas en lisant des manifestes
 
-`rust-version = "1.88"` dans `[workspace.package]`, soit le maximum des
-`rust-version` déclarées par **toutes** les dépendances, directes et
-transitives :
+`rust-version = "1.93"` dans `[workspace.package]`.
+
+> **Correction apportée au jalon 001.** Cette ADR affirmait d'abord qu'il
+> suffisait de prendre le maximum des `rust-version` du graphe, ce qui donnait
+> 1.88. **1.88 ne compile pas** : `specta` — tiré par `tauri-specta`, retenu
+> par l'[ADR 0003](0003-generation-des-types-ipc.md) — utilise
+> `debug_closure_helpers`, stabilisée seulement en **1.93**, tout en déclarant
+> une MSRV bien inférieure.
+>
+> Une crate qui sous-déclare sa propre MSRV est **invisible** à tout calcul
+> fondé sur les manifestes. Le maximum déclaré est donc un **plancher d'où
+> partir**, jamais la réponse. Cinq versions séparaient les deux.
+>
+> C'est exactement le cas que la section « Ce que cette ADR ne garantit pas »
+> annonçait, et le job CI l'a signalé au premier jalon suivant — sans lui,
+> `rust-version` aurait affiché 1.88 indéfiniment pendant que le projet
+> exigeait 1.93.
+
+Le plancher se calcule ainsi :
 
 ```bash
 cargo metadata --format-version 1 \
@@ -44,8 +60,10 @@ cargo metadata --format-version 1 \
   | sort -V | tail -1
 ```
 
-La commande est inscrite en commentaire dans `Cargo.toml`, à côté de la
-valeur : c'est le seul endroit où quelqu'un qui la modifie la lira.
+puis on bissecte vers le haut avec `cargo +<version> check --workspace
+--all-targets` jusqu'à ce que la compilation passe. Les deux étapes sont
+inscrites en commentaire dans `Cargo.toml`, à côté de la valeur : c'est le
+seul endroit où quelqu'un qui la modifie les lira.
 
 ### 2. La MSRV est vérifiée en CI, sinon elle ne veut rien dire
 

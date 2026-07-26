@@ -13,15 +13,24 @@ version = "0.0.1"
 edition = "2021"
 # Spec §6.3 states "Rust >= 1.78". That floor was never true: the Tauri
 # dependency graph already required more at milestone 000, and nothing checked
-# it. The declared value is now computed from the WHOLE graph — see
-# docs/adr/0006-version-minimale-de-rust.md — and the `msrv` CI job pins a
-# toolchain at exactly this version so the number stops being decorative.
+# it. See docs/adr/0006-version-minimale-de-rust.md.
 #
-# Recompute after any dependency change:
+# THIS VALUE IS FOUND BY COMPILING, NOT BY READING MANIFESTS. The maximum
+# `rust-version` declared across the graph gives 1.88 — and 1.88 does not
+# build: `specta` uses `debug_closure_helpers`, stable only since 1.93, while
+# declaring far less. A crate that under-declares its own MSRV is invisible to
+# any manifest-based calculation.
+#
+# So the declared maximum is a FLOOR to start bisecting from, never the answer.
+# The `msrv` CI job is the only source of truth: it pins a toolchain at this
+# exact version and builds.
+#
+# After a dependency change, bisect from the floor:
 #   cargo metadata --format-version 1 \
 #     | jq -r '.packages[] | select(.rust_version) | .rust_version' \
-#     | sort -V | tail -1
-rust-version = "1.88"
+#     | sort -V | tail -1                      # the floor
+#   cargo +<version> check --workspace --all-targets   # the truth
+rust-version = "1.93"
 authors = ["Martial Anouman"]
 repository = "https://github.com/martialanouman/smpp-client"
 publish = false
