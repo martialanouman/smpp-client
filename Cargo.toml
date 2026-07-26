@@ -30,7 +30,12 @@ edition = "2021"
 #     | jq -r '.packages[] | select(.rust_version) | .rust_version' \
 #     | sort -V | tail -1                      # the floor
 #   cargo +<version> check --workspace --all-targets   # the truth
-rust-version = "1.93"
+#
+# Milestone 002 raised it from 1.93 to 1.94: `sqlx` 0.9 declares 1.94, and
+# 1.93 refuses the build outright — this time the manifest floor and the
+# compiler agreed, which the `specta` case above shows is not guaranteed.
+# 1.94 was then checked by compiling, not assumed.
+rust-version = "1.94"
 authors = ["Martial Anouman"]
 repository = "https://github.com/martialanouman/smpp-client"
 publish = false

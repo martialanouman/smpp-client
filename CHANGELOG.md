@@ -87,6 +87,13 @@ majeur.
   livrées sont aussi épinglées dans un test — `sqlx` ne détecte une migration
   éditée que sur une base déjà migrée, jamais sur un clone neuf.
 
+### Modifié
+
+- **MSRV portée de 1.93 à 1.94** : `sqlx` 0.9 la déclare et 1.93 refuse la
+  compilation. Le processus de l'[ADR 0006](docs/adr/0006-version-minimale-de-rust.md)
+  a fonctionné — plancher lu dans le graphe, puis vérifié en compilant. Le job
+  CI `msrv` lit la valeur depuis `Cargo.toml` et n'a rien demandé.
+
 ### Décisions
 
 - [ADR 0007](docs/adr/0007-emplacement-des-traits-de-port.md) : les traits de
