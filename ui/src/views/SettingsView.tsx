@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { Language, Theme } from "../ipc";
+import { persistPreference } from "../store/bridge";
 import { usePreferences } from "../store/preferences";
 
 const LANGUAGES: readonly Language[] = ["fr", "en"];
@@ -21,8 +22,10 @@ export function SettingsView() {
   const { t } = useTranslation();
   const language = usePreferences((state) => state.language);
   const theme = usePreferences((state) => state.theme);
-  const setLanguage = usePreferences((state) => state.setLanguage);
-  const setTheme = usePreferences((state) => state.setTheme);
+  // Writes go through the backend rather than the store: CA-001-02 requires
+  // preferences to survive a restart, and the store is only the in-memory
+  // mirror. `persistPreference` adopts whatever the backend confirms, so a
+  // refused value never reaches the screen.
 
   return (
     <div className="flex max-w-md flex-col gap-6">
@@ -30,7 +33,7 @@ export function SettingsView() {
         <span className="text-sm font-medium">{t("settings.language")}</span>
         <select
           value={language}
-          onChange={(event) => setLanguage(event.target.value as Language)}
+          onChange={(event) => void persistPreference({ language: event.target.value as Language })}
           className="rounded-md border border-[var(--shinobi-border)] bg-[var(--shinobi-surface)] px-3 py-2 text-sm"
         >
           {LANGUAGES.map((value) => (
@@ -45,7 +48,7 @@ export function SettingsView() {
         <span className="text-sm font-medium">{t("settings.theme")}</span>
         <select
           value={theme}
-          onChange={(event) => setTheme(event.target.value as Theme)}
+          onChange={(event) => void persistPreference({ theme: event.target.value as Theme })}
           className="rounded-md border border-[var(--shinobi-border)] bg-[var(--shinobi-surface)] px-3 py-2 text-sm"
         >
           {THEMES.map((value) => (

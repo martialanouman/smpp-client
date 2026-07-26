@@ -67,3 +67,86 @@ describe("backend bridge", () => {
     expect(usePreferences.getState().notifications[0]?.message).toBe("disk full");
   });
 });
+
+describe("persisting a preference", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    usePreferences.setState(usePreferences.getInitialState(), true);
+    // A patch is merged onto the last confirmed configuration, so one must
+    // exist. Starting from `null` is covered by its own test below.
+    usePreferences.getState().adoptConfig(CONFIG);
+  });
+
+  it("resubmits the fields it does not change", async () => {
+    configSet.mockResolvedValue({ ok: true, value: { ...CONFIG, theme: "light" } });
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ theme: "light" });
+
+    // `config_set` replaces the whole configuration. Sending only `theme`
+    // would reset logLevel and retentionDays to their defaults — a bug that
+    // stays invisible until the next restart.
+    expect(configSet).toHaveBeenCalledWith({
+      language: CONFIG.language,
+      theme: "light",
+      logLevel: CONFIG.logLevel,
+      retentionDays: CONFIG.retentionDays,
+    });
+  });
+
+  it("refuses to write before anything has been read", async () => {
+    usePreferences.setState(usePreferences.getInitialState(), true);
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ theme: "dark" });
+
+    expect(configSet).not.toHaveBeenCalled();
+    expect(usePreferences.getState().notifications).toHaveLength(1);
+  });
+
+  it("writes the change through config_set and adopts what the backend returns", async () => {
+    configSet.mockResolvedValue({ ok: true, value: { ...CONFIG, language: "en", theme: "light" } });
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ language: "en" });
+
+    expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ language: "en" }));
+    // The backend is the source of truth: the store adopts the config it
+    // returns, not the value that was submitted. A backend that normalises or
+    // rejects part of the input must win.
+    expect(usePreferences.getState().language).toBe("en");
+    expect(usePreferences.getState().theme).toBe("light");
+  });
+
+  it("surfaces a rejected value and leaves the store untouched", async () => {
+    configSet.mockResolvedValue({
+      ok: false,
+      failure: {
+        kind: "backend",
+        error: { code: "CONFIG_INVALID_LANGUAGE", message: "unsupported language", details: null },
+      },
+    });
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ language: "en" });
+
+    // CA-001-05: the interface must not show a preference the backend refused
+    // to store — that would survive on screen until the next restart and then
+    // silently revert. The store keeps what `adoptConfig` last confirmed.
+    expect(usePreferences.getState().language).toBe(CONFIG.language);
+    expect(usePreferences.getState().notifications[0]?.code).toBe("CONFIG_INVALID_LANGUAGE");
+  });
+
+  it("reports a transport failure without a fabricated code", async () => {
+    configSet.mockResolvedValue({
+      ok: false,
+      failure: { kind: "transport", message: "bridge unavailable" },
+    });
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ theme: "dark" });
+
+    expect(usePreferences.getState().notifications[0]?.code).toBeNull();
+    expect(usePreferences.getState().theme).toBe(CONFIG.theme);
+  });
+});

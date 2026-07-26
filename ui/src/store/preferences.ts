@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ErrorCode, Language, Theme } from "../ipc";
+import type { AppConfig, ErrorCode, Language, Theme } from "../ipc";
 
 /**
  * The eight screens of spec §21, in navigation order.
@@ -66,6 +66,17 @@ interface PreferencesState {
   readonly theme: Theme;
   /** Pending error notifications, oldest first. */
   readonly notifications: readonly Notification[];
+  /**
+   * The last configuration the backend confirmed, or `null` before the first
+   * read.
+   *
+   * Kept whole rather than split into the two fields the interface exposes:
+   * `config_set` replaces the entire configuration, so writing one preference
+   * requires resubmitting `logLevel` and `retentionDays` unchanged. Dropping
+   * them here would silently reset them to their defaults on the first theme
+   * change — a bug that only surfaces at the next restart.
+   */
+  readonly backendConfig: AppConfig | null;
 
   /** Displays another screen. */
   readonly goTo: (screen: Screen) => void;
@@ -73,6 +84,8 @@ interface PreferencesState {
   readonly setLanguage: (language: Language) => void;
   /** Switches the colour scheme. */
   readonly setTheme: (theme: Theme) => void;
+  /** Adopts a configuration confirmed by the backend. */
+  readonly adoptConfig: (config: AppConfig) => void;
   /** Queues an error for display. */
   readonly notify: (input: NotificationInput) => void;
   /** Removes one notification, by id. */
@@ -104,10 +117,14 @@ export const usePreferences = create<PreferencesState>()((set) => ({
   language: "fr",
   theme: "system",
   notifications: [],
+  backendConfig: null,
 
   goTo: (screen) => set({ screen }),
   setLanguage: (language) => set({ language }),
   setTheme: (theme) => set({ theme }),
+
+  adoptConfig: (config) =>
+    set({ backendConfig: config, language: config.language, theme: config.theme }),
 
   notify: ({ code, message }) =>
     set((state) => {

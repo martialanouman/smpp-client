@@ -1,6 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AppConfig, ConfigSetInput, IpcOutcome } from "../ipc";
 
 import "../i18n";
 import i18n from "../i18n";
@@ -9,9 +11,33 @@ import en from "../i18n/locales/en.json";
 import { SCREENS, usePreferences } from "../store/preferences";
 import { AppShell } from "./AppShell";
 
+const BASE: AppConfig = { language: "fr", theme: "system", logLevel: "info", retentionDays: 30 };
+
+// The settings screen writes through `config_set` rather than mutating the
+// store, because CA-001-02 requires a preference to survive a restart. Mocking
+// the transport rather than `persistPreference` keeps the real path under
+// test: merge, call, and adoption of what the backend confirms.
+const configSet = vi.fn<(input: ConfigSetInput) => Promise<IpcOutcome<AppConfig>>>();
+
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
+  configSet: (input: ConfigSetInput) => configSet(input),
+}));
+
 describe("AppShell", () => {
   beforeEach(async () => {
     usePreferences.setState(usePreferences.getInitialState(), true);
+    usePreferences.getState().adoptConfig(BASE);
+    configSet.mockImplementation((input) =>
+      Promise.resolve({
+        ok: true,
+        value: {
+          ...BASE,
+          language: input.language as AppConfig["language"],
+          theme: input.theme as AppConfig["theme"],
+        },
+      }),
+    );
     await i18n.changeLanguage("fr");
     document.documentElement.removeAttribute("data-theme");
   });
