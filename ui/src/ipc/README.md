@@ -15,10 +15,8 @@ serialisation fails at runtime.
 CI step 4 regenerates and compares (`git diff --exit-code`): an uncommitted
 diff fails the build.
 
-> At milestone 000 the generator is not wired in yet — it lands at
-> **milestone 001**. `scripts/check-ipc-types.sh` detects this and lets the
-> step pass, but **fails** if a generated file appears here without a
-> generator: the empty state is tolerated only while it is genuinely empty.
+> Wired in since milestone 001: `src-tauri/src/bin/gen_ipc.rs` produces
+> `generated/bindings.ts`, and CI step 4 regenerates and compares on every run.
 
 ## 2. Only this directory imports `@tauri-apps/api`
 
@@ -27,5 +25,8 @@ exposed here (CLAUDE.md §4). The `no-restricted-imports` rule in
 `eslint.config.js` bans importing `@tauri-apps/*` everywhere **except** this
 directory.
 
-A wrapper validates the shape of the response and translates the
-`{ code, message, details }` error DTO into a type the interface can use.
+A wrapper narrows the failure into one of two shapes. `backend` carries a
+well-formed `ErrorDto` with its stable `code`; anything else is `transport`,
+including the bare JSON string Tauri rejects with when it cannot deserialise a
+command's arguments. Trusting that string to be a DTO produced a toast with
+neither code nor message — hence the explicit shape check in `call()`.

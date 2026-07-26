@@ -108,3 +108,54 @@ describe("ipc boundary", () => {
     await expect(configGet()).resolves.toMatchObject({ ok: false });
   });
 });
+
+describe("a rejection that is not a DTO", () => {
+  it("is reported as transport, not as a backend error", async () => {
+    // Tauri rejects argument deserialisation with a bare JSON STRING, not an
+    // object: `retentionDays: -1` through a hand-made invoke yields
+    // "invalid args `input` for command `config_set`: …".
+    //
+    // Labelling that `backend` meant reading `.code` off a string — undefined —
+    // and rendering a toast with neither code nor message. Exactly the class of
+    // input CA-001-05 is about.
+    mockIPC(() => {
+      throw "invalid args `input` for command `config_set`: invalid value: integer `-1`";
+    });
+
+    const outcome = await configGet();
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure.kind).toBe("transport");
+    if (outcome.failure.kind !== "transport") return;
+    expect(outcome.failure.message).toContain("invalid args");
+  });
+
+  it("is reported as transport when the object carries no code", async () => {
+    mockIPC(() => {
+      throw { message: "no code here" };
+    });
+
+    const outcome = await configGet();
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure.kind).toBe("transport");
+  });
+
+  it("still recognises a well-formed DTO as a backend error", async () => {
+    // The contrast matters: a narrower that classed everything as transport
+    // would pass the two tests above while destroying the distinction.
+    mockIPC(() => {
+      throw { code: "CONFIG_UNWRITABLE", message: "could not write", details: null };
+    });
+
+    const outcome = await configGet();
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure.kind).toBe("backend");
+    if (outcome.failure.kind !== "backend") return;
+    expect(outcome.failure.error.code).toBe("CONFIG_UNWRITABLE");
+  });
+});

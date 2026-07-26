@@ -43,11 +43,35 @@ export type IpcOutcome<T> =
   { readonly ok: true; readonly value: T } | { readonly ok: false; readonly failure: IpcFailure };
 
 /**
+ * Narrows an unknown rejection to an {@link ErrorDto}.
+ *
+ * `typedError` only re-throws values that are real `Error` instances, so a
+ * rejection that is *not* an `Error` reaches us as `{ status: "error" }` —
+ * which does not make it a DTO. Tauri rejects argument deserialisation with a
+ * bare JSON **string**: send `retentionDays: -1` through a hand-made `invoke`
+ * and the rejection is
+ * `"invalid args \`input\` for command \`config_set\`: …"`.
+ *
+ * Without this check that string was labelled `backend`, and reading `.code`
+ * and `.message` off it produced `undefined` — an empty toast, with neither
+ * code nor message. Exactly the class of input CA-001-05 is about.
+ */
+function isErrorDto(value: unknown): value is ErrorDto {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    typeof (value as { code: unknown }).code === "string" &&
+    "message" in value &&
+    typeof (value as { message: unknown }).message === "string"
+  );
+}
+
+/**
  * Runs a generated command and normalises both failure paths.
  *
- * The generated `typedError` helper re-throws anything that is a real `Error`,
- * which is exactly the transport case; a returned `{ status: "error" }` is the
- * backend case.
+ * Anything that is not a well-formed DTO is classed `transport`, and that is
+ * the honest label: Rust never produced a `code` for it.
  */
 async function call<T>(
   invocation: () => Promise<{ status: "ok"; data: T } | { status: "error"; error: ErrorDto }>,
@@ -55,9 +79,19 @@ async function call<T>(
   try {
     const result = await invocation();
 
-    return result.status === "ok"
-      ? { ok: true, value: result.data }
-      : { ok: false, failure: { kind: "backend", error: result.error } };
+    if (result.status === "ok") {
+      return { ok: true, value: result.data };
+    }
+
+    return isErrorDto(result.error)
+      ? { ok: false, failure: { kind: "backend", error: result.error } }
+      : {
+          ok: false,
+          failure: {
+            kind: "transport",
+            message: typeof result.error === "string" ? result.error : JSON.stringify(result.error),
+          },
+        };
   } catch (cause) {
     return {
       ok: false,
