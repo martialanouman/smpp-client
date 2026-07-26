@@ -61,17 +61,31 @@ impl From<&ErrorDto> for ErrorNotify {
     }
 }
 
-/// Minimum interval between two `sessions:state` emissions.
+/// Shortest interval between two `sessions:state` emissions.
 ///
 /// A session that flaps — connect, fail, back off, connect — publishes a state
 /// change every few hundred milliseconds, and a reconnection storm across
 /// several sessions (milestone 011) multiplies that. Ten per second is well
 /// past what a banner needs and well under what the bridge minds.
 ///
-/// The throttle drops *intermediate* states, never the latest: the payload
-/// carries the whole picture rather than a delta, so a suppressed emission
-/// costs nothing but a frame of animation.
-const SESSIONS_STATE_INTERVAL: Duration = Duration::from_millis(100);
+/// # This is a pace, not a filter, and the distinction was a bug
+///
+/// It used to be a [`Throttle`]: an emission arriving inside the interval was
+/// **discarded**, with nothing to replay it. Since the state of a healthy
+/// session stops changing once it is `BOUND`, and the frontend does no
+/// polling, the last suppressed emission was the last emission full stop.
+///
+/// Against a message centre on the same host the whole handshake takes
+/// milliseconds — `CONNECTING` at t=0, `BINDING` at t=1 ms, `BOUND` at t=6 ms.
+/// The first was admitted and the other two dropped, so the screen showed
+/// `CONNECTING` for ever on a session that was bound. Exactly what CA-005-01
+/// measures.
+///
+/// The pacing now lives in the forwarder ([`crate::sessions`]), which sleeps
+/// this long and then **re-reads** the registry before emitting. A throttle at
+/// the emitter cannot do that: by the time it decides, it has already been
+/// handed a payload that is about to be stale.
+pub(crate) const SESSIONS_STATE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Payload of `sessions:state` — every live session and where it stands.
 ///
@@ -136,16 +150,18 @@ impl Throttle {
 #[derive(Debug)]
 pub(crate) struct EventEmitter {
     /// Rate limit of the `error:notify` channel.
+    ///
+    /// A throttle is right *here*: a dropped toast is a toast the user did not
+    /// need, and the next failure brings its own. It is wrong for
+    /// `sessions:state`, where the dropped emission may be the last one there
+    /// will ever be — see [`SESSIONS_STATE_INTERVAL`].
     error_notify: Throttle,
-    /// Rate limit of the `sessions:state` channel.
-    sessions_state: Throttle,
 }
 
 impl Default for EventEmitter {
     fn default() -> Self {
         Self {
             error_notify: Throttle::new(ERROR_NOTIFY_INTERVAL),
-            sessions_state: Throttle::new(SESSIONS_STATE_INTERVAL),
         }
     }
 }
@@ -166,22 +182,14 @@ impl EventEmitter {
         }
     }
 
-    /// Emits `sessions:state`, unless the channel is saturated.
+    /// Emits `sessions:state`.
     ///
-    /// `force` bypasses the throttle. Used for the emission that follows a
-    /// command — the interface has just asked for something and must see the
-    /// answer, even if a reconnection storm has been filling the channel.
-    pub(crate) async fn emit_sessions<R: Runtime>(
-        &self,
-        app: &AppHandle<R>,
-        payload: &SessionsState,
-        force: bool,
-    ) {
-        if !force && !self.sessions_state.admit(Instant::now()).await {
-            tracing::trace!("sessions:state suppressed by the throttle");
-            return;
-        }
-
+    /// Unconditional, deliberately. Nothing here decides whether the interface
+    /// deserves this payload — the caller has just read the registry, so the
+    /// payload is current, and dropping it would drop the only copy. The
+    /// pacing is the forwarder's, because only the forwarder can wait and then
+    /// look again.
+    pub(crate) fn emit_sessions<R: Runtime>(&self, app: &AppHandle<R>, payload: &SessionsState) {
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit sessions:state");
         }
