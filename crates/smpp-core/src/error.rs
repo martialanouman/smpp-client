@@ -94,6 +94,18 @@ pub enum SmppError {
         needed: usize,
     },
 
+    /// The announced `command_length` is smaller than the header itself.
+    ///
+    /// Distinct from [`SmppError::Incomplete`]: more bytes would not help, the
+    /// announcement is self-contradictory.
+    #[error("command_length {announced} is below the {minimum}-byte header")]
+    Malformed {
+        /// Value of the `command_length` header field.
+        announced: usize,
+        /// Size of the SMPP header, which `command_length` includes.
+        minimum: usize,
+    },
+
     /// A complete PDU was decoded but bytes remain after it.
     #[error("{count} byte(s) left over after the PDU")]
     TrailingBytes {
@@ -123,11 +135,15 @@ pub enum SmppError {
     },
 
     /// The `interface_version` octet is neither v3.4 nor v5.0.
-    #[error("unsupported SMPP interface version: {octet:#04X}")]
-    UnsupportedInterfaceVersion {
-        /// The rejected octet.
-        octet: u8,
-    },
+    ///
+    /// Wraps [`crate::values::UnsupportedInterfaceVersion`] rather than
+    /// restating its fields. There used to be two representations of this one
+    /// condition — a variant here and that struct — with identical `Display`
+    /// and only the struct ever constructed. `TryFrom` keeps returning the
+    /// precise type, which callers can match without carrying the whole
+    /// `SmppError`; this variant only exists so `?` can lift it.
+    #[error(transparent)]
+    UnsupportedInterfaceVersion(#[from] crate::values::UnsupportedInterfaceVersion),
 
     /// A domain value was refused at construction time.
     #[error("invalid value for `{field}`: {reason}")]
@@ -162,7 +178,11 @@ mod tests {
 
     #[test]
     fn an_unsupported_version_reports_the_offending_octet() {
-        let error = SmppError::UnsupportedInterfaceVersion { octet: 0x33 };
+        // Built through the real path — `TryFrom` — and lifted by `?`, so the
+        // test exercises the conversion rather than a variant nothing builds.
+        let error: SmppError = crate::values::SmppVersion::try_from(0x33_u8)
+            .expect_err("0x33 is neither v3.4 nor v5.0")
+            .into();
 
         assert_eq!(
             error.to_string(),

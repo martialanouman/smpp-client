@@ -75,19 +75,72 @@ pub fn encode(command: &Command) -> Result<Vec<u8>, SmppError> {
 /// This function never panics, whatever the input. That is a contract, not an
 /// aspiration: milestone 003 covers it with a fuzzing test.
 pub fn decode(bytes: &[u8]) -> Result<Command, SmppError> {
-    let announced = announced_length(bytes);
+    // The HEADER is authoritative, not what the codec leaves behind.
+    //
+    // `CommandCodec::decode` discards the size `Pdu::decode` returns and never
+    // advances the buffer to `command_length`. Several PDUs — the three
+    // `bind_*`, `outbind`, `query_sm`, `query_sm_resp`, `cancel_sm` — are
+    // parsed without a length, so any octet the sender included *inside*
+    // `command_length` but that the body parser did not consume stays in the
+    // buffer. Trusting the leftover would report those as `TrailingBytes`
+    // although they belong to the PDU — a vendor TLV appended to a bind is the
+    // ordinary case.
+    //
+    // Worse, the same codec is meant to sit on a `Framed` at milestone 005.
+    // There, those octets do not raise anything: they stay in the read buffer
+    // and get read as the beginning of the next PDU. That is a silent framing
+    // desynchronisation, the kind of bug that surfaces days later as
+    // "responses no longer match requests".
+    //
+    // So the boundary is decided here, from `command_length`, and the codec is
+    // handed exactly that many octets. Whatever it fails to consume is inside
+    // the PDU and is none of our business.
+    let Some(announced) = announced_length(bytes) else {
+        return Err(SmppError::Incomplete {
+            available: bytes.len(),
+            needed: HEADER_LENGTH,
+        });
+    };
+
+    if announced > MAX_COMMAND_LENGTH {
+        return Err(SmppError::CommandTooLarge {
+            actual: announced,
+            max: MAX_COMMAND_LENGTH,
+        });
+    }
+
+    if announced < HEADER_LENGTH {
+        // A `command_length` below the header size is incoherent. Reported as
+        // a decoding error rather than `Incomplete`: no amount of extra bytes
+        // would ever make this PDU valid.
+        return Err(SmppError::Malformed {
+            announced,
+            minimum: HEADER_LENGTH,
+        });
+    }
+
+    if bytes.len() < announced {
+        return Err(SmppError::Incomplete {
+            available: bytes.len(),
+            needed: announced,
+        });
+    }
+
+    if bytes.len() > announced {
+        return Err(SmppError::TrailingBytes {
+            count: bytes.len() - announced,
+        });
+    }
 
     let mut codec = CommandCodec::new().with_max_length(MAX_COMMAND_LENGTH);
     let mut buffer = BytesMut::from(bytes);
 
     match codec.decode(&mut buffer) {
-        Ok(Some(command)) if buffer.is_empty() => Ok(command),
-        Ok(Some(_)) => Err(SmppError::TrailingBytes {
-            count: buffer.len(),
-        }),
+        // The leftover is deliberately ignored: the boundary was settled above.
+        Ok(Some(command)) => Ok(command),
         Ok(None) => Err(SmppError::Incomplete {
             available: bytes.len(),
-            needed: announced.unwrap_or(HEADER_LENGTH),
+            needed: announced,
         }),
         Err(PduDecodeError::MaxLength { actual, max }) => {
             Err(SmppError::CommandTooLarge { actual, max })
