@@ -21,7 +21,6 @@
 //! | [`ports`] | the four repository traits, for injection and test doubles |
 //! | [`records`] | the aggregates the repositories read and write |
 //! | [`repositories`] | the SQLx implementations |
-//! | [`time`] | [`Timestamp`], the crate's only timestamp format |
 //!
 //! # Volumetry
 //!
@@ -40,7 +39,6 @@ mod error;
 pub mod ports;
 mod records;
 mod repositories;
-mod time;
 
 pub use db::{Database, DatabaseConfig, SchemaObject};
 pub use error::PersistenceError;
@@ -53,7 +51,13 @@ pub use repositories::{
     SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
     SqlitePduLogRepository, SqliteSessionProfileRepository,
 };
-pub use time::Timestamp;
+
+/// The single instant format of every `*_at` and `ts` column.
+///
+/// Defined in `smpp-core` since milestone 006 — see
+/// [`smpp_core::time::Timestamp`] for why — and re-exported here because this
+/// crate's whole public surface speaks in it.
+pub use smpp_core::time::Timestamp;
 
 /// Opaque position in a paginated result set.
 ///

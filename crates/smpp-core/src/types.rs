@@ -283,6 +283,26 @@ uuid_newtype!(
     "client_message_id"
 );
 
+uuid_newtype!(
+    /// Identifies a bulk-send campaign (spec §14.2, `campaigns.campaign_id`).
+    ///
+    /// # Why a campaign identifier is in the protocol crate
+    ///
+    /// It is not a protocol object, and `smpp-core` says elsewhere that it
+    /// stays free of anything the wire format does not know about. The
+    /// exception is deliberate and bounded: the `Message` aggregate carries a
+    /// `campaign_id`, and milestone 006 moved that aggregate into `messaging`
+    /// so the crate could own its `MessageRepository` port (ADR 0010). Since
+    /// `persistence` implements that port, both crates need the *same*
+    /// identifier type, and the only crate below both is this one.
+    ///
+    /// `ContactId` and `ListId` did **not** follow: nothing above them needs
+    /// them yet, and they stay in `persistence` until `contacts` claims them
+    /// at milestone 009.
+    CampaignId,
+    "campaign_id"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

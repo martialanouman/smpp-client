@@ -3,7 +3,9 @@
 use crate::db::Database;
 use crate::ports::CampaignRepository;
 use crate::records::{Campaign, CampaignId, CampaignStatus};
-use crate::repositories::convert::{read_optional_timestamp, read_timestamp, read_u32, store_u32};
+use crate::repositories::convert::{
+    read_campaign_id, read_optional_timestamp, read_timestamp, read_u32, store_u32,
+};
 use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
 
@@ -49,7 +51,7 @@ impl PagedRow for CampaignRow {
 
     fn into_record(self) -> Result<Campaign, PersistenceError> {
         Ok(Campaign {
-            campaign_id: CampaignId::parse(&self.campaign_id)?,
+            campaign_id: read_campaign_id(&self.campaign_id)?,
             name: self.name,
             status: CampaignStatus::parse(&self.status)?,
             template: self.template,

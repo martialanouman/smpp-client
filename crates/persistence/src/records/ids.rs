@@ -9,11 +9,20 @@
 //! wire format does not know about.
 //!
 //! Their long-term home is the crate that owns the aggregate — `messaging` for
-//! campaigns, `contacts` for contacts and lists. Neither exists yet
-//! (milestones 004 and 006), and putting them there today would make
-//! `persistence` depend on two crates that are empty shells. They live here
-//! until then; moving them is a re-export away, and the type identity of a
-//! `CampaignId` does not change when it does.
+//! campaigns, `contacts` for contacts and lists.
+//!
+//! # `CampaignId` has moved
+//!
+//! Milestone 006 rapatriated the `Message` aggregate into `messaging`
+//! (ADR 0010), and a `Message` carries a `campaign_id`. Since `persistence`
+//! implements `messaging`'s port, both crates need the same identifier type,
+//! and the only crate below both is `smpp-core` — so that is where it went.
+//! [`crate::CampaignId`] is a re-export of
+//! [`smpp_core::types::CampaignId`] and the type identity did not change.
+//!
+//! [`ContactId`] and [`ListId`] stayed: nothing above `persistence` consumes
+//! them yet, and they follow `ContactRepository` to `contacts` at milestone
+//! 009 (CA-009-13).
 
 use uuid::Uuid;
 
@@ -81,13 +90,6 @@ macro_rules! uuid_newtype {
 }
 
 uuid_newtype!(
-    /// Identifies a bulk-send campaign (spec §14.2, `campaigns.campaign_id`).
-    CampaignId,
-    "campaigns",
-    "campaign_id"
-);
-
-uuid_newtype!(
     /// Identifies a contact (spec §14.2, `contacts.contact_id`).
     ContactId,
     "contacts",
@@ -103,14 +105,14 @@ uuid_newtype!(
 
 #[cfg(test)]
 mod tests {
-    use super::{CampaignId, ContactId, ListId};
+    use super::{ContactId, ListId};
 
     #[test]
     fn an_identifier_survives_a_round_trip_through_its_text_form() {
-        let identifier = CampaignId::new();
+        let identifier = ListId::new();
 
         assert_eq!(
-            CampaignId::parse(&identifier.to_string()).expect("own output parses"),
+            ListId::parse(&identifier.to_string()).expect("own output parses"),
             identifier
         );
     }

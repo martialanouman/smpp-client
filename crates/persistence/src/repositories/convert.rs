@@ -179,11 +179,24 @@ pub(crate) fn read_client_message_id(
     })
 }
 
+/// Reads a required campaign identifier column.
+///
+/// `CampaignId` moved to `smpp-core` at milestone 006 (ADR 0010), so its
+/// `parse` reports an `SmppError`; the column context that makes a malformed
+/// row actionable is restored here, where it is known.
+pub(crate) fn read_campaign_id(raw: &str) -> Result<CampaignId, PersistenceError> {
+    CampaignId::parse(raw).map_err(|_| PersistenceError::MalformedRow {
+        table: "campaigns",
+        column: "campaign_id",
+        expected: "a UUID in canonical form",
+    })
+}
+
 /// Reads an optional campaign identifier column.
 pub(crate) fn read_optional_campaign_id(
     raw: Option<&str>,
 ) -> Result<Option<CampaignId>, PersistenceError> {
-    raw.map(CampaignId::parse).transpose()
+    raw.map(read_campaign_id).transpose()
 }
 
 /// Reads a contact identifier column.

@@ -11,14 +11,14 @@ mod enums;
 mod ids;
 
 pub use enums::{BindType, CampaignStatus, MessageState, PduDirection};
-pub use ids::{CampaignId, ContactId, ListId};
+pub use ids::{ContactId, ListId};
+pub use smpp_core::types::CampaignId;
 
+use smpp_core::time::Timestamp;
 use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
 use smpp_core::values::{
     CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
 };
-
-use crate::Timestamp;
 
 /// A connection profile (spec §14.2, `session_profiles`).
 ///

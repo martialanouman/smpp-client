@@ -23,6 +23,8 @@ pub enum FieldRejection {
     OutOfRange,
     /// The value is not a well-formed UUID.
     MalformedUuid,
+    /// The value is not a well-formed RFC 3339 instant.
+    MalformedTimestamp,
 }
 
 impl core::fmt::Display for FieldRejection {
@@ -34,6 +36,7 @@ impl core::fmt::Display for FieldRejection {
             Self::TooLong => "value is too long",
             Self::OutOfRange => "value is out of range",
             Self::MalformedUuid => "value is not a well-formed UUID",
+            Self::MalformedTimestamp => "value is not a well-formed RFC 3339 instant",
         };
 
         f.write_str(reason)
