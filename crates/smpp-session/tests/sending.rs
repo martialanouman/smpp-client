@@ -8,6 +8,20 @@
 //!
 //! The two doubles are the journal (in-memory, instrumented) and the message
 //! centre (scripted). Both are in `support/`.
+//!
+//! # Why these live in `smpp-session` and not in `messaging`
+//!
+//! They exercise `messaging`'s orchestrator, so this looks like the wrong
+//! crate. The right one would need `messaging` to dev-depend on
+//! `smpp-session`, which depends back on `messaging` for the `SmscSession`
+//! port — a cycle Cargo tolerates, because a dev-dependency cannot affect the
+//! library it tests, but a cycle all the same. CLAUDE.md §3 says "no cycle"
+//! without distinguishing kinds, and a reader checking the graph would find
+//! one.
+//!
+//! From here both crates are reachable with **no new edge at all**. The cost
+//! is that the end-to-end tests sit one crate away from the code they drive;
+//! the orchestrator's unit tests stay next to it.
 
 // `tests/` is compiled without `cfg(test)`, so the relaxations of
 // `clippy.toml` do not reach it.
@@ -36,7 +50,7 @@ use smpp_session::testing::{
 };
 use smpp_session::{profile::SessionProfile, SessionHandle};
 
-use support::{FrozenClock, HangingSession, Journal, JournalEvent};
+use support::journal::{FrozenClock, HangingSession, Journal, JournalEvent};
 
 /// The instant every test that asserts on a timestamp uses.
 const NOW: &str = "2026-07-26T12:00:00Z";
@@ -241,7 +255,11 @@ async fn ca_006_04_a_four_hundred_character_message_sends_three_correlated_segme
         assert_eq!(body[3], 0x34, "the low octet of reference 0x1234");
         assert_eq!(body[4], 3, "total segments");
         assert_eq!(usize::from(body[5]), index + 1, "part number");
-        assert_ne!(u8::from(pdu.esm_class), 0, "the UDHI bit must be set");
+        // The exact octet, not "not zero". `assert_ne!(…, 0)` is the shape
+        // that let `EsmClass::default()` — which is `0x08`, an ANSI-41
+        // delivery acknowledgement — pass for three milestones, because the
+        // octet was never zero to begin with. `0x40` is the UDHI bit alone.
+        assert_eq!(u8::from(pdu.esm_class), 0x40);
     }
 
     let row = journal
@@ -389,6 +407,68 @@ async fn a_partially_rejected_message_fails_and_stops_sending() {
         row.segments, 3,
         "the row still says how many segments the message needed"
     );
+
+    // THE DECISION: a partially failed message keeps no `smsc_message_id`,
+    // even though segment 1 was accepted and was assigned one. Storing it
+    // would let a receipt for that fragment find this row at milestone 008 and
+    // move it FAILED -> DELIVERED.
+    assert_eq!(report.smsc_message_id, None);
+    assert_eq!(row.smsc_message_id, None);
+
+    // And it is not lost: the accepted segment still carries its own.
+    assert_eq!(report.outcomes[0].smsc_message_id(), Some("SMSC-1"));
+}
+
+/// **The bug the decision above prevents**, stated as the sequence that would
+/// produce it. A receipt for the accepted fragment must not be able to reach
+/// the failed message, and the state machine refuses the move even if it did.
+#[tokio::test(start_paused = true)]
+async fn a_receipt_can_neither_find_nor_revive_a_partially_failed_message() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let smsc = smsc.answering_submits_with(
+        vec![
+            SubmitReply::AcceptAs(String::from("FRAGMENT-1")),
+            SubmitReply::Reject(CommandStatus::EsmeRsubmitfail),
+        ],
+        SubmitReply::Accept,
+    );
+    let journal = Journal::new();
+    let sender = a_sender(journal.clone());
+
+    let (handle, _session) = bound(a_profile(Gsm7BitCharset::Gsm0338), smsc).await;
+    let request = a_request(&"a".repeat(400));
+
+    sender.send(&handle, &request).await.expect("the send runs");
+
+    // Milestone 008 looks a receipt up by the identifier the centre quotes.
+    assert!(
+        journal
+            .find_message_by_smsc_id("FRAGMENT-1")
+            .await
+            .expect("the lookup runs")
+            .is_none(),
+        "the failed message must not be reachable by its fragment's identifier"
+    );
+
+    // And even applied directly, the receipt cannot revive it.
+    journal
+        .update_state(
+            &messaging::message::MessageStateUpdate::new(
+                request.client_message_id,
+                MessageState::Delivered,
+            )
+            .with_delivery_receipt("DELIVRD", None),
+        )
+        .await
+        .expect("an illegal transition is a no-op, not an error");
+
+    let row = journal
+        .row(request.client_message_id)
+        .await
+        .expect("persisted");
+
+    assert_eq!(row.state, MessageState::Failed, "FAILED is terminal");
+    assert_eq!(row.dlr_stat, None, "and the receipt wrote nothing at all");
 }
 
 /// A response that never comes: the message fails, carries **no**
@@ -656,7 +736,7 @@ async fn the_sar_mode_puts_the_concatenation_in_tlvs_rather_than_in_the_body() {
 #[tokio::test(start_paused = true)]
 async fn a_journal_that_refuses_the_insert_sends_nothing() {
     let (smsc, _seen) = Smsc::always(Script::Accept);
-    let journal = Journal::refusing(MessageStoreError::Unavailable {
+    let journal = Journal::refusing_inserts(MessageStoreError::Unavailable {
         reason: String::from("database query failed"),
     });
     let sender = a_sender(journal);
@@ -670,6 +750,97 @@ async fn a_journal_that_refuses_the_insert_sends_nothing() {
 
     assert!(matches!(failure, MessagingError::Store(_)));
     assert_eq!(smsc.submissions(), 0, "nothing was sent");
+}
+
+/// **The bug this test exists for.** A journal that fails *after* the message
+/// went out must not be reported the way one that failed *before* it is.
+///
+/// The sequence: three segments accepted, an identifier assigned, then the
+/// database locks up on the final transitions. Propagating that as an error
+/// would throw the report away and hand the caller `MESSAGE_STORAGE`, whose
+/// whole meaning is "nothing was sent" — the operator resends, and the message
+/// goes out twice.
+///
+/// So the send is reported as what it was, with `journalled = false` saying
+/// the record is missing. Note what the test asserts and what it does not: the
+/// row **is** still `QUEUED`, and that is the honest residual state.
+#[tokio::test(start_paused = true)]
+async fn a_journal_failing_after_the_send_reports_the_send_rather_than_an_error() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let smsc = smsc.answering_submits_with(
+        vec![SubmitReply::AcceptAs(String::from("MSG-42"))],
+        SubmitReply::Accept,
+    );
+    let journal = Journal::refusing_transitions(MessageStoreError::Unavailable {
+        reason: String::from("database is locked"),
+    });
+    let sender = a_sender(journal.clone());
+
+    let (handle, _session) = bound(a_profile(Gsm7BitCharset::Gsm0338), smsc.clone()).await;
+    let request = a_request("Bonjour");
+
+    let report = sender
+        .send(&handle, &request)
+        .await
+        .expect("a post-emission journal failure is not a send failure");
+
+    // The send happened, and the report says so — including the identifier
+    // that would otherwise have been thrown away with the error.
+    assert_eq!(smsc.submissions(), 1);
+    assert_eq!(report.state, MessageState::Accepted);
+    assert_eq!(report.smsc_message_id.as_deref(), Some("MSG-42"));
+
+    // And the one thing the caller could not otherwise know.
+    assert!(
+        !report.journalled,
+        "the caller must be able to tell that the record is missing"
+    );
+
+    // The residual state, asserted rather than assumed: the row is still
+    // `QUEUED`, so a resume WOULD re-send it. That is the known window the
+    // module header describes, not something this test papers over.
+    let row = journal
+        .row(request.client_message_id)
+        .await
+        .expect("the write-ahead row is there");
+    assert_eq!(row.state, MessageState::Queued);
+}
+
+/// The counterpart: a journal that fails *before* the send still reports an
+/// error, because there nothing went out. The two paths must not converge.
+#[tokio::test(start_paused = true)]
+async fn a_journal_failing_before_the_send_still_reports_an_error() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let sender = a_sender(Journal::refusing_inserts(MessageStoreError::Unavailable {
+        reason: String::from("database is locked"),
+    }));
+
+    let (handle, _session) = bound(a_profile(Gsm7BitCharset::Gsm0338), smsc.clone()).await;
+
+    let failure = sender
+        .send(&handle, &a_request("Bonjour"))
+        .await
+        .expect_err("nothing was sent, so this IS a failure");
+
+    assert!(matches!(failure, MessagingError::Store(_)));
+    assert_eq!(smsc.submissions(), 0);
+}
+
+/// A nominal send reports `journalled = true`, so the flag is a fact rather
+/// than a constant nobody sets.
+#[tokio::test(start_paused = true)]
+async fn a_recorded_send_says_so() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let sender = a_sender(Journal::new());
+
+    let (handle, _session) = bound(a_profile(Gsm7BitCharset::Gsm0338), smsc).await;
+
+    let report = sender
+        .send(&handle, &a_request("Bonjour"))
+        .await
+        .expect("the send runs");
+
+    assert!(report.journalled);
 }
 
 /// Replaying a send with the same `client_message_id` is refused by the
@@ -754,9 +925,10 @@ async fn submitting_on_a_receiver_session_is_refused_without_reaching_the_socket
     let sender = a_sender(journal.clone());
 
     let (handle, _session) = bound(profile, smsc.clone()).await;
+    let request = a_request("Bonjour");
 
     let report = sender
-        .send(&handle, &a_request("Bonjour"))
+        .send(&handle, &request)
         .await
         .expect("the send runs and reports");
 

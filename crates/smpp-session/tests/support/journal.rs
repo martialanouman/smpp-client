@@ -7,8 +7,8 @@
 //!   message is in the journal before the `submit_sm` reaches the socket" is
 //!   not a property of a final state, it is a property of a sequence, and only
 //!   an instrumented double can see it.
-//! * the message centre of milestone 005, reached through
-//!   `smpp_session::testing` rather than copied.
+//! * the message centre of milestone 005, which `super` re-exports from
+//!   `smpp_session::testing` rather than copying.
 //! * [`FrozenClock`] — CLAUDE.md §7 wants the clock injected, so a test can
 //!   assert on `created_at` exactly instead of "roughly now".
 
@@ -42,8 +42,15 @@ pub(crate) enum JournalEvent {
 #[derive(Clone, Default)]
 pub(crate) struct Journal {
     inner: Arc<Mutex<JournalState>>,
-    /// When set, every write fails with this.
-    failure: Option<MessageStoreError>,
+    /// When set, the write-ahead insert fails with this.
+    insert_failure: Option<MessageStoreError>,
+    /// When set, the final transitions fail with this.
+    ///
+    /// Separate from [`Self::insert_failure`] on purpose: the two failures
+    /// mean opposite things — one leaves nothing sent, the other leaves
+    /// everything sent and unrecorded — and a single flag could only ever
+    /// exercise the first, which is how the second went uncovered.
+    transition_failure: Option<MessageStoreError>,
     /// Read at insert time, so the test can ask "and how many `submit_sm` had
     /// crossed the socket by then?".
     ///
@@ -74,10 +81,23 @@ impl Journal {
         Self::default()
     }
 
-    /// A journal whose writes always fail — the "full disk" case.
-    pub(crate) fn refusing(failure: MessageStoreError) -> Self {
+    /// A journal that refuses the write-ahead insert — the "full disk before
+    /// anything was sent" case.
+    pub(crate) fn refusing_inserts(failure: MessageStoreError) -> Self {
         Self {
-            failure: Some(failure),
+            insert_failure: Some(failure),
+            ..Self::default()
+        }
+    }
+
+    /// A journal that accepts the insert and refuses the final transitions.
+    ///
+    /// The database locking up, or the disk filling, in the moment between the
+    /// last `submit_sm_resp` and the commit — the message is out, the record
+    /// is not.
+    pub(crate) fn refusing_transitions(failure: MessageStoreError) -> Self {
+        Self {
+            transition_failure: Some(failure),
             ..Self::default()
         }
     }
@@ -119,10 +139,17 @@ impl Journal {
     /// Applies one transition to the stored row, the way SQLite does.
     ///
     /// The merge semantics are copied from the schema deliberately: `None`
-    /// leaves the column alone, `attempts` takes `MAX(attempts, ?)`. A double
-    /// that overwrote instead would let an idempotence bug pass here and fail
-    /// against the real repository.
-    fn apply(row: &mut Message, update: &MessageStateUpdate) {
+    /// leaves the column alone, `attempts` takes `MAX(attempts, ?)`, and an
+    /// **illegal** transition is a no-op. A double that overwrote instead
+    /// would let a bug pass here and fail against the real repository — which
+    /// is exactly what happened while `can_move_to` had no caller.
+    ///
+    /// Returns whether anything was written.
+    fn apply(row: &mut Message, update: &MessageStateUpdate) -> bool {
+        if !row.state.can_move_to(update.state) {
+            return false;
+        }
+
         row.state = update.state;
 
         if let SmscMessageIdUpdate::Set(identifier) = &update.smsc_message_id {
@@ -150,12 +177,14 @@ impl Journal {
         if let Some(attempt) = update.attempt {
             row.attempts = row.attempts.max(attempt);
         }
+
+        true
     }
 }
 
 impl MessageRepository for Journal {
     async fn insert_message(&self, message: &Message) -> Result<(), MessageStoreError> {
-        if let Some(failure) = self.failure.clone() {
+        if let Some(failure) = self.insert_failure.clone() {
             return Err(failure);
         }
 
@@ -218,7 +247,7 @@ impl MessageRepository for Journal {
         &self,
         updates: &[MessageStateUpdate],
     ) -> Result<u64, MessageStoreError> {
-        if let Some(failure) = self.failure.clone() {
+        if let Some(failure) = self.transition_failure.clone() {
             return Err(failure);
         }
 
@@ -235,19 +264,21 @@ impl MessageRepository for Journal {
             return Err(MessageStoreError::NotFound);
         }
 
+        let mut applied = Vec::with_capacity(updates.len());
+
         for update in updates {
             if let Some(row) = state
                 .rows
                 .iter_mut()
                 .find(|row| row.client_message_id == update.client_message_id)
             {
-                Journal::apply(row, update);
+                if Journal::apply(row, update) {
+                    applied.push(update.state);
+                }
             }
         }
 
-        state.events.push(JournalEvent::Transitioned(
-            updates.iter().map(|update| update.state).collect(),
-        ));
+        state.events.push(JournalEvent::Transitioned(applied));
 
         Ok(updates.len() as u64)
     }

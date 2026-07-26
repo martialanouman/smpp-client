@@ -43,20 +43,12 @@ uuid.workspace = true
 proptest.workspace = true
 criterion.workspace = true
 
-# The end-to-end tests drive the REAL session actors against the in-memory
-# message centre of milestone 005 (`smpp_session::testing`), rather than a
-# second hand-written stub. `smpp-session` depends on this crate for the
-# `SmscSession` port, so this is a dependency cycle — one Cargo allows,
-# because a dev-dependency cannot affect the library it tests.
-smpp-session = { path = "../smpp-session", features = ["test-support"] }
-
-tokio = { workspace = true, features = [
-  "rt-multi-thread",
-  "macros",
-  "test-util",
-  "sync",
-  "time",
-] }
+# NO dev-dependency on `smpp-session`, deliberately. The end-to-end tests of
+# the send path need both crates, and putting them here would mean
+# `messaging (dev) -> smpp-session -> messaging`. Cargo allows that cycle, but
+# CLAUDE.md §3 says "no cycle" without distinguishing kinds. They live in
+# `crates/smpp-session/tests/sending.rs` instead, which reaches both with no
+# new edge — see that file's header.
 
 # CA-004-10 asks for a `criterion` micro-benchmark as the milestone 017
 # baseline. `harness = false` hands the target over to criterion instead of
