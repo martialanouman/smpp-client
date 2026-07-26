@@ -61,8 +61,13 @@ couvre pas v5.0.
 
 ## Décision
 
-**Option A.** `rusmpp` pour le codec, `rusmppc` comme point de départ pour la
-session.
+**Option A.** `rusmpp` pour le codec.
+
+> Cette section a d'abord dit « et `rusmppc` comme point de départ pour la
+> session ». L'arbitrage rendu au jalon 003 — plus bas — a écarté `rusmppc`.
+> La phrase est corrigée plutôt que laissée telle quelle : une ADR dont la
+> section « Décision » contredit sa propre conclusion envoie au lecteur
+> pressé exactement la mauvaise réponse.
 
 Le critère décisif n'est pas la maturité — aucune option n'est mature ici —
 mais le **coût de l'erreur**. Si `rusmpp` déçoit, on garde le typage des PDU
@@ -150,9 +155,10 @@ réexport centralisé permet au moins de le constater en un seul endroit.
 - **Impacts opérationnels :** si la crate est consommée depuis GitHub plutôt
   que depuis crates.io, il faudra déclarer l'organisation dans `deny.toml`
   (`[sources] allow-git`) — et non désactiver la vérification de provenance.
-- **Point de réexamen :** au jalon 003, à la lumière d'un bind réel contre un
-  simulateur. Une ADR 0006 tranchera le niveau d'API et pourra, le cas
-  échéant, superséder celle-ci.
+- **Point de réexamen :** le niveau d'API a été tranché au jalon 003, dans la
+  section « Arbitrage du niveau d'API » ci-dessus. Le prochain point de
+  confrontation est le **jalon 017** : le simulateur SMSC avec injection de
+  fautes est le premier endroit où cette ADR rencontrera un vrai réseau.
 
 ## Références
 

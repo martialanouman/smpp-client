@@ -11,12 +11,17 @@ members = ["crates/*", "src-tauri"]
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-# Spec §6.3 states "Rust ≥ 1.78". Milestone 003 raises the declared floor to
-# 1.85 because `rusmpp` 0.4 — the SMPP codec adopted in ADR 0001 — is written
-# in edition 2024 and declares `rust-version = "1.85.0"`. Cargo refuses to
-# build a dependency whose MSRV exceeds ours, so the floor has to move. The
-# toolchain in use is `stable` (rust-toolchain.toml), well above both.
-rust-version = "1.85"
+# Spec §6.3 states "Rust >= 1.78". That floor was never true: the Tauri
+# dependency graph already required more at milestone 000, and nothing checked
+# it. The declared value is now computed from the WHOLE graph — see
+# docs/adr/0006-version-minimale-de-rust.md — and the `msrv` CI job pins a
+# toolchain at exactly this version so the number stops being decorative.
+#
+# Recompute after any dependency change:
+#   cargo metadata --format-version 1 \
+#     | jq -r '.packages[] | select(.rust_version) | .rust_version' \
+#     | sort -V | tail -1
+rust-version = "1.88"
 authors = ["Martial Anouman"]
 repository = "https://github.com/martialanouman/smpp-client"
 publish = false
