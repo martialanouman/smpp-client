@@ -23,11 +23,21 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 generator="src-tauri/src/bin/gen_ipc.rs"
-output="ui/src/ipc"
+# Only the GENERATED directory, not `ui/src/ipc` as a whole: the wrappers
+# beside it are hand-written, and diffing the parent made any uncommitted
+# edit to them fail step 4 for no reason.
+output="ui/src/ipc/generated"
 
 if [ -f "$generator" ]; then
   echo "→ Generator found ($generator): regenerating IPC types."
   cargo run --quiet --package shinobismpp --bin gen_ipc
+
+  # `git diff` compares the work tree to the index, so an UNTRACKED file is
+  # invisible to it. Today the generator writes one already-tracked file and
+  # the check holds — but tauri-specta can split its output, and a new file
+  # would then arrive untracked with the step still green. `add -N` registers
+  # the paths without staging content, which makes them visible to the diff.
+  git add --intent-to-add -- "$output" >/dev/null 2>&1 || true
 
   if ! git diff --exit-code -- "$output"; then
     echo >&2

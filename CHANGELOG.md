@@ -9,6 +9,34 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 001, socle applicatif
+
+- **Contrat IPC typé** : DTO définis une seule fois en Rust, TypeScript généré
+  par tauri-specta dans `ui/src/ipc/generated/`. L'étape 4 de la CI régénère
+  et compare à chaque run — le cliquet du jalon 000 a basculé tout seul.
+- **DTO d'erreur `{ code, message, details }`** avec un `code` stable et
+  machine-lisible. Un test empoisonne chaque variante avec un chemin absolu et
+  un mot de passe, puis balaie le message et `details` : la garantie de
+  non-fuite est structurelle, pas une question de soin.
+- **Coquille applicative** : navigation vers les huit écrans, thèmes clair,
+  sombre et système, i18n FR/EN, notifications d'erreur.
+- **Commandes témoins `config_get` / `config_set`**, préférences persistées
+  dans le répertoire de données standard de l'OS et nulle part ailleurs.
+- **Journalisation `tracing`** vers un fichier rotatif du répertoire de logs.
+
+### Corrigé
+
+- `default-run` manquait : l'ajout du binaire `gen_ipc` rendait `cargo run`
+  ambigu et `tauri dev` ne démarrait plus. Aucun test ne l'attrapait, seul le
+  lancement de l'application le révèle.
+- Une rejection non conforme au DTO — la chaîne nue que Tauri renvoie quand il
+  ne sait pas désérialiser les arguments — était étiquetée « backend », ce qui
+  produisait un toast sans code ni message.
+- Un échec d'abonnement à `error:notify` faisait sombrer tout le pont, y
+  compris la lecture des préférences.
+- L'écriture des préférences bloquait un worker Tokio, garde du verrou en
+  main.
+
 ### Ajouté — jalon 003, cœur protocolaire
 
 - **Codec PDU SMPP v3.4 et v5.0** : `encode`/`decode` d'un PDU complet, les
