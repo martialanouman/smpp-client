@@ -205,6 +205,63 @@ majeur.
   convention de disposition doit casser la compilation partout où des octets
   sont écrits.
 
+### Corrigé — revue du jalon 005
+
+Cinq défauts d'une même famille — un `await` que rien ne borne, un état que
+rien ne remet à zéro — plus sept points mineurs.
+
+- **Le keep-alive ne détectait plus un lien mort dès que la période était
+  plus courte que le délai de réponse.** Le tick écrasait un `enquire_link`
+  encore en vol : l'ancien waiter était droppé, son entrée balayée en
+  silence parce que le récepteur avait disparu, et le compteur de réponses
+  manquées restait à zéro pour toujours. Un SMSC devenu trou noir, socket
+  ouvert, laissait la session `BOUND` indéfiniment. Le profil refuse
+  désormais `response_timeout_s >= enquire_link_s` — les deux bornes étaient
+  validées séparément, jamais leur relation — et le superviseur compte le
+  tick comme une réponse manquée si un waiter est encore là.
+- **`sessions:state` pouvait perdre définitivement un état.** Le throttle
+  jetait l'émission refusée sans rien pour la rejouer ; l'état d'une session
+  saine cesse de changer une fois `BOUND` et le frontend ne fait aucun
+  polling, donc l'émission supprimée était souvent la dernière. Contre un
+  SMSC local la poignée de main tient en quelques millisecondes, et l'écran
+  affichait `CONNECTING` en permanence sur une session bindée. Le rythme
+  descend dans le forwarder, qui dort puis **relit** le registre : un
+  throttle chez l'émetteur ne peut pas faire ça, il a déjà reçu une charge
+  utile en train de devenir périmée.
+- **L'écriture sur le socket n'écoutait ni le jeton d'annulation ni une
+  échéance.** Un SMSC qui cesse de lire sans fermer parquait le superviseur,
+  qui ne revoyait plus son `select!` : `unbind` prenait le verrou du
+  registre, attendait un `JoinHandle` qui ne finissait jamais, toutes les
+  commandes de session se bloquaient derrière, et la fermeture de
+  l'application — un `block_on` sur le thread principal — gelait la fenêtre.
+- **Interblocage lecteur ↔ superviseur au shutdown.** Le lecteur se parquait
+  sur une file pleine que plus personne ne drainait, sur un canal qui ne
+  pouvait pas se fermer puisque le superviseur en détient un `Sender`. Il
+  écoute maintenant le jeton pendant qu'il met en file, et le join est borné.
+- **Le compteur de tentatives ne repartait jamais de zéro.** Six échecs au
+  démarrage laissaient le back-off à six : la première micro-coupure après
+  une journée saine attendait le plafond au lieu d'une seconde, et chaque
+  coupure suivante coûtait une minute d'indisponibilité.
+- **Les PDU en file survivaient à leur connexion** — écrits sur la suivante
+  avec un `sequence_number` dont l'entrée de corrélation avait disparu.
+- **`GiveUp(FatalStatus)` était rendu pour des erreurs qui ne sont pas un
+  refus du SMSC**, et l'interface disait « vérifiez les identifiants » pour
+  une session simplement terminée. Troisième motif, `SESSION_ENDED`.
+- **`messaging::segment` acceptait `Latin1` + `Packed`**, l'invariant de
+  l'ADR 0009 §7 n'étant appliqué qu'au profil.
+- **Pas de timeout sur la poignée de main TCP** : un hôte qui absorbe les SYN
+  bloquait deux minutes sans que le back-off s'engage.
+- **Une poignée de session abandonnée fuyait deux tâches** ; `Drop` annule
+  désormais le jeton.
+- **`error!` sur un chemin normal** — annulation avant la première connexion.
+- **`SessionBindInput` exposait un mot de passe nu sous `derive(Debug)`.**
+
+Deux tests passaient **grâce** aux défauts : celui du keep-alive utilisait le
+seul ordre de paramètres qui le masque, et celui du back-off ne voyait
+croître les intervalles que parce que le compteur ne se remettait jamais à
+zéro — son double acceptait puis coupait à chaque fois, donc chaque tentative
+était en réalité un succès.
+
 ### Ajouté — jalon 004, encodage et segmentation
 
 - **Alphabet GSM 03.38**, table de base et table d'extension, avec détection
