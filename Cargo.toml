@@ -11,13 +11,57 @@ members = ["crates/*", "src-tauri"]
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.78"
+# Spec §6.3 states "Rust >= 1.78". That floor was never true: the Tauri
+# dependency graph already required more at milestone 000, and nothing checked
+# it. The declared value is now computed from the WHOLE graph — see
+# docs/adr/0006-version-minimale-de-rust.md — and the `msrv` CI job pins a
+# toolchain at exactly this version so the number stops being decorative.
+#
+# Recompute after any dependency change:
+#   cargo metadata --format-version 1 \
+#     | jq -r '.packages[] | select(.rust_version) | .rust_version' \
+#     | sort -V | tail -1
+rust-version = "1.88"
 authors = ["Martial Anouman"]
 repository = "https://github.com/martialanouman/smpp-client"
 publish = false
 
 [workspace.dependencies]
 thiserror = "2.0.19"
+
+# --- SMPP protocol core (milestone 003, ADR 0001) ---------------------------
+#
+# `default-features = false` then an explicit opt-in, feature by feature:
+#
+#   · `tokio-codec` — provides `CommandCodec`, the length-prefixed framing
+#     rusmpp implements itself. `smpp-core` uses it purely in memory
+#     (`BytesMut` in, `BytesMut` out); mounting it on a socket is milestone
+#     005's job.
+#   · `verbose` — decoding errors carry the chain of protocol FIELDS that
+#     failed (`SmppField::SourceAddr`…), never their values. Turns "Decode
+#     error" into something actionable.
+#
+# DELIBERATELY OMITTED — `tracing`. It reads like the right choice given
+# CLAUDE.md §4 ("tracing exclusively"), and it is the wrong one: rusmpp logs
+# the whole decoded command plus its hex bytes at debug level, which puts the
+# `bind_transmitter` password in the log the moment a session opens. CLAUDE.md
+# §8 forbids that, and the PDU hex dump is reserved for explicit debug mode.
+# Without the feature rusmpp's logging macros expand to nothing.
+rusmpp = { version = "0.4.0", default-features = false, features = [
+  "tokio-codec",
+  "verbose",
+] }
+
+# Buffer type of the rusmpp encode/decode API, and the `Encoder`/`Decoder`
+# traits `CommandCodec` implements. Both are pure in-memory: no crate under
+# `crates/` opens a socket.
+bytes = { version = "1.10", default-features = false }
+tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
+
+# `client_message_id` and `session_id` are UUIDs (spec §14.2).
+uuid = { version = "1.18", default-features = false, features = ["std", "v4"] }
+
+proptest = "1.8"
 
 # ---------------------------------------------------------------------------
 # Machine-enforced coding rules

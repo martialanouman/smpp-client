@@ -1,6 +1,6 @@
 # Jalon 003 — Cœur protocolaire `smpp-core`
 
-> **Statut :** À faire · **Dépend de :** step-000 · **Réf. spec :** §7.1, §7.2, §7.4, §7.6 · **Réf. guide :** §4.2, §5.6
+> **Statut :** Terminé (2026-07-26) — 9 critères sur 9 vérifiés · **Dépend de :** step-000 · **Réf. spec :** §7.1, §7.2, §7.4, §7.6 · **Réf. guide :** §4.2, §5.6
 
 ## 1. Objectif
 
@@ -40,15 +40,15 @@ Encoder et décoder l'ensemble des PDU SMPP v3.4 et v5.0 utilisés par l'applica
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-003-01** — Tous les PDU du tableau spec §7.2 sont encodables et décodables ; un test paramétré parcourt la liste et échoue si un `command_id` n'est pas couvert.
-- [ ] **CA-003-02** — Round-trip `décoder(encoder(pdu)) == pdu` vérifié par `proptest` sur au moins `submit_sm`, `submit_sm_resp`, `deliver_sm`, `bind_transceiver`, `enquire_link`, avec TLV présents et absents, corps vide et corps maximal.
-- [ ] **CA-003-03** — Un PDU malformé (longueur incohérente, chaîne non terminée, TLV tronqué) produit une `SmppError` typée, **jamais** un panic : test de fuzzing léger sur des octets aléatoires, aucune panique sur 10 000 entrées.
-- [ ] **CA-003-04** — `Msisdn::parse` refuse les entrées invalides et retourne un `Result` ; il est impossible de construire un `Msisdn` sans passer par la validation (constructeur privé, vérifié par un test de compilation ou une revue du champ).
-- [ ] **CA-003-05** — La table `command_status` couvre l'intégralité des codes v3.4 et v5.0 ; chaque code expose nom symbolique, libellé clair et classification.
-- [ ] **CA-003-06** — La classification est correcte sur les cas critiques : `ESME_RINVPASWD` et `ESME_RINVSYSID` sont `Fatal` (pas de boucle de reconnexion), `ESME_RTHROTTLED` et `ESME_RMSGQFUL` sont `Throttling`, `ESME_RINVDSTADR` est non rejouable.
-- [ ] **CA-003-07** — `crates/smpp-core/Cargo.toml` ne déclare **aucune** dépendance interne au workspace.
-- [ ] **CA-003-08** — Couverture ≥ 80 % sur la crate (`cargo llvm-cov`).
-- [ ] **CA-003-09** — Aucun `unwrap`/`expect`/`panic!` hors `#[cfg(test)]` : `rg "unwrap\(\)|expect\(|panic!" crates/smpp-core/src` ne retourne que des occurrences en test ou accompagnées d'un commentaire `// INVARIANT:`.
+- [x] **CA-003-01** — Tous les PDU du tableau spec §7.2 sont encodables et décodables ; un test paramétré parcourt la liste et échoue si un `command_id` n'est pas couvert.
+- [x] **CA-003-02** — Round-trip `décoder(encoder(pdu)) == pdu` vérifié par `proptest` sur au moins `submit_sm`, `submit_sm_resp`, `deliver_sm`, `bind_transceiver`, `enquire_link`, avec TLV présents et absents, corps vide et corps maximal.
+- [x] **CA-003-03** — Un PDU malformé (longueur incohérente, chaîne non terminée, TLV tronqué) produit une `SmppError` typée, **jamais** un panic : test de fuzzing léger sur des octets aléatoires, aucune panique sur 10 000 entrées.
+- [x] **CA-003-04** — `Msisdn::parse` refuse les entrées invalides et retourne un `Result` ; il est impossible de construire un `Msisdn` sans passer par la validation (constructeur privé, vérifié par un test de compilation ou une revue du champ).
+- [x] **CA-003-05** — La table `command_status` couvre l'intégralité des codes v3.4 et v5.0 ; chaque code expose nom symbolique, libellé clair et classification.
+- [x] **CA-003-06** — La classification est correcte sur les cas critiques : `ESME_RINVPASWD` et `ESME_RINVSYSID` sont `Fatal` (pas de boucle de reconnexion), `ESME_RTHROTTLED` et `ESME_RMSGQFUL` sont `Throttling`, `ESME_RINVDSTADR` est non rejouable.
+- [x] **CA-003-07** — `crates/smpp-core/Cargo.toml` ne déclare **aucune** dépendance interne au workspace.
+- [x] **CA-003-08** — Couverture ≥ 80 % sur la crate (`cargo llvm-cov`).
+- [x] **CA-003-09** — Aucun `unwrap`/`expect`/`panic!` hors `#[cfg(test)]` : `rg "unwrap\(\)|expect\(|panic!" crates/smpp-core/src` ne retourne que des occurrences en test ou accompagnées d'un commentaire `// INVARIANT:`.
 
 ## 5. Tests attendus
 

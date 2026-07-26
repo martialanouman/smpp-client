@@ -1,7 +1,15 @@
-# ADR 0001 — Adopter rusmpp/rusmppc comme pile SMPP
+# ADR 0001 — Adopter rusmpp comme pile SMPP, au niveau codec
 
-> **Statut :** Proposé — le niveau d'API reste à trancher au jalon 003
-> **Date :** 2026-07-25 · **Jalon :** step-000 · **Décideur :** Martial Anouman
+<!-- Le titre disait « rusmpp/rusmppc » tant que l'ADR était en statut
+     « Proposé » et que le niveau d'API restait ouvert. `rusmppc` ayant été
+     écarté au jalon 003, le laisser aurait fait mentir l'index des ADR. Le nom
+     de fichier, lui, ne change pas : les liens existants restent valides. -->
+
+
+> **Statut :** Accepté — niveau d'API tranché au jalon 003 (voir « Arbitrage
+> du niveau d'API » ci-dessous)
+> **Date :** 2026-07-25, complétée le 2026-07-26 · **Jalons :** step-000 puis
+> step-003 · **Décideur :** Martial Anouman
 
 ## Contexte
 
@@ -53,8 +61,13 @@ couvre pas v5.0.
 
 ## Décision
 
-**Option A.** `rusmpp` pour le codec, `rusmppc` comme point de départ pour la
-session.
+**Option A.** `rusmpp` pour le codec.
+
+> Cette section a d'abord dit « et `rusmppc` comme point de départ pour la
+> session ». L'arbitrage rendu au jalon 003 — plus bas — a écarté `rusmppc`.
+> La phrase est corrigée plutôt que laissée telle quelle : une ADR dont la
+> section « Décision » contredit sa propre conclusion envoie au lecteur
+> pressé exactement la mauvaise réponse.
 
 Le critère décisif n'est pas la maturité — aucune option n'est mature ici —
 mais le **coût de l'erreur**. Si `rusmpp` déçoit, on garde le typage des PDU
@@ -63,9 +76,74 @@ codec se révèle faux, on découvre le problème en production contre un SMSC
 réel. La dépendance est isolée derrière `smpp-core`, dont c'est la seule
 raison d'être : aucune autre crate n'importera `rusmpp` directement.
 
-**Le niveau d'API reste ouvert.** Le trancher aujourd'hui, sans avoir écrit
-une ligne de session, serait une décision prise sans information. L'arbitrage
-est renvoyé au **jalon 003**, sur la base d'un prototype de bind réel.
+**Le niveau d'API restait ouvert** au jalon 000 : le trancher alors, sans
+avoir écrit une ligne de session, aurait été décider sans information.
+L'arbitrage a été rendu au jalon 003 — voir la section suivante, ajoutée à
+ce moment-là.
+
+## Arbitrage du niveau d'API — jalon 003
+
+> Cette section complète une ADR qui était en statut **Proposé**. Elle ne
+> réécrit aucune décision arrêtée : elle rend celle qui restait en suspens,
+> ce qui est le cycle de vie normal d'une ADR proposée. Toute remise en
+> cause ultérieure passera par une ADR qui supersède celle-ci.
+
+**Décision : niveau bas.** `rusmpp` avec la feature `tokio-codec`
+(`CommandCodec` + `Framed`). `rusmppc` n'est **pas** retenu.
+
+### Le critère qui a départagé
+
+Ce n'est ni la simplicité ni la quantité de code à écrire — sur ces deux
+points le client haut niveau gagnait. C'est **qui possède la corrélation des
+`sequence_number`**.
+
+Les jalons 005 et 007 exigent trois choses que le niveau haut ne laisse pas
+atteindre :
+
+- une **fenêtre d'émission bornée** (`window_size`), tenue par un sémaphore
+  libéré à la réponse **et au timeout** ;
+- un **`response_timeout` par PDU en vol**, avec un `oneshot` par
+  `sequence_number` ;
+- la mesure du **RTT par PDU**, dont dépendent les métriques du jalon 007 et
+  l'adaptation AIMD du jalon 012.
+
+Ces trois besoins portent sur l'appariement requête/réponse. Un client haut
+niveau qui gère lui-même cet appariement nous en dépossède : on ne peut plus
+ni borner la fenêtre, ni instrumenter le RTT, sans le contourner. Or c'est
+exactement la matière des jalons 005, 007 et 012 — soit trois des quatre
+jalons les plus lourds du projet.
+
+Le niveau bas laisse `smpp-core` sans état : il traduit des octets en
+`Command` typées et l'inverse. La machine à états, le fenêtrage et la
+corrélation appartiennent alors à `smpp-session`, là où l'architecture du
+guide §8.1 les place.
+
+### Ce qui a réellement été vérifié
+
+- `encode`/`decode` round-trip sur les PDU de bind, `submit_sm`,
+  `submit_sm_resp` et `deliver_sm`, sous `proptest` (256 cas par PDU).
+- Le codec ne panique sur **aucune** entrée : deux propriétés dédiées le
+  vérifient sur des octets arbitraires. C'est la garantie qui compte face à
+  un SMSC hostile ou simplement bogué.
+- `command_length` concorde toujours avec la taille réellement encodée.
+
+Ce qui n'a **pas** été vérifié à ce stade, et ne pouvait pas l'être : le
+comportement contre un SMSC réel. Le jalon 017 (simulateur avec injection de
+fautes) est le premier point où cette ADR sera confrontée au réseau.
+
+### Conséquence sur la façade
+
+`smpp-core` réexporte `rusmpp::pdus`, `rusmpp::tlvs` et `rusmpp::types` sous
+le nom `octets`, plutôt que de recopier une centaine de types. La règle « la
+dépendance est isolée derrière `smpp-core` » est donc tenue au sens des
+*chemins d'import* — aucune autre crate n'écrit `rusmpp::` — mais pas au sens
+d'une abstraction : les types traversent la façade tels quels.
+
+C'est assumé. Une couche d'adaptation complète coûterait des milliers de
+lignes de conversion sans rien apprendre sur le protocole, et chaque
+conversion serait une occasion de bug silencieux. Le prix à payer est qu'un
+changement d'API de rusmpp se propagera aux crates appelantes ; le
+réexport centralisé permet au moins de le constater en un seul endroit.
 
 ## Conséquences
 
@@ -77,9 +155,10 @@ est renvoyé au **jalon 003**, sur la base d'un prototype de bind réel.
 - **Impacts opérationnels :** si la crate est consommée depuis GitHub plutôt
   que depuis crates.io, il faudra déclarer l'organisation dans `deny.toml`
   (`[sources] allow-git`) — et non désactiver la vérification de provenance.
-- **Point de réexamen :** au jalon 003, à la lumière d'un bind réel contre un
-  simulateur. Une ADR 0006 tranchera le niveau d'API et pourra, le cas
-  échéant, superséder celle-ci.
+- **Point de réexamen :** le niveau d'API a été tranché au jalon 003, dans la
+  section « Arbitrage du niveau d'API » ci-dessus. Le prochain point de
+  confrontation est le **jalon 017** : le simulateur SMSC avec injection de
+  fautes est le premier endroit où cette ADR rencontrera un vrai réseau.
 
 ## Références
 

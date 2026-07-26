@@ -147,6 +147,58 @@ jobs:
         run: cargo deny check advisories bans licenses sources
 
   # ---------------------------------------------------------------------------
+  # Minimum supported Rust version
+  # ---------------------------------------------------------------------------
+  # `rust-version` in Cargo.toml is a claim. Every other job runs on `stable`,
+  # which compiles a project claiming 1.78 just as happily as one claiming
+  # 1.88 — so nothing ever checked it, and it stayed wrong for a whole
+  # milestone (see ADR 0006).
+  #
+  # This job pins a toolchain at exactly the declared version and builds with
+  # it. Outside the matrix on purpose: the MSRV is a property of the
+  # dependency graph, identical on all three systems.
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the declared MSRV
+        id: msrv
+        run: |
+          version="$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Declared MSRV: $version"
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      # `rust-toolchain.toml` pins `stable`, which would override the toolchain
+      # installed above. Removing it is what makes this job actually test the
+      # MSRV rather than silently retest stable.
+      - name: Step aside from rust-toolchain.toml
+        run: rm -f rust-toolchain.toml
+
+      - name: Build with the declared MSRV
+        run: cargo check --workspace --all-targets
+
+  # ---------------------------------------------------------------------------
   # Commit messages — CA-000-11, CI side
   # ---------------------------------------------------------------------------
   # Deliberate duplicate of the local .husky/commit-msg hook: the hook can be
