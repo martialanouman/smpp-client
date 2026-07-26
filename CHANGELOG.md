@@ -68,6 +68,55 @@ majeur.
 - [ADR 0006](docs/adr/0006-version-minimale-de-rust.md) : MSRV portée à
   **1.88**, calculée depuis le graphe et vérifiée en CI.
 
+### Ajouté — jalon 004, encodage et segmentation
+
+- **Alphabet GSM 03.38**, table de base et table d'extension, avec détection
+  automatique de l'encodage (spec §7.5) et forçage manuel GSM 7-bit /
+  Latin-1 / UCS2. Un forçage impossible retourne une erreur nommant le
+  caractère et sa position, jamais un message corrompu.
+- **Encodeurs** : packing des septets GSM (sept octets pour huit septets),
+  Latin-1, UCS2 en UTF-16BE. Le bourrage `CR` des sept bits libres d'un
+  dernier octet suit TS 23.038 §6.1.2.3.1 — sans lui le téléphone affiche un
+  `@` fantôme en fin de message.
+- **Segmenteur** UDH (IEI 0x00, six octets, bit UDHI), TLV `sar_*`, et
+  `message_payload` jusqu'à 64 Ko. Le mode est fourni par l'appelant, jamais
+  déduit du texte.
+- **La coupure est décidée au caractère, jamais au septet.** Un caractère de
+  la table d'extension coûte deux septets et ne peut pas être scindé : s'il
+  ne rentre pas, il passe entier au segment suivant et le septet restant est
+  perdu. Même règle pour les paires de substitution UCS2. Les tests balaient
+  toutes les positions autour de la coupure — c'est le bug que rien d'autre
+  n'attrape, puisque le nombre de segments reste juste et chaque segment reste
+  bien formé.
+- **API de prévisualisation** pour le compteur en direct de l'éditeur, sans
+  aucune allocation. Elle partage son remplisseur avec la segmentation
+  réelle : leur accord est structurel, pas vérifié après coup.
+- **Réassemblage** des segments, dans n'importe quel ordre, qui refuse un
+  corps finissant sur un échappement orphelin ou une demi-paire de
+  substitution.
+- **Propriétés `proptest`** : aller-retour d'encodage, restitution du message
+  par concaténation inverse pour les trois modes, accord prévision ⇄
+  segmentation, croissance monotone du nombre de segments.
+- **Banc `criterion`** de référence pour le jalon 017.
+
+### Corrigé
+
+- Le jalon 003 réexportait `EsmClass` sans les types de ses quatre champs, et
+  laissait `MessagePayload` sous un chemin que la liste curatée ne couvrait
+  pas : l'alternative `message_payload` de la spec §7.5 était
+  inconstructible depuis l'extérieur de `smpp-core` et le bit UDHI n'était
+  pas assertable. Le module `udhs` est exposé pour la même raison. Un test
+  d'intégration tient désormais cette surface.
+
+### Décisions
+
+- [ADR 0007](docs/adr/0007-strategie-de-segmentation.md) : découpage au
+  caractère avec un remplisseur glouton unique, budget de la spec §7.5
+  appliqué quel que soit le mode — le mode `sar_*` renonce à 7 septets par
+  segment parce que de nombreux SMSC retraduisent les TLV en UDH sur la
+  branche de livraison. Référence de concaténation par compteur cyclique de
+  session.
+
 ### Ajouté
 
 - **Workspace Cargo** avec les neuf crates métier squelettes (`smpp-core`,
