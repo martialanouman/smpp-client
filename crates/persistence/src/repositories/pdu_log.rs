@@ -6,6 +6,7 @@ use crate::db::Database;
 use crate::ports::PduLogRepository;
 use crate::records::{PduDirection, PduLogEntry};
 use crate::repositories::convert::{read_optional_session_id, read_timestamp, read_u32, store_u32};
+use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
 
 const TABLE: &str = "pdu_log";
@@ -37,9 +38,14 @@ struct PduLogRow {
     ts: String,
 }
 
-impl PduLogRow {
-    /// Turns the stored columns into the domain record.
-    fn into_entry(self) -> Result<PduLogEntry, PersistenceError> {
+impl PagedRow for PduLogRow {
+    type Record = PduLogEntry;
+
+    fn cursor(&self) -> i64 {
+        self.id
+    }
+
+    fn into_record(self) -> Result<PduLogEntry, PersistenceError> {
         Ok(PduLogEntry {
             session_id: read_optional_session_id(self.session_id.as_deref(), TABLE, "session_id")?,
             direction: PduDirection::parse(&self.direction)?,
@@ -120,21 +126,6 @@ impl PduLogRepository for SqlitePduLogRepository {
         .fetch_all(self.database.pool())
         .await?;
 
-        let complete = u64::try_from(rows.len()).unwrap_or(u64::MAX) == u64::from(limit);
-        let last = rows.last().map(|row| row.id);
-
-        let items = rows
-            .into_iter()
-            .map(PduLogRow::into_entry)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Page {
-            items,
-            next: if complete {
-                last.map(Cursor::from_raw)
-            } else {
-                None
-            },
-        })
+        into_page(rows, limit)
     }
 }

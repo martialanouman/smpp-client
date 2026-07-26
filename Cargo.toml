@@ -125,6 +125,12 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
+# ONLY for `log::LevelFilter`, the type `sqlx::ConnectOptions::
+# log_slow_statements` takes and that sqlx does not re-export. Not a second
+# logging facade: CLAUDE.md §4 keeps `tracing` as the only one, and sqlx
+# routes its own records into `tracing` anyway. Already in the tree.
+log = { version = "0.4", default-features = false }
+
 # Timestamps are stored as ISO-8601 UTC text (spec §14.2). `time` gives the
 # RFC 3339 formatter and parser; it is already in the tree through Tauri, and
 # `chrono` — also present — was not chosen because its API surface is far
@@ -138,6 +144,10 @@ time = { version = "0.3", default-features = false, features = [
 # Test-only.
 tempfile = "3.24"
 sha2 = "0.10"
+
+# Reading the `.sqlx` query cache back in the plan regression test
+# (`persistence::repositories::plans`). Already compiled in this tree.
+serde_json = "1.0"
 
 # CA-002-05 asks for a test proving the memory a traversal holds stays
 # bounded. Measuring that needs a counting global allocator, and writing one

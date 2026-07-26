@@ -152,6 +152,12 @@ pub trait ContactRepository {
     /// Rows arrive one at a time (spec §10.4): a campaign of several million
     /// recipients feeds a bounded queue from this stream, and memory stays
     /// flat whatever the total.
+    ///
+    /// The **order is unspecified**, and deliberately so: it is whichever order
+    /// the index serving the traversal already yields. Imposing one would mean
+    /// sorting, and sorting means buffering the whole result set before the
+    /// first row — exactly what this method exists to avoid. Every contact is
+    /// yielded exactly once; that is the whole contract.
     fn stream_contacts(
         &self,
         list: Option<ListId>,

@@ -9,6 +9,7 @@ use crate::records::{Contact, ContactId, ContactList, ListId};
 use crate::repositories::convert::{
     read_contact_id, read_list_id, read_msisdn, read_timestamp, store_u32,
 };
+use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
 
 const TABLE: &str = "contacts";
@@ -41,9 +42,14 @@ struct ContactRow {
     created_at: String,
 }
 
-impl ContactRow {
-    /// Turns the stored columns into the domain record.
-    fn into_contact(self) -> Result<Contact, PersistenceError> {
+impl PagedRow for ContactRow {
+    type Record = Contact;
+
+    fn cursor(&self) -> i64 {
+        self.rowid
+    }
+
+    fn into_record(self) -> Result<Contact, PersistenceError> {
         Ok(Contact {
             contact_id: read_contact_id(&self.contact_id)?,
             msisdn: read_msisdn(&self.msisdn, TABLE, "msisdn")?,
@@ -117,7 +123,7 @@ impl ContactRepository for SqliteContactRepository {
         .fetch_optional(self.database.pool())
         .await?;
 
-        row.map(ContactRow::into_contact).transpose()
+        row.map(PagedRow::into_record).transpose()
     }
 
     async fn page_contacts(
@@ -143,49 +149,61 @@ impl ContactRepository for SqliteContactRepository {
         .fetch_all(self.database.pool())
         .await?;
 
-        let complete = u64::try_from(rows.len()).unwrap_or(u64::MAX) == u64::from(limit);
-        let last = rows.last().map(|row| row.rowid);
-
-        let items = rows
-            .into_iter()
-            .map(ContactRow::into_contact)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Page {
-            items,
-            next: if complete {
-                last.map(Cursor::from_raw)
-            } else {
-                None
-            },
-        })
+        into_page(rows, limit)
     }
 
     fn stream_contacts(
         &self,
         list: Option<ListId>,
     ) -> BoxStream<'_, Result<Contact, PersistenceError>> {
-        let list_id = list.map(|id| id.to_string());
+        // Two shapes, for the same reason as on `messages`: the single-literal
+        // form `WHERE ? IS NULL OR contact_id IN (…)` measured as
+        // `SCAN contacts` plus a subquery — every contact in the file examined
+        // to feed one list.
+        //
+        // The join form seeks instead, and the ORDER BY is chosen to keep it
+        // streaming: ordering by `members.contact_id` follows the composite
+        // primary key of `contact_list_members`, so SQLite needs no sort.
+        // `ORDER BY contacts.rowid` — the order the unfiltered traversal uses
+        // — would add `USE TEMP B-TREE FOR ORDER BY`, i.e. materialise the
+        // whole list before yielding a single row. That is exactly what
+        // spec §10.4 forbids for a campaign of millions of recipients, so the
+        // two shapes deliberately yield in different orders, and the port
+        // documents that the order is unspecified.
+        let rows = match list {
+            Some(list_id) => {
+                let list_id = list_id.to_string();
 
-        sqlx::query_as!(
-            ContactRow,
-            r#"SELECT contacts.rowid AS "rowid!: i64",
-                      contacts.contact_id, contacts.msisdn, contacts.country,
-                      contacts.valid, contacts.line_type, contacts.attributes,
-                      contacts.source, contacts.created_at
-               FROM contacts
-               WHERE ? IS NULL
-                  OR contacts.contact_id IN (
-                         SELECT contact_id FROM contact_list_members WHERE list_id = ?
-                     )
-               ORDER BY contacts.rowid"#,
-            list_id,
-            list_id
-        )
-        .fetch(self.database.pool())
-        .map(|row| {
+                sqlx::query_as!(
+                    ContactRow,
+                    r#"SELECT contacts.rowid AS "rowid!: i64",
+                              contacts.contact_id, contacts.msisdn, contacts.country,
+                              contacts.valid, contacts.line_type, contacts.attributes,
+                              contacts.source, contacts.created_at
+                       FROM contacts
+                       JOIN contact_list_members AS members
+                         ON members.contact_id = contacts.contact_id
+                       WHERE members.list_id = ?
+                       ORDER BY members.contact_id"#,
+                    list_id
+                )
+                .fetch(self.database.pool())
+            }
+            None => sqlx::query_as!(
+                ContactRow,
+                r#"SELECT contacts.rowid AS "rowid!: i64",
+                          contacts.contact_id, contacts.msisdn, contacts.country,
+                          contacts.valid, contacts.line_type, contacts.attributes,
+                          contacts.source, contacts.created_at
+                   FROM contacts
+                   ORDER BY contacts.rowid"#
+            )
+            .fetch(self.database.pool()),
+        };
+
+        rows.map(|row| {
             row.map_err(PersistenceError::from)
-                .and_then(ContactRow::into_contact)
+                .and_then(PagedRow::into_record)
         })
         .boxed()
     }

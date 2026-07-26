@@ -4,6 +4,7 @@ use crate::db::Database;
 use crate::ports::CampaignRepository;
 use crate::records::{Campaign, CampaignId, CampaignStatus};
 use crate::repositories::convert::{read_optional_timestamp, read_timestamp, read_u32, store_u32};
+use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
 
 const TABLE: &str = "campaigns";
@@ -39,9 +40,14 @@ struct CampaignRow {
     completed_at: Option<String>,
 }
 
-impl CampaignRow {
-    /// Turns the stored columns into the domain record.
-    fn into_campaign(self) -> Result<Campaign, PersistenceError> {
+impl PagedRow for CampaignRow {
+    type Record = Campaign;
+
+    fn cursor(&self) -> i64 {
+        self.rowid
+    }
+
+    fn into_record(self) -> Result<Campaign, PersistenceError> {
         Ok(Campaign {
             campaign_id: CampaignId::parse(&self.campaign_id)?,
             name: self.name,
@@ -134,7 +140,7 @@ impl CampaignRepository for SqliteCampaignRepository {
         .fetch_optional(self.database.pool())
         .await?;
 
-        row.map(CampaignRow::into_campaign).transpose()
+        row.map(PagedRow::into_record).transpose()
     }
 
     async fn page_campaigns(
@@ -161,22 +167,7 @@ impl CampaignRepository for SqliteCampaignRepository {
         .fetch_all(self.database.pool())
         .await?;
 
-        let complete = u64::try_from(rows.len()).unwrap_or(u64::MAX) == u64::from(limit);
-        let last = rows.last().map(|row| row.rowid);
-
-        let items = rows
-            .into_iter()
-            .map(CampaignRow::into_campaign)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Page {
-            items,
-            next: if complete {
-                last.map(Cursor::from_raw)
-            } else {
-                None
-            },
-        })
+        into_page(rows, limit)
     }
 
     async fn delete_campaign(&self, campaign_id: CampaignId) -> Result<bool, PersistenceError> {

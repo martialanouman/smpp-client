@@ -1,4 +1,33 @@
 //! The message journal.
+//!
+//! # Why the filtered queries are written out four times
+//!
+//! [`MessageFilter`] has two indexed columns — `campaign_id` and `state` — and
+//! one that is not, `session_id`. The obvious way to keep a single SQL literal
+//! is `(? IS NULL OR campaign_id = ?)`, and it is a trap: SQLite cannot use an
+//! index behind an `OR`, so the whole filter degrades to a scan. Measured on
+//! this schema:
+//!
+//! ```text
+//! WHERE (? IS NULL OR state = ?)  ->  SCAN messages USING COVERING INDEX idx_messages_state
+//! WHERE state = ?                 ->  SEARCH messages USING INDEX idx_messages_state (state=?)
+//! ```
+//!
+//! A scan is O(table); a seek is O(matches). On a 500 000-row log filtered
+//! down to a few hundred failures, that is the difference between the cursor
+//! pagination this crate promises and a linear re-walk on every page.
+//! `idx_messages_campaign` and `idx_messages_state` exist because CA-002-02
+//! requires them; the `OR` form made them decorative.
+//!
+//! So the two indexed columns are matched on at the Rust level, into the four
+//! literal queries an index can serve. `session_id` keeps the `OR` form: it has
+//! no index, so nothing is lost, and it was measured NOT to prevent the other
+//! two from using theirs. `repositories::plans` holds that measurement as a
+//! test, driven by the `.sqlx` cache so it cannot drift from the queries.
+//!
+//! The cost is four literals per query instead of one. The compile-time
+//! checking of ADR 0002 is preserved, and there is no cheaper way to keep it:
+//! `sqlx::query_as!` demands a string **literal**, and rejects `concat!`.
 
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
@@ -6,12 +35,15 @@ use smpp_core::types::ClientMessageId;
 
 use crate::db::Database;
 use crate::ports::MessageRepository;
-use crate::records::{Message, MessageFilter, MessageState, MessageStateUpdate};
+use crate::records::{
+    Message, MessageFilter, MessageState, MessageStateUpdate, SmscMessageIdUpdate,
+};
 use crate::repositories::convert::{
     read_client_message_id, read_command_status, read_data_coding, read_msisdn, read_npi,
     read_optional_campaign_id, read_optional_session_id, read_optional_timestamp, read_timestamp,
     read_ton, read_u32, store_command_status, store_u32, store_u8,
 };
+use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
 
 const TABLE: &str = "messages";
@@ -36,9 +68,14 @@ impl SqliteMessageRepository {
 
 /// One row of `messages`, exactly as SQLite stores it.
 ///
-/// The intermediate step between the columns and [`Message`]. It exists so
-/// that the six queries reading this table share one mapping — written once,
-/// in [`MessageRow::into_message`] — instead of six copies drifting apart.
+/// The intermediate step between the columns and [`Message`]. It exists so the
+/// queries reading this table share one mapping — written once, in
+/// [`PagedRow::into_record`] — instead of a copy each.
+///
+/// `rowid` is selected by every query, including the ones that discard it.
+/// Reading it costs nothing (it is the row key the engine already holds), and
+/// the alternative is a second row struct carrying a second copy of the
+/// twenty-two-column mapping.
 struct MessageRow {
     rowid: i64,
     client_message_id: String,
@@ -65,9 +102,14 @@ struct MessageRow {
     dlr_at: Option<String>,
 }
 
-impl MessageRow {
-    /// Turns the stored columns into the domain record.
-    fn into_message(self) -> Result<Message, PersistenceError> {
+impl PagedRow for MessageRow {
+    type Record = Message;
+
+    fn cursor(&self) -> i64 {
+        self.rowid
+    }
+
+    fn into_record(self) -> Result<Message, PersistenceError> {
         Ok(Message {
             client_message_id: read_client_message_id(
                 &self.client_message_id,
@@ -103,27 +145,6 @@ impl MessageRow {
     }
 }
 
-/// The three filter columns, flattened into the strings the query binds.
-///
-/// `None` on any of them means "do not restrict"; the SQL spells that as
-/// `? IS NULL OR column = ?`, which keeps the statement a single compile-time
-/// checked literal instead of a string assembled at runtime.
-struct FilterBinds {
-    campaign_id: Option<String>,
-    session_id: Option<String>,
-    state: Option<&'static str>,
-}
-
-impl FilterBinds {
-    fn new(filter: &MessageFilter) -> Self {
-        Self {
-            campaign_id: filter.campaign_id.map(|id| id.to_string()),
-            session_id: filter.session_id.map(|id| id.to_string()),
-            state: filter.state.map(MessageState::as_str),
-        }
-    }
-}
-
 impl MessageRepository for SqliteMessageRepository {
     async fn insert_message(&self, message: &Message) -> Result<(), PersistenceError> {
         let mut connection = self.database.pool().acquire().await?;
@@ -131,9 +152,9 @@ impl MessageRepository for SqliteMessageRepository {
     }
 
     async fn insert_messages(&self, messages: &[Message]) -> Result<u64, PersistenceError> {
-        // ONE transaction for the whole batch (CA-002-06, guide §11.2).
-        // The `?` on each insert drops `transaction` without committing,
-        // which rolls back: a batch either lands whole or not at all.
+        // ONE transaction for the whole batch (CA-002-06, guide §11.2). The
+        // `?` on each insert drops `transaction` without committing, which
+        // rolls back: a batch either lands whole or not at all.
         let mut transaction = self.database.pool().begin().await?;
 
         for message in messages {
@@ -155,11 +176,9 @@ impl MessageRepository for SqliteMessageRepository {
             MessageRow,
             r#"SELECT rowid AS "rowid!: i64",
                       client_message_id, campaign_id, session_id, smsc_message_id,
-                      source_addr, source_ton, source_npi,
-                      dest_addr, dest_ton, dest_npi,
+                      source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
                       data_coding, segments, text, state, command_status,
-                      dlr_stat, dlr_err, attempts,
-                      created_at, sent_at, resp_at, dlr_at
+                      dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
                FROM messages
                WHERE client_message_id = ?"#,
             identifier
@@ -167,7 +186,7 @@ impl MessageRepository for SqliteMessageRepository {
         .fetch_optional(self.database.pool())
         .await?;
 
-        row.map(MessageRow::into_message).transpose()
+        row.map(PagedRow::into_record).transpose()
     }
 
     async fn find_message_by_smsc_id(
@@ -178,11 +197,9 @@ impl MessageRepository for SqliteMessageRepository {
             MessageRow,
             r#"SELECT rowid AS "rowid!: i64",
                       client_message_id, campaign_id, session_id, smsc_message_id,
-                      source_addr, source_ton, source_npi,
-                      dest_addr, dest_ton, dest_npi,
+                      source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
                       data_coding, segments, text, state, command_status,
-                      dlr_stat, dlr_err, attempts,
-                      created_at, sent_at, resp_at, dlr_at
+                      dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
                FROM messages
                WHERE smsc_message_id = ?
                ORDER BY rowid
@@ -192,7 +209,7 @@ impl MessageRepository for SqliteMessageRepository {
         .fetch_optional(self.database.pool())
         .await?;
 
-        row.map(MessageRow::into_message).transpose()
+        row.map(PagedRow::into_record).transpose()
     }
 
     async fn update_state(&self, update: &MessageStateUpdate) -> Result<(), PersistenceError> {
@@ -218,59 +235,160 @@ impl MessageRepository for SqliteMessageRepository {
         cursor: Cursor,
         limit: u32,
     ) -> Result<Page<Message>, PersistenceError> {
-        let binds = FilterBinds::new(filter);
+        let session = filter.session_id.map(|id| id.to_string());
+        let campaign = filter.campaign_id.map(|id| id.to_string());
+        let state = filter.state.map(MessageState::as_str);
         let after = cursor.into_raw();
         let window = store_u32(limit);
 
-        let rows = sqlx::query_as!(
-            MessageRow,
-            r#"SELECT rowid AS "rowid!: i64",
-                      client_message_id, campaign_id, session_id, smsc_message_id,
-                      source_addr, source_ton, source_npi,
-                      dest_addr, dest_ton, dest_npi,
-                      data_coding, segments, text, state, command_status,
-                      dlr_stat, dlr_err, attempts,
-                      created_at, sent_at, resp_at, dlr_at
-               FROM messages
-               WHERE rowid > ?
-                 AND (? IS NULL OR campaign_id = ?)
-                 AND (? IS NULL OR session_id = ?)
-                 AND (? IS NULL OR state = ?)
-               ORDER BY rowid
-               LIMIT ?"#,
-            after,
-            binds.campaign_id,
-            binds.campaign_id,
-            binds.session_id,
-            binds.session_id,
-            binds.state,
-            binds.state,
-            window
-        )
-        .fetch_all(self.database.pool())
-        .await?;
+        let rows = match (campaign.as_deref(), state) {
+            (Some(campaign), Some(state)) => {
+                sqlx::query_as!(
+                    MessageRow,
+                    r#"SELECT rowid AS "rowid!: i64",
+                              client_message_id, campaign_id, session_id, smsc_message_id,
+                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                              data_coding, segments, text, state, command_status,
+                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                       FROM messages
+                       WHERE campaign_id = ? AND state = ? AND rowid > ?
+                         AND (? IS NULL OR session_id = ?)
+                       ORDER BY rowid
+                       LIMIT ?"#,
+                    campaign,
+                    state,
+                    after,
+                    session,
+                    session,
+                    window
+                )
+                .fetch_all(self.database.pool())
+                .await?
+            }
+            (Some(campaign), None) => {
+                sqlx::query_as!(
+                    MessageRow,
+                    r#"SELECT rowid AS "rowid!: i64",
+                              client_message_id, campaign_id, session_id, smsc_message_id,
+                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                              data_coding, segments, text, state, command_status,
+                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                       FROM messages
+                       WHERE campaign_id = ? AND rowid > ?
+                         AND (? IS NULL OR session_id = ?)
+                       ORDER BY rowid
+                       LIMIT ?"#,
+                    campaign,
+                    after,
+                    session,
+                    session,
+                    window
+                )
+                .fetch_all(self.database.pool())
+                .await?
+            }
+            (None, Some(state)) => {
+                sqlx::query_as!(
+                    MessageRow,
+                    r#"SELECT rowid AS "rowid!: i64",
+                              client_message_id, campaign_id, session_id, smsc_message_id,
+                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                              data_coding, segments, text, state, command_status,
+                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                       FROM messages
+                       WHERE state = ? AND rowid > ?
+                         AND (? IS NULL OR session_id = ?)
+                       ORDER BY rowid
+                       LIMIT ?"#,
+                    state,
+                    after,
+                    session,
+                    session,
+                    window
+                )
+                .fetch_all(self.database.pool())
+                .await?
+            }
+            (None, None) => {
+                sqlx::query_as!(
+                    MessageRow,
+                    r#"SELECT rowid AS "rowid!: i64",
+                              client_message_id, campaign_id, session_id, smsc_message_id,
+                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                              data_coding, segments, text, state, command_status,
+                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                       FROM messages
+                       WHERE rowid > ?
+                         AND (? IS NULL OR session_id = ?)
+                       ORDER BY rowid
+                       LIMIT ?"#,
+                    after,
+                    session,
+                    session,
+                    window
+                )
+                .fetch_all(self.database.pool())
+                .await?
+            }
+        };
 
         into_page(rows, limit)
     }
 
     async fn count_messages(&self, filter: &MessageFilter) -> Result<u64, PersistenceError> {
-        let binds = FilterBinds::new(filter);
+        let session = filter.session_id.map(|id| id.to_string());
+        let campaign = filter.campaign_id.map(|id| id.to_string());
+        let state = filter.state.map(MessageState::as_str);
 
-        let total = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "total!: i64"
-               FROM messages
-               WHERE (? IS NULL OR campaign_id = ?)
-                 AND (? IS NULL OR session_id = ?)
-                 AND (? IS NULL OR state = ?)"#,
-            binds.campaign_id,
-            binds.campaign_id,
-            binds.session_id,
-            binds.session_id,
-            binds.state,
-            binds.state
-        )
-        .fetch_one(self.database.pool())
-        .await?;
+        let total = match (campaign.as_deref(), state) {
+            (Some(campaign), Some(state)) => {
+                sqlx::query_scalar!(
+                    r#"SELECT COUNT(*) AS "total!: i64" FROM messages
+                       WHERE campaign_id = ? AND state = ?
+                         AND (? IS NULL OR session_id = ?)"#,
+                    campaign,
+                    state,
+                    session,
+                    session
+                )
+                .fetch_one(self.database.pool())
+                .await?
+            }
+            (Some(campaign), None) => {
+                sqlx::query_scalar!(
+                    r#"SELECT COUNT(*) AS "total!: i64" FROM messages
+                       WHERE campaign_id = ?
+                         AND (? IS NULL OR session_id = ?)"#,
+                    campaign,
+                    session,
+                    session
+                )
+                .fetch_one(self.database.pool())
+                .await?
+            }
+            (None, Some(state)) => {
+                sqlx::query_scalar!(
+                    r#"SELECT COUNT(*) AS "total!: i64" FROM messages
+                       WHERE state = ?
+                         AND (? IS NULL OR session_id = ?)"#,
+                    state,
+                    session,
+                    session
+                )
+                .fetch_one(self.database.pool())
+                .await?
+            }
+            (None, None) => {
+                sqlx::query_scalar!(
+                    r#"SELECT COUNT(*) AS "total!: i64" FROM messages
+                       WHERE (? IS NULL OR session_id = ?)"#,
+                    session,
+                    session
+                )
+                .fetch_one(self.database.pool())
+                .await?
+            }
+        };
 
         Ok(u64::try_from(total).unwrap_or(0))
     }
@@ -279,62 +397,85 @@ impl MessageRepository for SqliteMessageRepository {
         &self,
         filter: &MessageFilter,
     ) -> BoxStream<'_, Result<Message, PersistenceError>> {
-        let binds = FilterBinds::new(filter);
+        let session = filter.session_id.map(|id| id.to_string());
+        let campaign = filter.campaign_id.map(|id| id.to_string());
+        let state = filter.state.map(MessageState::as_str);
 
         // `.fetch()` walks the SQLite statement one step at a time: at most one
         // row is materialised, whatever the size of the result set (CA-002-05).
         // `fetch_all` on the same query would build a `Vec` of the lot.
-        sqlx::query_as!(
-            MessageRow,
-            r#"SELECT rowid AS "rowid!: i64",
-                      client_message_id, campaign_id, session_id, smsc_message_id,
-                      source_addr, source_ton, source_npi,
-                      dest_addr, dest_ton, dest_npi,
-                      data_coding, segments, text, state, command_status,
-                      dlr_stat, dlr_err, attempts,
-                      created_at, sent_at, resp_at, dlr_at
-               FROM messages
-               WHERE (? IS NULL OR campaign_id = ?)
-                 AND (? IS NULL OR session_id = ?)
-                 AND (? IS NULL OR state = ?)
-               ORDER BY rowid"#,
-            binds.campaign_id,
-            binds.campaign_id,
-            binds.session_id,
-            binds.session_id,
-            binds.state,
-            binds.state
-        )
-        .fetch(self.database.pool())
-        .map(|row| {
+        let rows = match (campaign, state) {
+            (Some(campaign), Some(state)) => sqlx::query_as!(
+                MessageRow,
+                r#"SELECT rowid AS "rowid!: i64",
+                          client_message_id, campaign_id, session_id, smsc_message_id,
+                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                          data_coding, segments, text, state, command_status,
+                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                   FROM messages
+                   WHERE campaign_id = ? AND state = ?
+                     AND (? IS NULL OR session_id = ?)
+                   ORDER BY rowid"#,
+                campaign,
+                state,
+                session,
+                session
+            )
+            .fetch(self.database.pool()),
+            (Some(campaign), None) => sqlx::query_as!(
+                MessageRow,
+                r#"SELECT rowid AS "rowid!: i64",
+                          client_message_id, campaign_id, session_id, smsc_message_id,
+                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                          data_coding, segments, text, state, command_status,
+                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                   FROM messages
+                   WHERE campaign_id = ?
+                     AND (? IS NULL OR session_id = ?)
+                   ORDER BY rowid"#,
+                campaign,
+                session,
+                session
+            )
+            .fetch(self.database.pool()),
+            (None, Some(state)) => sqlx::query_as!(
+                MessageRow,
+                r#"SELECT rowid AS "rowid!: i64",
+                          client_message_id, campaign_id, session_id, smsc_message_id,
+                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                          data_coding, segments, text, state, command_status,
+                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                   FROM messages
+                   WHERE state = ?
+                     AND (? IS NULL OR session_id = ?)
+                   ORDER BY rowid"#,
+                state,
+                session,
+                session
+            )
+            .fetch(self.database.pool()),
+            (None, None) => sqlx::query_as!(
+                MessageRow,
+                r#"SELECT rowid AS "rowid!: i64",
+                          client_message_id, campaign_id, session_id, smsc_message_id,
+                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,
+                          data_coding, segments, text, state, command_status,
+                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
+                   FROM messages
+                   WHERE (? IS NULL OR session_id = ?)
+                   ORDER BY rowid"#,
+                session,
+                session
+            )
+            .fetch(self.database.pool()),
+        };
+
+        rows.map(|row| {
             row.map_err(PersistenceError::from)
-                .and_then(MessageRow::into_message)
+                .and_then(PagedRow::into_record)
         })
         .boxed()
     }
-}
-
-/// Assembles a page and the cursor that continues it.
-///
-/// A page shorter than the limit is the last one, which is how the caller
-/// learns there is nothing after it without a second round trip.
-fn into_page(rows: Vec<MessageRow>, limit: u32) -> Result<Page<Message>, PersistenceError> {
-    let complete = u64::try_from(rows.len()).unwrap_or(u64::MAX) == u64::from(limit);
-    let last = rows.last().map(|row| row.rowid);
-
-    let items = rows
-        .into_iter()
-        .map(MessageRow::into_message)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Page {
-        items,
-        next: if complete {
-            last.map(Cursor::from_raw)
-        } else {
-            None
-        },
-    })
 }
 
 /// Writes one message on the given executor.
@@ -408,10 +549,22 @@ where
 
 /// Applies one transition on the given executor.
 ///
-/// `COALESCE(?, column)` on every optional field is what makes the update a
-/// **merge**: a delivery receipt that carries no `smsc_message_id` leaves the
-/// one the response wrote. It is also what makes replaying the same transition
-/// harmless, which CLAUDE.md §4 requires.
+/// # How this statement stays replayable
+///
+/// CLAUDE.md §4 requires a transition to be idempotent, and this statement is
+/// where that is either true or a slogan. Three rules, one per kind of column:
+///
+/// * `COALESCE(?, column)` on the fields that only ever arrive once — a
+///   delivery receipt carrying no `resp_at` leaves the one the response wrote,
+///   and reapplying it writes the same value again.
+/// * `IIF(?, ?, smsc_message_id)` on the one column whose value can
+///   legitimately change. See [`SmscMessageIdUpdate`] for why merging is wrong
+///   there.
+/// * `MAX(attempts, ?)` rather than `attempts + ?`. An increment is the one
+///   shape that is NOT replayable: a committed batch reapplied after a crash
+///   would count every message of it one attempt too high, quietly eating the
+///   retry budget of spec §10.7. Taking the maximum of a 1-based attempt
+///   number converges instead.
 async fn apply_update<'e, E>(
     executor: E,
     update: &MessageStateUpdate,
@@ -425,22 +578,28 @@ where
     let sent_at = update.sent_at.map(|instant| instant.to_storage());
     let resp_at = update.resp_at.map(|instant| instant.to_storage());
     let dlr_at = update.dlr_at.map(|instant| instant.to_storage());
-    let attempt = i64::from(update.counts_as_attempt);
+    let attempt = update.attempt.map_or(0, store_u32);
+
+    let (replace_smsc_id, smsc_message_id) = match &update.smsc_message_id {
+        SmscMessageIdUpdate::Keep => (false, None),
+        SmscMessageIdUpdate::Set(identifier) => (true, Some(identifier.as_str())),
+    };
 
     let affected = sqlx::query!(
         r#"UPDATE messages
            SET state = ?,
-               smsc_message_id = COALESCE(?, smsc_message_id),
+               smsc_message_id = IIF(?, ?, smsc_message_id),
                command_status = COALESCE(?, command_status),
                dlr_stat = COALESCE(?, dlr_stat),
                dlr_err = COALESCE(?, dlr_err),
                sent_at = COALESCE(?, sent_at),
                resp_at = COALESCE(?, resp_at),
                dlr_at = COALESCE(?, dlr_at),
-               attempts = attempts + ?
+               attempts = MAX(attempts, ?)
            WHERE client_message_id = ?"#,
         state,
-        update.smsc_message_id,
+        replace_smsc_id,
+        smsc_message_id,
         command_status,
         update.dlr_stat,
         update.dlr_err,
@@ -462,4 +621,165 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // `#[tokio::test]` expands to `Runtime::block_on`, which `clippy.toml`
+    // reserves for "the binary entry point". A test harness is one.
+    #![allow(clippy::disallowed_methods)]
+
+    use smpp_core::types::{ClientMessageId, Msisdn};
+
+    use super::{SqliteMessageRepository, TABLE};
+    use crate::db::{Database, DatabaseConfig};
+    use crate::ports::MessageRepository;
+    use crate::records::{Message, MessageState, MessageStateUpdate};
+    use crate::Timestamp;
+
+    /// Counts commits by measuring what they append to the write-ahead log.
+    ///
+    /// # Why not `PRAGMA data_version`
+    ///
+    /// It looks like the counter for this job and is not. SQLite only promises
+    /// that two readings **differ** when another connection committed in
+    /// between, not that it advances once per commit — measured here, five
+    /// separate commits moved it by exactly 1. It answers "did anything
+    /// change", which the batch and the loop answer identically.
+    ///
+    /// The WAL does count. Every commit appends its modified pages plus a
+    /// commit frame; five commits touching the same page append five copies of
+    /// that page, one commit appends one. With the log truncated to zero
+    /// beforehand, the file size is a direct reading of how many times the
+    /// writer committed.
+    ///
+    /// This matters beyond the atomicity test in `tests/volumetry.rs`:
+    /// atomicity refutes the naive "one transaction per row" loop, but not a
+    /// "validate everything, then commit each row separately" implementation.
+    /// This does.
+    struct WalFrames {
+        path: std::path::PathBuf,
+    }
+
+    impl WalFrames {
+        fn beside(database_path: &std::path::Path) -> Self {
+            let mut path = database_path.as_os_str().to_os_string();
+            path.push("-wal");
+
+            Self {
+                path: std::path::PathBuf::from(path),
+            }
+        }
+
+        /// Empties the log so the next reading counts only what follows.
+        async fn reset(&self, database: &Database) {
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(database.pool())
+                .await
+                .expect("truncating the write-ahead log");
+        }
+
+        fn bytes(&self) -> u64 {
+            std::fs::metadata(&self.path).map_or(0, |metadata| metadata.len())
+        }
+    }
+
+    fn a_message() -> Message {
+        Message {
+            client_message_id: ClientMessageId::new(),
+            campaign_id: None,
+            session_id: None,
+            smsc_message_id: None,
+            source_addr: None,
+            source_ton: None,
+            source_npi: None,
+            dest_addr: Some(Msisdn::parse("+2250102030405").expect("valid number")),
+            dest_ton: None,
+            dest_npi: None,
+            data_coding: None,
+            segments: 1,
+            text: None,
+            state: MessageState::Queued,
+            command_status: None,
+            dlr_stat: None,
+            dlr_err: None,
+            attempts: 0,
+            created_at: Timestamp::parse("2026-07-26T10:00:00Z").expect("valid instant"),
+            sent_at: None,
+            resp_at: None,
+            dlr_at: None,
+        }
+    }
+
+    /// CA-002-06, counted rather than inferred.
+    ///
+    /// Five transitions applied one at a time append five commits' worth of
+    /// write-ahead log; the same five applied as a batch append one.
+    #[tokio::test]
+    async fn a_batch_of_transitions_commits_exactly_once() {
+        const ROWS: usize = 5;
+
+        let directory = tempfile::TempDir::new().expect("creating a temporary directory");
+        let path = directory.path().join("commits.db");
+        let database = Database::open(DatabaseConfig::new(&path))
+            .await
+            .expect("opening a fresh database");
+
+        let repository = SqliteMessageRepository::new(database.clone());
+        let one_at_a_time: Vec<Message> = (0..ROWS).map(|_| a_message()).collect();
+        let batched: Vec<Message> = (0..ROWS).map(|_| a_message()).collect();
+
+        repository
+            .insert_messages(&one_at_a_time)
+            .await
+            .expect("seeding");
+        repository.insert_messages(&batched).await.expect("seeding");
+
+        let log = WalFrames::beside(&path);
+
+        log.reset(&database).await;
+        for message in &one_at_a_time {
+            repository
+                .update_state(&MessageStateUpdate::new(
+                    message.client_message_id,
+                    MessageState::Sent,
+                ))
+                .await
+                .expect("individual transition");
+        }
+        let individually = log.bytes();
+
+        log.reset(&database).await;
+        let batch: Vec<MessageStateUpdate> = batched
+            .iter()
+            .map(|message| MessageStateUpdate::new(message.client_message_id, MessageState::Sent))
+            .collect();
+        repository
+            .update_states(&batch)
+            .await
+            .expect("batched transitions");
+        let in_one_batch = log.bytes();
+
+        // The instrument works: the loop of five commits really does write
+        // more log than one commit would. Without this the comparison below
+        // would pass on a measurement stuck at zero.
+        assert!(
+            individually > 0,
+            "the write-ahead log measurement reports nothing"
+        );
+
+        // Five commits rewrite the same page five times; one commit writes it
+        // once. The exact ratio depends on how the rows fall across pages, so
+        // the assertion is "strictly less", not "one fifth".
+        assert!(
+            in_one_batch < individually,
+            "a batch of {ROWS} transitions wrote {in_one_batch} bytes of log against \
+             {individually} for {ROWS} separate commits — it is not committing once"
+        );
+    }
+
+    #[test]
+    fn the_entity_name_matches_the_table() {
+        assert_eq!(TABLE, "messages");
+    }
 }

@@ -2567,6 +2567,8 @@ version = "0.0.1"
 dependencies = [
  "futures-core",
  "futures-util",
+ "log",
+ "serde_json",
  "sha2 0.10.9",
  "smpp-core",
  "sqlx",

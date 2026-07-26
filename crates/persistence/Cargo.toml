@@ -13,6 +13,7 @@ thiserror.workspace = true
 sqlx.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
+log.workspace = true
 tracing.workspace = true
 time.workspace = true
 uuid.workspace = true
@@ -29,6 +30,7 @@ smpp-core = { path = "../smpp-core" }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 sha2.workspace = true
 stats_alloc.workspace = true
 tempfile.workspace = true

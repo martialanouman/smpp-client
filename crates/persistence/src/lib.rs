@@ -29,6 +29,11 @@
 //! offered and no third: [`ports::MessageRepository::stream_messages`] for a
 //! traversal, and cursor pagination — never `OFFSET`, which re-walks the rows
 //! it skips and degrades linearly with the page number — for a screen.
+//!
+//! Both rest on the query plan, not on the SQL looking right: a filter written
+//! so that SQLite cannot use an index turns either of them back into a full
+//! scan, with every test still green. `repositories::plans` asserts the plans
+//! for that reason, and [`Cursor`] states what the constant-cost claim assumes.
 
 mod db;
 mod error;
@@ -50,14 +55,39 @@ pub use repositories::{
 };
 pub use time::Timestamp;
 
-/// Opaque position in a paginated or streamed result set.
+/// Opaque position in a paginated result set.
 ///
-/// A cursor is SQLite's `rowid` for the last row handed out, which for these
-/// tables is insertion order. Two consequences worth stating: pagination costs
-/// the same on page one and page ten thousand — unlike `OFFSET`, which walks
-/// and discards everything before the window — and a row inserted while the
-/// caller is paging appears at the end rather than shifting the pages already
-/// read.
+/// A cursor is SQLite's `rowid` of the last row handed out. Pagination is a
+/// seek to that position, not a walk to it: unlike `OFFSET`, which reads and
+/// discards everything before the window, page ten thousand costs what page one
+/// costs. A row inserted while the caller is paging appears at the end rather
+/// than shifting the pages already read.
+///
+/// # What "the same cost" depends on
+///
+/// The claim holds only when the filter can drive an index. `messages` is
+/// paged under `campaign_id` or `state`, both indexed, and the `rowid` cursor
+/// rides the same index — `repositories::plans` asserts it. A filter added
+/// later on an unindexed column would degrade to a scan per page while every
+/// test stayed green, which is why that assertion exists.
+///
+/// # The ordering assumption
+///
+/// `rowid` on these tables is the implicit one, without `AUTOINCREMENT`, so it
+/// is **not** guaranteed to be monotonic across deletions: SQLite may reuse a
+/// value freed by deleting the highest row. What the cursor needs is weaker
+/// and does hold — within one traversal, `rowid` orders rows consistently, and
+/// `rowid > ?` never revisits a row already handed out. A reused value can
+/// place a *newly inserted* row before rows already paged, so it may be missed
+/// by a traversal in progress; it is never duplicated.
+///
+/// Fixing this properly would mean an `INTEGER PRIMARY KEY AUTOINCREMENT`,
+/// which these tables cannot have — their primary keys are the TEXT UUIDs of
+/// spec §14.2, so `rowid` stays implicit. It would take a surrogate key column
+/// and a migration. The exposure is low (only deletions from the top of the
+/// range, concurrent with a traversal), so this is documented rather than
+/// engineered around, and stated here rather than left as an implied
+/// guarantee.
 ///
 /// The inner value is private: it is a position in *one* result set, not an
 /// identifier, and nothing outside this crate should build one by hand.

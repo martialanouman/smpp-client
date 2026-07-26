@@ -264,29 +264,68 @@ impl MessageFilter {
     }
 }
 
+/// What a transition does to `messages.smsc_message_id`.
+///
+/// # Why this column, and only this one, needs a tri-state
+///
+/// Every other optional field of [`MessageStateUpdate`] merges: `None` means
+/// "leave what is there", because two transitions bring disjoint facts and
+/// neither should erase the other's.
+///
+/// `smsc_message_id` is different: its value can legitimately **change**. Spec
+/// §10.7 has a `submit_sm` time out and be retried; the SMSC assigns a new
+/// identifier to the retry. If the late response to the first attempt lands
+/// first, a merging update would pin the stale identifier for ever — the
+/// second attempt's response could not overwrite it, its delivery receipt
+/// would never correlate (spec §7.8), and the message would sit in `ACCEPTED`
+/// while `delivered_count` drifted.
+///
+/// So the caller says which it means. There is deliberately **no** `Clear`
+/// variant: nothing in the protocol un-assigns an identifier, and a variant
+/// nobody can justify is a variant somebody will eventually misuse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SmscMessageIdUpdate {
+    /// Leave whatever the column holds.
+    #[default]
+    Keep,
+    /// Write this identifier, over an existing one if there is one.
+    Set(String),
+}
+
 /// One state transition to apply to one message.
 ///
-/// # Why every field is optional and additive
+/// # Merge, not overwrite
 ///
 /// Spec §14.3 has a transition arrive with only part of the picture: a
-/// `submit_sm_resp` brings an SMSC identifier and a response instant, a
-/// delivery receipt brings `dlr_stat` and a receipt instant, and neither
-/// should erase what the other wrote. So a `None` here means **leave the
-/// column as it is**, not "set it to NULL" — the update is a merge, which is
-/// also what makes it safe to replay (CLAUDE.md §4: transitions are
-/// idempotent).
+/// `submit_sm_resp` brings a response instant, a delivery receipt brings
+/// `dlr_stat` and a receipt instant, and neither should erase what the other
+/// wrote. So a `None` here means **leave the column as it is**, not "set it to
+/// NULL".
+///
+/// # Idempotence
+///
+/// CLAUDE.md §4 requires a transition to be replayable: a batch may be
+/// committed and then reapplied after a crash, and the second application must
+/// leave the row exactly as the first did. Merging gives that for free on the
+/// optional fields. The two fields where it does not come for free are called
+/// out where they are declared — [`Self::attempt`], a **number** rather than
+/// an increment, and [`Self::smsc_message_id`], an explicit
+/// [`SmscMessageIdUpdate`].
 ///
 /// Build one with [`Self::new`] and the `with_*` methods rather than a struct
 /// literal, so a field added by a later milestone does not break every call
 /// site.
+// NO `derive(Default)`: it would require one on `ClientMessageId`, which
+// `smpp-core` refuses for the reason spelled out there — a defaulted
+// identifier in a struct literal is a fabricated one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageStateUpdate {
     /// Which message to update.
     pub client_message_id: ClientMessageId,
     /// The state to move to.
     pub state: MessageState,
-    /// Identifier assigned by the SMSC, when this transition carries one.
-    pub smsc_message_id: Option<String>,
+    /// What to do with the identifier the SMSC assigned.
+    pub smsc_message_id: SmscMessageIdUpdate,
     /// Response status, when this transition carries one.
     pub command_status: Option<CommandStatus>,
     /// `stat` field of the delivery receipt.
@@ -299,8 +338,14 @@ pub struct MessageStateUpdate {
     pub resp_at: Option<Timestamp>,
     /// When the delivery receipt arrived.
     pub dlr_at: Option<Timestamp>,
-    /// Whether this transition counts as one more sending attempt.
-    pub counts_as_attempt: bool,
+    /// Which sending attempt this transition belongs to, counting from 1.
+    ///
+    /// A **number**, not a flag, and stored as `MAX(attempts, ?)` rather than
+    /// `attempts + 1`. An increment is not replayable: reapplying a committed
+    /// batch after a crash would count every message of it one attempt too
+    /// high, and the retry budget of spec §10.7 would be silently cut. Two
+    /// applications of "this was attempt 2" leave 2.
+    pub attempt: Option<u32>,
 }
 
 impl MessageStateUpdate {
@@ -310,21 +355,23 @@ impl MessageStateUpdate {
         Self {
             client_message_id,
             state,
-            smsc_message_id: None,
+            smsc_message_id: SmscMessageIdUpdate::Keep,
             command_status: None,
             dlr_stat: None,
             dlr_err: None,
             sent_at: None,
             resp_at: None,
             dlr_at: None,
-            counts_as_attempt: false,
+            attempt: None,
         }
     }
 
-    /// Records the identifier the SMSC assigned.
+    /// Writes the identifier the SMSC assigned, replacing any earlier one.
+    ///
+    /// Replacing is the point: see [`SmscMessageIdUpdate`].
     #[must_use]
     pub fn with_smsc_message_id(mut self, smsc_message_id: impl Into<String>) -> Self {
-        self.smsc_message_id = Some(smsc_message_id.into());
+        self.smsc_message_id = SmscMessageIdUpdate::Set(smsc_message_id.into());
         self
     }
 
@@ -343,11 +390,16 @@ impl MessageStateUpdate {
         self
     }
 
-    /// Records when `submit_sm` left, and counts the attempt.
+    /// Records when `submit_sm` left, and which attempt it was.
+    ///
+    /// The attempt number is not optional here on purpose: a send that does
+    /// not say which attempt it is cannot be counted idempotently, and a
+    /// caller that has to pass `1` explicitly is a caller that has thought
+    /// about the retry case.
     #[must_use]
-    pub const fn sent_at(mut self, instant: Timestamp) -> Self {
+    pub const fn sent_at(mut self, instant: Timestamp, attempt: u32) -> Self {
         self.sent_at = Some(instant);
-        self.counts_as_attempt = true;
+        self.attempt = Some(attempt);
         self
     }
 
@@ -400,7 +452,9 @@ pub struct PduLogEntry {
 mod tests {
     use smpp_core::types::{ClientMessageId, SessionId};
 
-    use super::{MessageFilter, MessageState, MessageStateUpdate, SessionProfile};
+    use super::{
+        MessageFilter, MessageState, MessageStateUpdate, SessionProfile, SmscMessageIdUpdate,
+    };
     use crate::records::BindType;
     use crate::Timestamp;
     use smpp_core::values::SmppVersion;
@@ -450,15 +504,26 @@ mod tests {
         let update = MessageStateUpdate::new(ClientMessageId::new(), MessageState::Queued);
 
         assert_eq!(update.state, MessageState::Queued);
-        assert!(update.smsc_message_id.is_none());
-        assert!(!update.counts_as_attempt);
+        assert_eq!(update.smsc_message_id, SmscMessageIdUpdate::Keep);
+        assert!(update.attempt.is_none());
     }
 
     #[test]
-    fn recording_a_send_counts_the_attempt() {
+    fn recording_a_send_records_which_attempt_it_was() {
         let update = MessageStateUpdate::new(ClientMessageId::new(), MessageState::Sent)
-            .sent_at(Timestamp::now());
+            .sent_at(Timestamp::now(), 2);
 
-        assert!(update.counts_as_attempt);
+        assert_eq!(update.attempt, Some(2));
+    }
+
+    #[test]
+    fn recording_an_smsc_identifier_asks_for_a_replacement() {
+        let update = MessageStateUpdate::new(ClientMessageId::new(), MessageState::Accepted)
+            .with_smsc_message_id("SMSC-1");
+
+        assert_eq!(
+            update.smsc_message_id,
+            SmscMessageIdUpdate::Set(String::from("SMSC-1"))
+        );
     }
 }

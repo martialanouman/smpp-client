@@ -17,7 +17,10 @@ mod campaigns;
 mod contacts;
 mod convert;
 mod messages;
+mod page;
 mod pdu_log;
+#[cfg(test)]
+mod plans;
 mod session_profiles;
 
 pub use campaigns::SqliteCampaignRepository;

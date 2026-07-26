@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT contacts.rowid AS \"rowid!: i64\",\n                      contacts.contact_id, contacts.msisdn, contacts.country,\n                      contacts.valid, contacts.line_type, contacts.attributes,\n                      contacts.source, contacts.created_at\n               FROM contacts\n               WHERE ? IS NULL\n                  OR contacts.contact_id IN (\n                         SELECT contact_id FROM contact_list_members WHERE list_id = ?\n                     )\n               ORDER BY contacts.rowid",
+  "query": "SELECT contacts.rowid AS \"rowid!: i64\",\n                              contacts.contact_id, contacts.msisdn, contacts.country,\n                              contacts.valid, contacts.line_type, contacts.attributes,\n                              contacts.source, contacts.created_at\n                       FROM contacts\n                       JOIN contact_list_members AS members\n                         ON members.contact_id = contacts.contact_id\n                       WHERE members.list_id = ?\n                       ORDER BY members.contact_id",
   "describe": {
     "columns": [
       {
@@ -104,7 +104,7 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 1
     },
     "nullable": [
       false,
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "940eb8460b44f36941ef41dc1ffe1fa2b18c2ebe8b3f765355041dd8579ff1b0"
+  "hash": "fe1feac2f6375ef0dc47aecb8fb9efbaad8cefdccc3c0c226b1acdec78105235"
 }
