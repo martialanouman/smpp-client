@@ -211,6 +211,11 @@ macro_rules! uuid_newtype {
         impl $name {
             /// Draws a fresh random identifier (UUID v4).
             #[must_use]
+            // clippy::new_without_default asks for a `Default` next to any
+            // argument-less `new`. Here the lint is wrong: see the comment
+            // below on why `Default` is precisely what must NOT exist for an
+            // identifier that has to be minted explicitly.
+            #[allow(clippy::new_without_default)]
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
@@ -240,11 +245,13 @@ macro_rules! uuid_newtype {
             }
         }
 
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
+        // NO `impl Default`, deliberately.
+        //
+        // `default()` would mint a fresh UUID, so a `..Default::default()` in a
+        // struct literal would silently fabricate a brand-new identifier. For a
+        // `client_message_id` — the write-ahead key whose whole purpose is to
+        // make a replay idempotent (CLAUDE.md §4) — that turns a resumed
+        // campaign into a duplicate send. `new()` stays explicit.
 
         impl core::fmt::Display for $name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

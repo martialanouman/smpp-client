@@ -23,9 +23,15 @@
 //! [`0001-choix-de-la-pile-smpp`](../../../docs/adr/0001-choix-de-la-pile-smpp.md)
 //! settles it: the codec comes from `rusmpp`, taken at its **low level**, and
 //! this crate is the only one in the workspace allowed to depend on it. The
-//! re-exports below are the curated surface the rest of the workspace sees —
-//! every symbol is a commitment, so the list grows deliberately, milestone by
-//! milestone, rather than by globbing the upstream API.
+//! re-exports below are the surface the rest of the workspace sees. Be honest
+//! about what that surface is: `pdus`, `tlvs` and `types` are re-exported as
+//! WHOLE MODULES, not symbol by symbol. ADR 0001 says why — a full adapter
+//! layer would cost thousands of conversion lines, teach nothing about the
+//! protocol, and make every conversion an opportunity for a silent bug.
+//!
+//! The consequence is worth stating rather than glossing over: an upstream
+//! API change propagates to calling crates. The centralised re-export only
+//! guarantees it becomes visible in one place.
 
 pub mod codec;
 pub mod debug;
