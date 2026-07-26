@@ -93,36 +93,62 @@ impl MessageState {
         matches!(self, Self::Delivered | Self::Failed | Self::Expired)
     }
 
+    /// How far along the lifecycle this state is.
+    ///
+    /// The three terminal states share a rank: nothing orders `DELIVERED`
+    /// against `FAILED`, and a message reaches exactly one of them.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Queued => 0,
+            Self::Sent => 1,
+            Self::Accepted => 2,
+            Self::Delivered | Self::Failed | Self::Expired => 3,
+        }
+    }
+
     /// Reports whether `next` is a legal successor of this state.
     ///
-    /// The machine of spec §14.3, stated once. Three properties it holds, and
-    /// each one is a bug it prevents:
+    /// The machine of spec §14.3, stated once. It is **monotone**, not
+    /// step-by-step: a state moves to itself, or to any state further along
+    /// the lifecycle. Three properties follow, and each one is a bug it
+    /// prevents:
     ///
-    /// * a **terminal** state has no successor — a late delivery receipt for a
-    ///   message already `FAILED` must not resurrect it;
+    /// * a **terminal** state has no successor but itself — a delivery receipt
+    ///   arriving for a message already `FAILED` must not resurrect it, which
+    ///   is how a message the recipient never saw would be counted as
+    ///   delivered;
     /// * a state may always move to **itself** — the same transition replayed
     ///   after a crash has to be a no-op, which is the idempotence CLAUDE.md §4
     ///   requires;
     /// * nothing moves **backwards** — an `ACCEPTED` message never returns to
-    ///   `SENT`, so a response arriving out of order cannot undo progress.
+    ///   `SENT`, so a `[SENT, ACCEPTED]` batch replayed over a `DELIVERED` row
+    ///   cannot walk it back.
+    ///
+    /// # Why forward jumps are legal
+    ///
+    /// `QUEUED → ACCEPTED` skips `SENT`, and is allowed. Skipping is not one of
+    /// the three bugs above: it loses an intermediate step, it does not undo
+    /// progress or revive a dead message. And it happens for real — a message
+    /// whose response was recorded but whose `SENT` transition was lost, a
+    /// message centre that sends its delivery receipt before its
+    /// `submit_sm_resp` has been journalled. Refusing those would silently
+    /// freeze a message that did complete, which is worse than the missing
+    /// intermediate.
     #[must_use]
     pub const fn can_move_to(self, next: Self) -> bool {
-        match (self, next) {
-            // A committed transition replayed after a crash lands here.
-            (Self::Queued, Self::Queued)
-            | (Self::Sent, Self::Sent)
-            | (Self::Accepted, Self::Accepted)
-            | (Self::Delivered, Self::Delivered)
-            | (Self::Failed, Self::Failed)
-            | (Self::Expired, Self::Expired) => true,
-            // Nothing was sent, so only a local refusal can end it.
-            (Self::Queued, Self::Sent | Self::Failed) => true,
-            // A `submit_sm_resp` either assigns an identifier or rejects.
-            (Self::Sent, Self::Accepted | Self::Failed | Self::Expired) => true,
-            // From here on it is the delivery receipt that speaks.
-            (Self::Accepted, Self::Delivered | Self::Failed | Self::Expired) => true,
-            _ => false,
+        // A terminal state is final, and only a replay of itself is legal.
+        // `rank` alone would not do: the three terminal states share one, so
+        // it would let `FAILED` move to `DELIVERED`.
+        if self.is_terminal() {
+            return matches!(
+                (self, next),
+                (Self::Delivered, Self::Delivered)
+                    | (Self::Failed, Self::Failed)
+                    | (Self::Expired, Self::Expired)
+            );
         }
+
+        self.rank() <= next.rank()
     }
 }
 
@@ -386,7 +412,16 @@ mod tests {
     #[test]
     fn a_rejected_submission_moves_straight_from_sent_to_failed() {
         assert!(MessageState::Sent.can_move_to(MessageState::Failed));
-        assert!(!MessageState::Sent.can_move_to(MessageState::Delivered));
+    }
+
+    /// Skipping forward is legal: it loses an intermediate step, which is
+    /// none of the three bugs the machine exists to prevent. A message whose
+    /// `SENT` transition was lost must still be able to complete.
+    #[test]
+    fn a_forward_jump_over_an_intermediate_state_is_legal() {
+        assert!(MessageState::Queued.can_move_to(MessageState::Accepted));
+        assert!(MessageState::Queued.can_move_to(MessageState::Delivered));
+        assert!(MessageState::Sent.can_move_to(MessageState::Delivered));
     }
 
     /// Replaying a committed transition must be a no-op, not a rejection.

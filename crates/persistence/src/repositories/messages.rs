@@ -223,8 +223,17 @@ impl SqliteMessageRepository {
         &self,
         update: &MessageStateUpdate,
     ) -> Result<(), PersistenceError> {
-        let mut connection = self.database.pool().acquire().await?;
-        apply_update(&mut *connection, update).await
+        let mut transaction = self.database.pool().begin().await?;
+
+        // A transaction even for one transition: the statement and the
+        // "was it missing or illegal?" lookup that follows it must see the
+        // same row, and on the pool they would be two connections.
+        let outcome = apply_update(&mut *transaction, update).await?;
+        settle(&mut *transaction, update, outcome).await?;
+
+        transaction.commit().await?;
+
+        Ok(())
     }
 
     async fn stored_update_states(
@@ -234,12 +243,65 @@ impl SqliteMessageRepository {
         let mut transaction = self.database.pool().begin().await?;
 
         for update in updates {
-            apply_update(&mut *transaction, update).await?;
+            let outcome = apply_update(&mut *transaction, update).await?;
+            settle(&mut *transaction, update, outcome).await?;
         }
 
         transaction.commit().await?;
 
         Ok(updates.len().try_into().unwrap_or(u64::MAX))
+    }
+}
+
+/// Tells a missing message from a refused transition, and reacts to each.
+///
+/// Only runs when the update matched nothing, which on the nominal path is
+/// never — so the extra `SELECT` costs nothing where it would be noticed.
+///
+/// * **missing** is an error: the caller asked to move a message that is not
+///   there, and swallowing that would let a whole batch report success while
+///   writing nothing;
+/// * **illegal** is a no-op with a `warn`: the message exists and the
+///   transition is one the machine of spec §14.3 refuses. It is not the
+///   caller's fault — a late delivery receipt for a failed message is
+///   ordinary — but two parts of the system disagree about where the message
+///   stands, and that is worth a line.
+async fn settle<'e, E>(
+    executor: E,
+    update: &MessageStateUpdate,
+    outcome: TransitionOutcome,
+) -> Result<(), PersistenceError>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
+    if outcome == TransitionOutcome::Applied {
+        return Ok(());
+    }
+
+    let client_message_id = update.client_message_id.to_string();
+
+    let current = sqlx::query_scalar!(
+        r#"SELECT state AS "state!: String" FROM messages WHERE client_message_id = ?"#,
+        client_message_id
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    match current {
+        None => Err(PersistenceError::NotFound {
+            entity: TABLE,
+            id: client_message_id,
+        }),
+        Some(current) => {
+            tracing::warn!(
+                client_message_id = %update.client_message_id,
+                from = %current,
+                to = %update.state,
+                "illegal message transition refused; the row is unchanged"
+            );
+
+            Ok(())
+        }
     }
 }
 
@@ -652,15 +714,43 @@ where
 ///   would count every message of it one attempt too high, quietly eating the
 ///   retry budget of spec §10.7. Taking the maximum of a 1-based attempt
 ///   number converges instead.
+///
+/// # The transition is checked, not merely written
+///
+/// The `WHERE` clause carries the state machine of
+/// [`MessageState::can_move_to`], expanded into the set of states that may
+/// legally precede the one being written. Without it the machine was a
+/// documented intention with no caller: `messaging` declared which transitions
+/// were legal and this statement wrote `state = ?` unconditionally.
+///
+/// Two bugs that costs, both of them silent:
+///
+/// * a delivery receipt arriving for a message that already failed would move
+///   it `FAILED → DELIVERED` — a message the recipient never saw, counted as
+///   delivered by milestone 014;
+/// * a `[SENT, ACCEPTED]` batch replayed after a crash would walk a
+///   `DELIVERED` row backwards to `ACCEPTED`.
+///
+/// An illegal transition is a **no-op**, not an error, and the whole update is
+/// skipped rather than only its `state` column: a receipt that may not change
+/// the state has no business writing its `dlr_stat` either. It is logged at
+/// `warn`, because it means two parts of the system disagree about where a
+/// message stands.
+///
+/// Doing it in the `WHERE` clause rather than as a read-then-write keeps the
+/// check and the write in **one** statement, so two connections cannot
+/// interleave between them — `messages` is written from several tasks
+/// (spec §9.2) and a read-then-write would be a race.
 async fn apply_update<'e, E>(
     executor: E,
     update: &MessageStateUpdate,
-) -> Result<(), PersistenceError>
+) -> Result<TransitionOutcome, PersistenceError>
 where
     E: sqlx::SqliteExecutor<'e>,
 {
     let client_message_id = update.client_message_id.to_string();
     let state = update.state.as_str();
+    let predecessors = legal_predecessors(update.state);
     let command_status = update.command_status.map(store_command_status);
     let sent_at = update.sent_at.map(|instant| instant.to_storage());
     let resp_at = update.resp_at.map(|instant| instant.to_storage());
@@ -683,7 +773,8 @@ where
                resp_at = COALESCE(?, resp_at),
                dlr_at = COALESCE(?, dlr_at),
                attempts = MAX(attempts, ?)
-           WHERE client_message_id = ?"#,
+           WHERE client_message_id = ?
+             AND INSTR(?, '|' || state || '|') > 0"#,
         state,
         replace_smsc_id,
         smsc_message_id,
@@ -694,20 +785,60 @@ where
         resp_at,
         dlr_at,
         attempt,
-        client_message_id
+        client_message_id,
+        predecessors
     )
     .execute(executor)
     .await?
     .rows_affected();
 
-    if affected == 0 {
-        return Err(PersistenceError::NotFound {
-            entity: TABLE,
-            id: client_message_id,
-        });
+    Ok(TransitionOutcome::from_rows_affected(affected))
+}
+
+/// What one transition did, for the caller that has to tell the two apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransitionOutcome {
+    /// The row was updated.
+    Applied,
+    /// Nothing matched: either the message does not exist, or the transition
+    /// was illegal. Which one it was costs a second query, so only the caller
+    /// that needs to know pays for it.
+    Skipped,
+}
+
+impl TransitionOutcome {
+    /// Reads the outcome from the row count.
+    const fn from_rows_affected(affected: u64) -> Self {
+        if affected == 0 {
+            Self::Skipped
+        } else {
+            Self::Applied
+        }
+    }
+}
+
+/// The states a message may legally be in for `next` to be written, as the
+/// `INSTR` pattern the statement above matches against.
+///
+/// `|QUEUED|SENT|` rather than an `IN (?, ?)` list, because `sqlx::query!`
+/// wants a string **literal** for its compile-time checking and cannot take a
+/// placeholder list whose length varies. One bound parameter, no SQL built by
+/// concatenation, and the check stays inside the single statement.
+///
+/// Derived from [`MessageState::can_move_to`] by asking it, rather than
+/// restated: a change to the machine changes this with no second edit, which
+/// is the whole reason the machine is a function and not a comment.
+fn legal_predecessors(next: MessageState) -> String {
+    let mut pattern = String::from("|");
+
+    for previous in MessageState::ALL {
+        if previous.can_move_to(next) {
+            pattern.push_str(previous.as_str());
+            pattern.push('|');
+        }
     }
 
-    Ok(())
+    pattern
 }
 
 #[cfg(test)]
