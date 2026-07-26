@@ -1,6 +1,6 @@
 # Jalon 004 — Encodage du texte et segmentation des messages longs
 
-> **Statut :** À faire · **Dépend de :** step-003 · **Réf. spec :** §7.5 · **Exigences :** EF-MSG-03, EF-MSG-04
+> **Statut :** Terminé (2026-07-26) — 10 critères sur 10 vérifiés · **Dépend de :** step-003 · **Réf. spec :** §7.5 · **Exigences :** EF-MSG-03, EF-MSG-04
 
 ## 1. Objectif
 
@@ -40,16 +40,16 @@ C'est la brique la plus piégeuse du projet : les seuils (160/153, 70/67), l'alp
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-004-01** — Un texte de 160 caractères GSM produit **1** segment ; 161 caractères produisent **2** segments de 153 et 8.
-- [ ] **CA-004-02** — Un texte contenant « € » (table d'extension) voit ce caractère compter pour **2** septets, y compris dans le calcul du nombre de segments.
-- [ ] **CA-004-03** — Un texte contenant un caractère hors GSM (ex. « 你 », « ł ») bascule automatiquement en UCS2 : 70 caractères → 1 segment, 71 → 2 segments de 67 et 4.
-- [ ] **CA-004-04** — Le forçage manuel est respecté ; forcer GSM 7-bit sur un texte non représentable retourne une `EncodingError` explicite plutôt que de produire des caractères corrompus.
-- [ ] **CA-004-05** — Aucun segment ne coupe un caractère en deux : en UCS2, aucune paire de substitution (surrogate pair) n'est scindée ; en GSM, aucun caractère d'extension n'est séparé de son octet d'échappement.
-- [ ] **CA-004-06** — Mode UDH : chaque segment porte un UDH de 6 octets, `esm_class` a le bit UDHI positionné, la référence de concaténation est identique sur tous les segments et l'index va de 1 à N.
-- [ ] **CA-004-07** — Mode `sar_*` : les trois TLV sont présents et cohérents, `esm_class` **ne** porte **pas** le bit UDHI.
-- [ ] **CA-004-08** — La concaténation inverse des segments (fonction de test) restitue exactement le texte d'origine, pour les deux modes et les trois encodages.
-- [ ] **CA-004-09** — L'API de prévisualisation retourne les mêmes valeurs que la segmentation réelle : test de propriété comparant les deux sur des textes aléatoires.
-- [ ] **CA-004-10** — Aucune allocation superflue par segment sur le chemin chaud (revue + micro-benchmark `criterion` de référence, servant de base de comparaison en step-017).
+- [x] **CA-004-01** — Un texte de 160 caractères GSM produit **1** segment ; 161 caractères produisent **2** segments de 153 et 8.
+- [x] **CA-004-02** — Un texte contenant « € » (table d'extension) voit ce caractère compter pour **2** septets, y compris dans le calcul du nombre de segments.
+- [x] **CA-004-03** — Un texte contenant un caractère hors GSM (ex. « 你 », « ł ») bascule automatiquement en UCS2 : 70 caractères → 1 segment, 71 → 2 segments de 67 et 4.
+- [x] **CA-004-04** — Le forçage manuel est respecté ; forcer GSM 7-bit sur un texte non représentable retourne une `EncodingError` explicite plutôt que de produire des caractères corrompus.
+- [x] **CA-004-05** — Aucun segment ne coupe un caractère en deux : en UCS2, aucune paire de substitution (surrogate pair) n'est scindée ; en GSM, aucun caractère d'extension n'est séparé de son octet d'échappement.
+- [x] **CA-004-06** — Mode UDH : chaque segment porte un UDH de 6 octets, `esm_class` a le bit UDHI positionné, la référence de concaténation est identique sur tous les segments et l'index va de 1 à N.
+- [x] **CA-004-07** — Mode `sar_*` : les trois TLV sont présents et cohérents, `esm_class` **ne** porte **pas** le bit UDHI.
+- [x] **CA-004-08** — La concaténation inverse des segments (fonction de test) restitue exactement le texte d'origine, pour les deux modes et les trois encodages.
+- [x] **CA-004-09** — L'API de prévisualisation retourne les mêmes valeurs que la segmentation réelle : test de propriété comparant les deux sur des textes aléatoires.
+- [x] **CA-004-10** — Aucune allocation superflue par segment sur le chemin chaud (revue + micro-benchmark `criterion` de référence, servant de base de comparaison en step-017).
 
 ## 5. Tests attendus
 
