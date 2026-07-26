@@ -1,6 +1,6 @@
 # Jalon 001 — Socle applicatif : shell Tauri, UI et contrat IPC typé
 
-> **Statut :** À faire · **Dépend de :** step-000 · **Réf. spec :** §15, §16, §18.2 · **Réf. guide :** §9, §10, §12
+> **Statut :** Terminé (2026-07-26) — 11 critères sur 11 vérifiés · **Dépend de :** step-000 · **Réf. spec :** §15, §16, §18.2 · **Réf. guide :** §9, §10, §12
 
 ## 1. Objectif
 
@@ -41,17 +41,17 @@ C'est le jalon qui fixe le **contrat** entre Rust et TypeScript. Tous les jalons
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-001-01** — L'application démarre et affiche le Tableau de bord ; la navigation atteint les 8 écrans sans erreur console.
-- [ ] **CA-001-02** — `config_set` puis redémarrage de l'app : les préférences sont conservées, dans le répertoire de données standard de l'OS et nulle part ailleurs.
-- [ ] **CA-001-03** — Les types TS de `ui/src/ipc/` sont **générés** ; modifier un DTO Rust sans régénérer fait échouer l'étape 4 de la CI (`git diff --exit-code`).
-- [ ] **CA-001-04** — Aucun `invoke` brut hors de `ui/src/ipc/` : `rg "invoke\(" ui/src --glob '!src/ipc/**'` ne retourne rien (règle vérifiée aussi par une règle eslint).
-- [ ] **CA-001-05** — Une entrée invalide passée à `config_set` (langue inconnue, niveau de log inexistant) retourne un `ErrorDto` explicite ; l'application ne panique pas et le processus reste vivant.
-- [ ] **CA-001-06** — L'`ErrorDto` retourné ne contient ni chemin absolu du système de fichiers, ni secret, ni trace interne.
-- [ ] **CA-001-07** — Les traces sont écrites dans un fichier rotatif du répertoire de logs de l'app ; `rg "println!|eprintln!" src-tauri/src crates` ne retourne rien.
-- [ ] **CA-001-08** — Bascule FR ⇄ EN et clair ⇄ sombre effectives sans rechargement ; aucune chaîne visible en dur dans les composants (`rg` sur les littéraux de navigation ne trouve que des clés i18n).
-- [ ] **CA-001-09** — Les capacités Tauri déclarées n'incluent ni `shell`, ni accès FS hors répertoires applicatifs ; la CSP interdit le contenu distant et `eval`.
-- [ ] **CA-001-10** — L'événement `error:notify` émis côté Rust déclenche un toast dans l'UI (test manuel scripté + test unitaire du réducteur).
-- [ ] **CA-001-11** — `just lint` et `just test` verts ; CI verte sur les trois OS.
+- [x] **CA-001-01** — L'application démarre et affiche le Tableau de bord ; la navigation atteint les 8 écrans sans erreur console.
+- [x] **CA-001-02** — `config_set` puis redémarrage de l'app : les préférences sont conservées, dans le répertoire de données standard de l'OS et nulle part ailleurs.
+- [x] **CA-001-03** — Les types TS de `ui/src/ipc/` sont **générés** ; modifier un DTO Rust sans régénérer fait échouer l'étape 4 de la CI (`git diff --exit-code`).
+- [x] **CA-001-04** — Aucun `invoke` brut hors de `ui/src/ipc/` : `rg "invoke\(" ui/src --glob '!src/ipc/**'` ne retourne rien (règle vérifiée aussi par une règle eslint).
+- [x] **CA-001-05** — Une entrée invalide passée à `config_set` (langue inconnue, niveau de log inexistant) retourne un `ErrorDto` explicite ; l'application ne panique pas et le processus reste vivant.
+- [x] **CA-001-06** — L'`ErrorDto` retourné ne contient ni chemin absolu du système de fichiers, ni secret, ni trace interne.
+- [x] **CA-001-07** — Les traces sont écrites dans un fichier rotatif du répertoire de logs de l'app ; `rg "println!|eprintln!" src-tauri/src crates` ne retourne rien.
+- [x] **CA-001-08** — Bascule FR ⇄ EN et clair ⇄ sombre effectives sans rechargement ; aucune chaîne visible en dur dans les composants (`rg` sur les littéraux de navigation ne trouve que des clés i18n).
+- [x] **CA-001-09** — Les capacités Tauri déclarées n'incluent ni `shell`, ni accès FS hors répertoires applicatifs ; la CSP interdit le contenu distant et `eval`.
+- [x] **CA-001-10** — L'événement `error:notify` émis côté Rust déclenche un toast dans l'UI (test manuel scripté + test unitaire du réducteur).
+- [x] **CA-001-11** — `just lint` et `just test` verts ; CI verte sur les trois OS.
 
 ## 5. Tests attendus
 
