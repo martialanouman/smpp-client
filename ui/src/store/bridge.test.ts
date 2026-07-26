@@ -53,6 +53,19 @@ describe("backend bridge", () => {
     expect(usePreferences.getState().notifications).toHaveLength(1);
   });
 
+  it("still reads the preferences when the event subscription fails", async () => {
+    // The Tauri API rejects outside a WebView. An unguarded await would skip
+    // config_get entirely and leave the interface on its defaults, silently.
+    onErrorNotify.mockRejectedValue(new Error("tauri api unavailable"));
+    configGet.mockResolvedValue({ ok: true, value: CONFIG });
+    const { startBackendBridge } = await import("./bridge");
+
+    await startBackendBridge();
+
+    expect(usePreferences.getState().language).toBe("en");
+    expect(usePreferences.getState().notifications[0]?.code).toBeNull();
+  });
+
   it("turns an error:notify event into a notification", async () => {
     configGet.mockResolvedValue({ ok: true, value: CONFIG });
     const { startBackendBridge } = await import("./bridge");

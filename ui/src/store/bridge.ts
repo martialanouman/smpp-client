@@ -43,9 +43,25 @@ function report(failure: Extract<IpcOutcome<never>, { ok: false }>["failure"]): 
  * @returns the unsubscribe function for the event listener.
  */
 export async function startBackendBridge(): Promise<() => void> {
-  const unlisten = await onErrorNotify(({ code, message }) =>
-    usePreferences.getState().notify({ code, message }),
-  );
+  // Subscribing must not be able to sink the whole bridge. It rejects whenever
+  // the Tauri API is unavailable — opening the dev server in a plain browser
+  // is enough — and an unguarded `await` would then skip `config_get`
+  // entirely, leaving the interface on its defaults with no explanation.
+  //
+  // The two directions are independent: failing to listen for pushed errors is
+  // no reason to stop reading the preferences.
+  let unlisten = () => undefined as void;
+
+  try {
+    unlisten = await onErrorNotify(({ code, message }) =>
+      usePreferences.getState().notify({ code, message }),
+    );
+  } catch (cause) {
+    usePreferences.getState().notify({
+      code: null,
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
 
   const outcome = await configGet();
 
