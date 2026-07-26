@@ -54,7 +54,18 @@ tracing.workspace = true
 # Jitter on the reconnection back-off — see the workspace manifest.
 rand.workspace = true
 
+[features]
+# The in-memory message centre of `src/testing.rs`. Off by default, so nothing
+# of it reaches the application binary; `smpp-session`'s own integration tests
+# and `messaging`'s enable it as a dev-dependency.
+test-support = ["tokio/io-util", "tokio/macros"]
+
 [dev-dependencies]
+# The crate's own integration tests drive the double, so they need the feature
+# its own `[features]` gates. A self dev-dependency is the sanctioned way to
+# say that.
+smpp-session = { path = ".", features = ["test-support"] }
+
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",

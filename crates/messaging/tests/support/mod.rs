@@ -1,0 +1,330 @@
+//! What the send tests need that is not the send path.
+//!
+//! Two doubles and a clock:
+//!
+//! * [`Journal`] — an in-memory [`MessageRepository`] that also **records the
+//!   order** of its calls. That recording is the whole of CA-006-02: "the
+//!   message is in the journal before the `submit_sm` reaches the socket" is
+//!   not a property of a final state, it is a property of a sequence, and only
+//!   an instrumented double can see it.
+//! * the message centre of milestone 005, reached through
+//!   `smpp_session::testing` rather than copied.
+//! * [`FrozenClock`] — CLAUDE.md §7 wants the clock injected, so a test can
+//!   assert on `created_at` exactly instead of "roughly now".
+
+// `tests/` is compiled without `cfg(test)`, so the relaxations of
+// `clippy.toml` do not reach it.
+//
+//   · `unwrap`/`expect`: a panic here IS the failure report.
+//   · `disallowed_methods`: `#[tokio::test]` expands to `Runtime::block_on`,
+//     which `clippy.toml` reserves for "the binary entry point". A test
+//     harness is one.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
+
+use std::sync::Arc;
+
+use messaging::message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
+use messaging::ports::{MessageRepository, MessageStoreError};
+use smpp_core::time::{Clock, Timestamp};
+use smpp_core::types::ClientMessageId;
+use tokio::sync::Mutex;
+
+/// One thing the journal was asked to do, in the order it was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum JournalEvent {
+    /// A message was written, in this state.
+    Inserted(MessageState),
+    /// A batch of transitions was applied, to these states in order.
+    Transitioned(Vec<MessageState>),
+}
+
+/// An in-memory message journal that remembers what it was asked, and when.
+#[derive(Clone, Default)]
+pub(crate) struct Journal {
+    inner: Arc<Mutex<JournalState>>,
+    /// When set, every write fails with this.
+    failure: Option<MessageStoreError>,
+    /// Read at insert time, so the test can ask "and how many `submit_sm` had
+    /// crossed the socket by then?".
+    ///
+    /// This is what turns CA-006-02 into an assertion. The criterion is about
+    /// an **order** across two components, and no final state can show one: a
+    /// row that ends up `ACCEPTED` says nothing about whether it was written
+    /// before or after the PDU went out. Sampling the other side's counter
+    /// from inside the insert does.
+    witness: Option<Arc<dyn Fn() -> u32 + Send + Sync>>,
+}
+
+impl core::fmt::Debug for Journal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_struct("Journal").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default)]
+struct JournalState {
+    rows: Vec<Message>,
+    events: Vec<JournalEvent>,
+    submissions_at_insert: Option<u32>,
+}
+
+impl Journal {
+    /// An empty journal that accepts everything.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// A journal whose writes always fail — the "full disk" case.
+    pub(crate) fn refusing(failure: MessageStoreError) -> Self {
+        Self {
+            failure: Some(failure),
+            ..Self::default()
+        }
+    }
+
+    /// The same journal, sampling `witness` at insert time.
+    pub(crate) fn witnessing(mut self, witness: impl Fn() -> u32 + Send + Sync + 'static) -> Self {
+        self.witness = Some(Arc::new(witness));
+        self
+    }
+
+    /// What the witness reported when the write-ahead insert happened.
+    ///
+    /// `None` if nothing was ever inserted.
+    pub(crate) async fn submissions_at_insert(&self) -> Option<u32> {
+        self.inner.lock().await.submissions_at_insert
+    }
+
+    /// Every call the journal received, in order.
+    pub(crate) async fn events(&self) -> Vec<JournalEvent> {
+        self.inner.lock().await.events.clone()
+    }
+
+    /// The row under `client_message_id`, as it stands now.
+    pub(crate) async fn row(&self, client_message_id: ClientMessageId) -> Option<Message> {
+        self.inner
+            .lock()
+            .await
+            .rows
+            .iter()
+            .find(|row| row.client_message_id == client_message_id)
+            .cloned()
+    }
+
+    /// How many rows the journal holds.
+    pub(crate) async fn len(&self) -> usize {
+        self.inner.lock().await.rows.len()
+    }
+
+    /// Applies one transition to the stored row, the way SQLite does.
+    ///
+    /// The merge semantics are copied from the schema deliberately: `None`
+    /// leaves the column alone, `attempts` takes `MAX(attempts, ?)`. A double
+    /// that overwrote instead would let an idempotence bug pass here and fail
+    /// against the real repository.
+    fn apply(row: &mut Message, update: &MessageStateUpdate) {
+        row.state = update.state;
+
+        if let SmscMessageIdUpdate::Set(identifier) = &update.smsc_message_id {
+            row.smsc_message_id = Some(identifier.clone());
+        }
+
+        if let Some(status) = update.command_status {
+            row.command_status = Some(status);
+        }
+        if let Some(stat) = update.dlr_stat.clone() {
+            row.dlr_stat = Some(stat);
+        }
+        if let Some(err) = update.dlr_err.clone() {
+            row.dlr_err = Some(err);
+        }
+        if let Some(instant) = update.sent_at {
+            row.sent_at = Some(instant);
+        }
+        if let Some(instant) = update.resp_at {
+            row.resp_at = Some(instant);
+        }
+        if let Some(instant) = update.dlr_at {
+            row.dlr_at = Some(instant);
+        }
+        if let Some(attempt) = update.attempt {
+            row.attempts = row.attempts.max(attempt);
+        }
+    }
+}
+
+impl MessageRepository for Journal {
+    async fn insert_message(&self, message: &Message) -> Result<(), MessageStoreError> {
+        if let Some(failure) = self.failure.clone() {
+            return Err(failure);
+        }
+
+        let mut state = self.inner.lock().await;
+
+        if state
+            .rows
+            .iter()
+            .any(|row| row.client_message_id == message.client_message_id)
+        {
+            return Err(MessageStoreError::Conflict);
+        }
+
+        if let Some(witness) = self.witness.as_ref() {
+            state.submissions_at_insert = Some(witness());
+        }
+
+        state.events.push(JournalEvent::Inserted(message.state));
+        state.rows.push(message.clone());
+
+        Ok(())
+    }
+
+    async fn insert_messages(&self, messages: &[Message]) -> Result<u64, MessageStoreError> {
+        for message in messages {
+            self.insert_message(message).await?;
+        }
+
+        Ok(messages.len() as u64)
+    }
+
+    async fn find_message(
+        &self,
+        client_message_id: ClientMessageId,
+    ) -> Result<Option<Message>, MessageStoreError> {
+        Ok(self.row(client_message_id).await)
+    }
+
+    async fn find_message_by_smsc_id(
+        &self,
+        smsc_message_id: &str,
+    ) -> Result<Option<Message>, MessageStoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .rows
+            .iter()
+            .find(|row| row.smsc_message_id.as_deref() == Some(smsc_message_id))
+            .cloned())
+    }
+
+    async fn update_state(&self, update: &MessageStateUpdate) -> Result<(), MessageStoreError> {
+        self.update_states(core::slice::from_ref(update))
+            .await
+            .map(|_| ())
+    }
+
+    async fn update_states(
+        &self,
+        updates: &[MessageStateUpdate],
+    ) -> Result<u64, MessageStoreError> {
+        if let Some(failure) = self.failure.clone() {
+            return Err(failure);
+        }
+
+        let mut state = self.inner.lock().await;
+
+        // All-or-nothing, like the transaction it stands in for: a missing
+        // message rolls the whole batch back.
+        if updates.iter().any(|update| {
+            !state
+                .rows
+                .iter()
+                .any(|row| row.client_message_id == update.client_message_id)
+        }) {
+            return Err(MessageStoreError::NotFound);
+        }
+
+        for update in updates {
+            if let Some(row) = state
+                .rows
+                .iter_mut()
+                .find(|row| row.client_message_id == update.client_message_id)
+            {
+                Journal::apply(row, update);
+            }
+        }
+
+        state.events.push(JournalEvent::Transitioned(
+            updates.iter().map(|update| update.state).collect(),
+        ));
+
+        Ok(updates.len() as u64)
+    }
+}
+
+/// A clock that never moves.
+///
+/// CLAUDE.md §7: injected, so `created_at` and `sent_at` are values a test can
+/// assert on rather than a window it has to tolerate.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FrozenClock(Timestamp);
+
+impl FrozenClock {
+    /// A clock stopped at `text`, an RFC 3339 instant.
+    pub(crate) fn at(text: &str) -> Self {
+        Self(Timestamp::parse(text).expect("the fixture instant is valid RFC 3339"))
+    }
+
+    /// The instant it reports.
+    pub(crate) const fn instant(self) -> Timestamp {
+        self.0
+    }
+}
+
+impl Clock for FrozenClock {
+    fn now(&self) -> Timestamp {
+        self.0
+    }
+}
+
+/// A session whose `submit` never returns, and says so first.
+///
+/// The instrument CA-006-03 needs. "A brutal stop between the persistence and
+/// the emission" is a moment, not a state, and the only way to stop the world
+/// exactly there is to suspend the send at its first `.await` past the insert
+/// and abort the task that owns it. Aborting a Tokio task at a suspension
+/// point is as close to killing the process as a test can get without a second
+/// process.
+pub(crate) struct HangingSession {
+    session_id: smpp_core::types::SessionId,
+    reached: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
+impl HangingSession {
+    /// A hanging session, and the receiver that fires when `submit` is reached.
+    pub(crate) fn new() -> (Self, tokio::sync::mpsc::UnboundedReceiver<()>) {
+        let (reached, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        (
+            Self {
+                session_id: smpp_core::types::SessionId::new(),
+                reached,
+            },
+            receiver,
+        )
+    }
+}
+
+impl messaging::ports::SmscSession for HangingSession {
+    fn session_id(&self) -> smpp_core::types::SessionId {
+        self.session_id
+    }
+
+    fn gsm7_packing(&self) -> smpp_core::values::Gsm7BitPacking {
+        smpp_core::values::Gsm7BitPacking::Unpacked
+    }
+
+    fn gsm7_charset(&self) -> smpp_core::values::Gsm7BitCharset {
+        smpp_core::values::Gsm7BitCharset::Gsm0338
+    }
+
+    async fn submit(
+        &self,
+        _pdu: smpp_core::codec::Pdu,
+    ) -> Result<smpp_core::codec::Command, messaging::ports::SubmitError> {
+        let _ignored = self.reached.send(());
+
+        core::future::pending().await
+    }
+}

@@ -33,6 +33,9 @@ pub mod reconnect;
 pub mod registry;
 pub mod state;
 
+#[cfg(feature = "test-support")]
+pub mod testing;
+
 pub use actors::transport::{self as transport, TcpTransport, Transport};
 pub use actors::{spawn, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS};
 pub use error::{ProfileRejection, SessionError};

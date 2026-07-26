@@ -2139,7 +2139,9 @@ dependencies = [
  "criterion",
  "proptest",
  "smpp-core",
+ "smpp-session",
  "thiserror 2.0.19",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -3475,6 +3477,7 @@ dependencies = [
  "rand 0.9.5",
  "rate-control",
  "smpp-core",
+ "smpp-session",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",

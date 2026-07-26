@@ -48,6 +48,30 @@ pub(crate) const CONCATENATION_UDH_OCTETS: usize = ConcatenatedShortMessage8Bit:
 /// table, a carriage return.
 const CARRIAGE_RETURN_SEPTET: u8 = 0x0D;
 
+/// The `esm_class` of an ordinary mobile-terminated message: all bits clear.
+///
+/// # Why not `EsmClass::default()`
+///
+/// Because it is not zero. `rusmpp` derives `Default` field by field, and the
+/// default of its `ansi41_specific` field is
+/// `ShortMessageContainsDeliveryAcknowledgement` — bit 3. So
+/// `u8::from(EsmClass::default())` is `0x08`, and every plain `submit_sm` this
+/// crate produced was announcing itself as an **ANSI-41 delivery
+/// acknowledgement** rather than as a message.
+///
+/// Spec §7.3 wants `esm_class = 0` for a default store-and-forward message.
+/// The bug was invisible in unit tests written as "the UDHI bit is set, so the
+/// octet is not zero" — which was true for the wrong reason, since the octet
+/// was never zero. It surfaced against the message centre double, on the one
+/// case where the value is supposed to be exactly zero: `sar` mode, where the
+/// concatenation travels in TLVs and the body carries no header.
+///
+/// `EsmClass::from(0)` builds the value from the octet rather than from four
+/// independent field defaults, so it cannot drift again.
+fn plain_esm_class() -> EsmClass {
+    EsmClass::from(0_u8)
+}
+
 /// How the parts of a long message announce that they belong together.
 ///
 /// A characteristic of the message centre, configured per session or per
@@ -512,9 +536,9 @@ pub fn segment(
         units.write(start..end, header_octets, packing, &mut body);
 
         let esm_class = if header.is_some() {
-            EsmClass::default().with_udhi_indicator()
+            plain_esm_class().with_udhi_indicator()
         } else {
-            EsmClass::default()
+            plain_esm_class()
         };
 
         let sar = (concatenated && mode == SegmentationMode::Sar).then_some(SarParameters {
@@ -950,13 +974,62 @@ mod tests {
                 encoding,
                 gsm_packing: Gsm7BitPacking::Unpacked,
                 gsm_charset: Gsm7BitCharset::Gsm0338,
-                esm_class: EsmClass::default(),
+                esm_class: plain_esm_class(),
                 header_octets,
                 content_units,
                 body: SegmentBody::ShortMessage(octets),
                 sar: None,
             }
         }
+    }
+
+    /// **The regression.** `EsmClass::default()` is `0x08`, not `0` — its
+    /// `ansi41_specific` field defaults to "short message contains delivery
+    /// acknowledgement". A plain message announcing that is a message a
+    /// message centre may route as an acknowledgement, or refuse.
+    ///
+    /// Asserted as an exact octet rather than as "not zero": the older shape
+    /// of this check passed on the buggy value.
+    #[test]
+    fn an_ordinary_segment_carries_an_esm_class_of_exactly_zero() {
+        let split = segment(
+            "Bonjour",
+            &SegmentationOptions::default(),
+            ConcatenationReference::new(1),
+        )
+        .expect("encodes");
+
+        assert_eq!(u8::from(split.segments()[0].esm_class()), 0x00);
+        // And the value `rusmpp` would have handed us is not zero, which is
+        // what makes the line above worth writing.
+        assert_eq!(u8::from(EsmClass::default()), 0x08);
+    }
+
+    /// A concatenated segment sets the UDHI bit and **only** the UDHI bit.
+    #[test]
+    fn a_concatenated_segment_carries_the_udhi_bit_alone() {
+        let split = segment(
+            &"a".repeat(400),
+            &SegmentationOptions::default(),
+            ConcatenationReference::new(1),
+        )
+        .expect("encodes");
+
+        assert_eq!(u8::from(split.segments()[0].esm_class()), 0x40);
+    }
+
+    /// In `sar` mode nothing is prepended to the body, so the octet stays at
+    /// zero even for a concatenated message.
+    #[test]
+    fn a_sar_segment_carries_no_esm_class_bit_at_all() {
+        let split = segment(
+            &"a".repeat(400),
+            &SegmentationOptions::default().with_mode(SegmentationMode::Sar),
+            ConcatenationReference::new(1),
+        )
+        .expect("encodes");
+
+        assert_eq!(u8::from(split.segments()[0].esm_class()), 0x00);
     }
 
     /// CA-004-05, read from the receiving end: a body whose last septet is an
