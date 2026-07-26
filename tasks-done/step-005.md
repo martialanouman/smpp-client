@@ -1,6 +1,6 @@
 # Jalon 005 — Session SMPP unique : acteurs, bind, keep-alive et reconnexion
 
-> **Statut :** À faire · **Dépend de :** step-002, step-003 · **Réf. spec :** §7.9, §8.2, §8.3 · **Exigences :** EF-CNX-01, EF-CNX-02, EF-CNX-04, EF-CNX-05, EF-CNX-06
+> **Statut :** Terminé (2026-07-26) — 11 critères sur 12 ; CA-005-12 relève du processus de fusion · **Dépend de :** step-002, step-003 · **Réf. spec :** §7.9, §8.2, §8.3 · **Exigences :** EF-CNX-01, EF-CNX-02, EF-CNX-04, EF-CNX-05, EF-CNX-06
 
 ## 1. Objectif
 
@@ -48,17 +48,17 @@ Ce jalon introduit la concurrence réelle du projet. Le modèle d'acteurs — un
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-005-01** — Un bind TRX réussi fait passer l'état à `BOUND` et l'affiche dans l'UI en moins d'une seconde après la réponse.
-- [ ] **CA-005-02** — Les trois types de bind (TX, RX, TRX) fonctionnent et refusent les opérations incompatibles (émettre sur une session RX retourne une erreur typée, sans panic).
-- [ ] **CA-005-03** — Un bind rejeté avec `ESME_RINVPASWD` remonte une erreur explicite à l'UI et **ne déclenche aucune tentative de reconnexion** (vérifié par test : zéro nouvelle connexion pendant 3× le back-off minimal).
-- [ ] **CA-005-04** — `enquire_link` est émis à l'intervalle configuré (±10 %) ; l'absence de `enquire_link_resp` au-delà du seuil fait transiter la session vers `RECONNECT`.
-- [ ] **CA-005-05** — Une coupure TCP brutale déclenche une reconnexion avec back-off exponentiel **et jitter** : test vérifiant que les intervalles croissent, restent bornés par `max_backoff_s`, et ne sont pas tous identiques.
-- [ ] **CA-005-06** — Une réponse qui n'arrive jamais libère son entrée de la table de corrélation après `response_timeout` : la table revient à zéro entrée, aucune fuite mémoire sur 10 000 requêtes expirées.
-- [ ] **CA-005-07** — Un PDU inattendu ou malformé ne tue pas la session : `generic_nack` est émis si nécessaire, l'incident est journalisé, la session reste `BOUND`.
-- [ ] **CA-005-08** — La fermeture de l'application émet `unbind`, attend `unbind_resp` (borné par un timeout) et ferme proprement ; aucune tâche ne survit (test : toutes les `JoinHandle` sont terminées).
-- [ ] **CA-005-09** — Aucun `.await` n'est effectué en tenant un `std::sync::Mutex` ; revue de code explicite + `rg "std::sync::Mutex" crates/smpp-session` justifié ligne à ligne.
-- [ ] **CA-005-10** — Une seule tâche accède au socket : le `Framed` n'est ni clonable ni partagé (garanti par le type, vérifié en revue).
-- [ ] **CA-005-11** — Aucun mot de passe n'apparaît dans les traces, y compris au niveau `trace` : test qui capture la sortie `tracing` pendant un bind et cherche le secret.
+- [x] **CA-005-01** — Un bind TRX réussi fait passer l'état à `BOUND` et l'affiche dans l'UI en moins d'une seconde après la réponse.
+- [x] **CA-005-02** — Les trois types de bind (TX, RX, TRX) fonctionnent et refusent les opérations incompatibles (émettre sur une session RX retourne une erreur typée, sans panic).
+- [x] **CA-005-03** — Un bind rejeté avec `ESME_RINVPASWD` remonte une erreur explicite à l'UI et **ne déclenche aucune tentative de reconnexion** (vérifié par test : zéro nouvelle connexion pendant 3× le back-off minimal).
+- [x] **CA-005-04** — `enquire_link` est émis à l'intervalle configuré (±10 %) ; l'absence de `enquire_link_resp` au-delà du seuil fait transiter la session vers `RECONNECT`.
+- [x] **CA-005-05** — Une coupure TCP brutale déclenche une reconnexion avec back-off exponentiel **et jitter** : test vérifiant que les intervalles croissent, restent bornés par `max_backoff_s`, et ne sont pas tous identiques.
+- [x] **CA-005-06** — Une réponse qui n'arrive jamais libère son entrée de la table de corrélation après `response_timeout` : la table revient à zéro entrée, aucune fuite mémoire sur 10 000 requêtes expirées.
+- [x] **CA-005-07** — Un PDU inattendu ou malformé ne tue pas la session : `generic_nack` est émis si nécessaire, l'incident est journalisé, la session reste `BOUND`.
+- [x] **CA-005-08** — La fermeture de l'application émet `unbind`, attend `unbind_resp` (borné par un timeout) et ferme proprement ; aucune tâche ne survit (test : toutes les `JoinHandle` sont terminées).
+- [x] **CA-005-09** — Aucun `.await` n'est effectué en tenant un `std::sync::Mutex` ; revue de code explicite + `rg "std::sync::Mutex" crates/smpp-session` justifié ligne à ligne.
+- [x] **CA-005-10** — Une seule tâche accède au socket : le `Framed` n'est ni clonable ni partagé (garanti par le type, vérifié en revue).
+- [x] **CA-005-11** — Aucun mot de passe n'apparaît dans les traces, y compris au niveau `trace` : test qui capture la sortie `tracing` pendant un bind et cherche le secret.
 - [ ] **CA-005-12** — Deux approbations requises pour la fusion (cœur protocolaire, guide §16.2).
 
 ## 5. Tests attendus
