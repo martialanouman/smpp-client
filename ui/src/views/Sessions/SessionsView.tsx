@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { SessionMetrics } from "../../components/SessionMetrics";
 import { onSessionsState } from "../../ipc";
 import type { SessionProfileDto, SessionStatusDto } from "../../ipc";
+import { useMetrics } from "../../store/metrics";
 import { usePreferences } from "../../store/preferences";
 import { blankProfile, useSessions } from "../../store/sessions";
+import { useMetricsFeed } from "../../store/useMetricsFeed";
 import { ProfileForm } from "./ProfileForm";
 
 /** The state a profile with no live session is in. */
@@ -51,6 +54,11 @@ function SessionRow({ profile, status }: RowProps) {
   const state = status?.state ?? CLOSED;
   const live = state !== CLOSED && state !== "UNBOUND" && state !== "ERROR";
 
+  // Selected per session, so a tick for one session repaints one row rather
+  // than the whole list four times a second (ENF-PERF-03).
+  const tick = useMetrics((metrics) => metrics.latest[sessionId]);
+  const history = useMetrics((metrics) => metrics.history[sessionId]);
+
   return (
     <li className="rounded-md border border-[var(--shinobi-border)] p-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -78,6 +86,15 @@ function SessionRow({ profile, status }: RowProps) {
 
       {status?.lastError ? (
         <p className="mt-1 font-mono text-xs opacity-70">{status.lastError}</p>
+      ) : null}
+
+      {/* Only while the session is live. A gauge left on screen after an
+          unbind would keep showing the last reading it ever got, which reads
+          as "still sending" on a session that is closed. */}
+      {live && tick ? (
+        <div className="mt-3 border-t border-[var(--shinobi-border)] pt-3">
+          <SessionMetrics tick={tick} history={history} />
+        </div>
       ) : null}
 
       <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -163,6 +180,8 @@ export function SessionsView() {
   const adopt = useSessions((state) => state.adopt);
   const notify = usePreferences((state) => state.notify);
   const [creating, setCreating] = useState(false);
+
+  useMetricsFeed();
 
   useEffect(() => {
     void refresh();

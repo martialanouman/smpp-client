@@ -41,6 +41,7 @@ struct SessionProfileRow {
     tls_config: Option<String>,
     window_size: i64,
     throughput_tps: i64,
+    min_tps: i64,
     enquire_link_s: i64,
     response_timeout_s: i64,
     reconnect_config: Option<String>,
@@ -67,6 +68,7 @@ impl SessionProfileRow {
             tls_config: self.tls_config,
             window_size: read_u32(self.window_size, TABLE, "window_size")?,
             throughput_tps: read_u32(self.throughput_tps, TABLE, "throughput_tps")?,
+            min_tps: read_u32(self.min_tps, TABLE, "min_tps")?,
             enquire_link_s: read_u32(self.enquire_link_s, TABLE, "enquire_link_s")?,
             response_timeout_s: read_u32(self.response_timeout_s, TABLE, "response_timeout_s")?,
             reconnect_config: self.reconnect_config,
@@ -90,6 +92,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
         let interface_version = store_interface_version(profile.interface_version);
         let window_size = store_u32(profile.window_size);
         let throughput_tps = store_u32(profile.throughput_tps);
+        let min_tps = store_u32(profile.min_tps);
         let enquire_link_s = store_u32(profile.enquire_link_s);
         let response_timeout_s = store_u32(profile.response_timeout_s);
         let bind_count = store_u32(profile.bind_count);
@@ -106,10 +109,10 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             r#"INSERT INTO session_profiles (
                    session_id, name, host, port, bind_type, interface_version,
                    system_id, password_enc, system_type, tls_config,
-                   window_size, throughput_tps, enquire_link_s, response_timeout_s,
+                   window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
                    reconnect_config, gsm7_packing, gsm7_charset,
                    bind_count, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (session_id) DO UPDATE SET
                    name = excluded.name,
                    host = excluded.host,
@@ -122,6 +125,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
                    tls_config = excluded.tls_config,
                    window_size = excluded.window_size,
                    throughput_tps = excluded.throughput_tps,
+                   min_tps = excluded.min_tps,
                    enquire_link_s = excluded.enquire_link_s,
                    response_timeout_s = excluded.response_timeout_s,
                    reconnect_config = excluded.reconnect_config,
@@ -141,6 +145,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             profile.tls_config,
             window_size,
             throughput_tps,
+            min_tps,
             enquire_link_s,
             response_timeout_s,
             profile.reconnect_config,
@@ -166,7 +171,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             SessionProfileRow,
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
-                      window_size, throughput_tps, enquire_link_s, response_timeout_s,
+                      window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
                       reconnect_config, gsm7_packing, gsm7_charset,
                       bind_count, created_at, updated_at
                FROM session_profiles
@@ -184,7 +189,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             SessionProfileRow,
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
-                      window_size, throughput_tps, enquire_link_s, response_timeout_s,
+                      window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
                       reconnect_config, gsm7_packing, gsm7_charset,
                       bind_count, created_at, updated_at
                FROM session_profiles

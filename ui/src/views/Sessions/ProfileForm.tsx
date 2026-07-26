@@ -179,6 +179,24 @@ export function ProfileForm({ initial, onDone }: ProfileFormProps) {
           />
         </Field>
 
+        <Field label={t("sessions.field.throughputTps")}>
+          <input
+            type="number"
+            value={draft.throughputTps}
+            onChange={(event) => number("throughputTps")(event.target.value)}
+            className={CONTROL}
+          />
+        </Field>
+
+        <Field label={t("sessions.field.minTps")}>
+          <input
+            type="number"
+            value={draft.minTps}
+            onChange={(event) => number("minTps")(event.target.value)}
+            className={CONTROL}
+          />
+        </Field>
+
         <Field label={t("sessions.field.minBackoffS")}>
           <input
             type="number"
@@ -225,6 +243,8 @@ export function ProfileForm({ initial, onDone }: ProfileFormProps) {
           </select>
         </Field>
       </div>
+
+      <p className="text-xs opacity-70">{t("sessions.throughputHint")}</p>
 
       <p className="text-xs opacity-70">{t("sessions.gsm7Hint")}</p>
 

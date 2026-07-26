@@ -163,6 +163,7 @@ export const commands = {
 export const events = {
 	errorNotify: makeEvent<ErrorNotify>("error:notify"),
 	messageUpdate: makeEvent<MessageUpdate>("message:update"),
+	metricsTick: makeEvent<MetricsTick>("metrics:tick"),
 	sessionsState: makeEvent<SessionsState>("sessions:state"),
 };
 
@@ -510,6 +511,60 @@ export type MessageUpdate = {
 	state: string,
 };
 
+/**
+ *  Payload of `metrics:tick` — one session's live figures (spec §18.1).
+ * 
+ *  Every counter crosses as a `u32` rather than a `u64`. The bridge carries
+ *  JSON, `JSON.stringify` throws on a `BigInt`, and the alternative — a
+ *  64-bit integer as a string — would make the interface parse a number it
+ *  only ever displays. Four billion submissions on one session is past what
+ *  any campaign reaches; the conversion saturates rather than wrapping, so the
+ *  worst case is a counter that stops climbing instead of one that resets.
+ */
+export type MetricsTick = {
+	/**  Which session these figures belong to. */
+	sessionId: string,
+	/**  Submissions per second over the last second (spec §9.6). */
+	tps1s: number | null,
+	/**  Submissions per second over the last ten seconds. */
+	tps10s: number | null,
+	/**  Submissions per second since the session was first bound. */
+	tpsAverage: number | null,
+	/**  The highest one-second rate ever reached on this session. */
+	tpsPeak: number | null,
+	/**
+	 *  The configured target. Zero means unlimited — the gauge then has no
+	 *  scale and the interface shows a figure rather than a bar.
+	 */
+	targetTps: number,
+	/**  Slots the send window has in total (spec §9.2). */
+	windowSize: number,
+	/**  Slots occupied right now. */
+	windowInUse: number,
+	/**  The two above as a fraction, in `0.0..=1.0`. */
+	windowOccupancy: number | null,
+	/**  Mean round-trip time of the recent responses, in milliseconds. */
+	rttMs: number | null,
+	/**  How many times the session has reconnected. */
+	reconnects: number,
+	/**  How long the session has been bound, in seconds. */
+	uptimeS: number,
+	/**  Submissions handed to the writer. */
+	submitted: number,
+	/**  Submissions the message centre accepted. */
+	accepted: number,
+	/**  Submissions it refused. */
+	rejected: number,
+	/**  Submissions that never got an answer. */
+	timedOut: number,
+	/**  Responses carrying a throttling status (spec §9.4). */
+	throttled: number,
+	/**  Whether submissions are held back by a throttling penalty right now. */
+	backingOff: boolean,
+	/**  The adaptive factor in force, in per mille. 1 000 until milestone 012. */
+	adaptivePermille: number,
+};
+
 /**  Numbering plan indicator, as spec §7.4 tabulates it. */
 export type NpiDto = 
 /**  `0` — unknown. */
@@ -630,8 +685,15 @@ export type SessionProfileDto = {
 	systemType: string,
 	/**  Unacknowledged PDUs allowed in flight (spec §9.2). */
 	windowSize: number,
-	/**  Target throughput, in messages per second (spec §9.5). */
+	/**
+	 *  Target throughput, in messages per second (spec §9.5).
+	 * 
+	 *  Zero means unlimited, and it is also the ceiling of the adaptive band
+	 *  of spec §9.4 — the `max_tps` that section names is this value.
+	 */
 	throughputTps: number,
+	/**  Floor of the adaptive throughput band (spec §9.4, §9.5). */
+	minTps: number,
 	/**  `enquire_link` period, in seconds. Zero disables the keep-alive. */
 	enquireLinkS: number,
 	/**  How long a response may take before its request is abandoned. */

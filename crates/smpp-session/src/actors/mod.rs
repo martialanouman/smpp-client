@@ -210,7 +210,7 @@ pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transpor
     let token = CancellationToken::new();
 
     let gate = SendGate::new(
-        ThroughputConfig::at(profile.throughput_tps()),
+        ThroughputConfig::at(profile.throughput_tps()).with_min_tps(profile.min_tps()),
         window_size,
         Arc::clone(&metrics),
     );

@@ -177,7 +177,12 @@ pub(crate) struct SessionProfileDto {
     /// Unacknowledged PDUs allowed in flight (spec §9.2).
     pub(crate) window_size: u32,
     /// Target throughput, in messages per second (spec §9.5).
+    ///
+    /// Zero means unlimited, and it is also the ceiling of the adaptive band
+    /// of spec §9.4 — the `max_tps` that section names is this value.
     pub(crate) throughput_tps: u32,
+    /// Floor of the adaptive throughput band (spec §9.4, §9.5).
+    pub(crate) min_tps: u32,
     /// `enquire_link` period, in seconds. Zero disables the keep-alive.
     pub(crate) enquire_link_s: u32,
     /// How long a response may take before its request is abandoned.
@@ -224,6 +229,7 @@ impl SessionProfileDto {
             .system_type(&self.system_type)
             .window_size(self.window_size)
             .throughput_tps(self.throughput_tps)
+            .min_tps(self.min_tps)
             .enquire_link_s(self.enquire_link_s)
             .response_timeout_s(self.response_timeout_s)
             .reconnect(reconnect)
@@ -250,6 +256,7 @@ impl From<&SessionProfile> for SessionProfileDto {
             system_type: profile.system_type().to_owned(),
             window_size: profile.window_size(),
             throughput_tps: profile.throughput_tps(),
+            min_tps: profile.min_tps(),
             enquire_link_s: seconds(profile.enquire_link_interval()),
             response_timeout_s: seconds(profile.response_timeout()),
             reconnect_enabled: reconnect.is_enabled(),
@@ -615,6 +622,7 @@ mod tests {
             system_type: String::new(),
             window_size: 50,
             throughput_tps: 100,
+            min_tps: 1,
             enquire_link_s: 30,
             response_timeout_s: 10,
             reconnect_enabled: true,
@@ -702,6 +710,23 @@ mod tests {
             ..a_dto()
         };
         assert!(contradictory.parse().is_err());
+
+        // Spec §9.4 — the floor of the adaptive band may not sit above its
+        // ceiling: the clamp would have nowhere to land.
+        let inverted = SessionProfileDto {
+            throughput_tps: 10,
+            min_tps: 50,
+            ..a_dto()
+        };
+        assert!(inverted.parse().is_err());
+
+        // Unlimited has no ceiling for the floor to be above.
+        let unlimited = SessionProfileDto {
+            throughput_tps: 0,
+            min_tps: 50,
+            ..a_dto()
+        };
+        assert!(unlimited.parse().is_ok());
 
         // ADR 0009 §7 — the alt-charset cannot be packed.
         let impossible = SessionProfileDto {

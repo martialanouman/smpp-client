@@ -164,6 +164,7 @@ export function blankProfile(): SessionProfileDto {
     systemType: "",
     windowSize: 50,
     throughputTps: 100,
+    minTps: 1,
     enquireLinkS: 30,
     responseTimeoutS: 10,
     reconnectEnabled: true,

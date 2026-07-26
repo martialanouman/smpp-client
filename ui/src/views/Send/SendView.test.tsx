@@ -39,6 +39,7 @@ function aProfile(sessionId: string): SessionProfileDto {
     systemId: "esme01",
     systemType: "",
     windowSize: 50,
+    minTps: 0,
     throughputTps: 100,
     enquireLinkS: 30,
     responseTimeoutS: 10,
