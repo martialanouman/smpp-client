@@ -21,6 +21,7 @@
 mod error;
 mod pending;
 
+pub mod profile;
 pub mod reconnect;
 pub mod state;
 
