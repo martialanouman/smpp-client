@@ -1,6 +1,42 @@
 {
   "app": {
     "name": "ShinobiSMPP",
-    "placeholder": "Application shell in place. The interface lands in milestone 001."
+    "tagline": "SMPP ESME client"
+  },
+  "nav": {
+    "label": "Main navigation",
+    "dashboard": "Dashboard",
+    "sessions": "Sessions",
+    "send": "Send",
+    "contacts": "Contacts",
+    "numbers": "Generator",
+    "logs": "Logs",
+    "stats": "Statistics",
+    "settings": "Settings"
+  },
+  "screen": {
+    "dashboard": "Overview of sessions and throughput.",
+    "sessions": "SMSC connections, bind and supervision.",
+    "send": "Single messages and campaigns.",
+    "contacts": "Import, E.164 validation and lists.",
+    "numbers": "Country-aware phone number generation.",
+    "logs": "Message log and delivery receipts.",
+    "stats": "Sending and delivery statistics.",
+    "settings": "Language, theme, logging and retention."
+  },
+  "settings": {
+    "language": "Language",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System"
+  },
+  "empty": {
+    "title": "Screen to come",
+    "body": "This screen is a placeholder: its implementation lands in a later milestone."
+  },
+  "notification": {
+    "region": "Notifications",
+    "dismiss": "Dismiss notification"
   }
 }

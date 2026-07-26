@@ -1,6 +1,42 @@
 {
   "app": {
     "name": "ShinobiSMPP",
-    "placeholder": "Socle applicatif en place. L'interface arrive au jalon 001."
+    "tagline": "Client ESME SMPP"
+  },
+  "nav": {
+    "label": "Navigation principale",
+    "dashboard": "Tableau de bord",
+    "sessions": "Sessions",
+    "send": "Envoi",
+    "contacts": "Contacts",
+    "numbers": "Générateur",
+    "logs": "Journaux",
+    "stats": "Statistiques",
+    "settings": "Réglages"
+  },
+  "screen": {
+    "dashboard": "Vue d'ensemble des sessions et du débit.",
+    "sessions": "Connexions aux SMSC, bind et supervision.",
+    "send": "Envoi unitaire et campagnes.",
+    "contacts": "Import, validation E.164 et listes.",
+    "numbers": "Génération de numéros valides par pays.",
+    "logs": "Journal des messages et des accusés de réception.",
+    "stats": "Statistiques d'envoi et de livraison.",
+    "settings": "Langue, thème, journalisation et rétention."
+  },
+  "settings": {
+    "language": "Langue",
+    "theme": "Thème",
+    "themeLight": "Clair",
+    "themeDark": "Sombre",
+    "themeSystem": "Système"
+  },
+  "empty": {
+    "title": "Écran à venir",
+    "body": "Cet écran est un emplacement réservé : sa mise en œuvre arrive à un jalon ultérieur."
+  },
+  "notification": {
+    "region": "Notifications",
+    "dismiss": "Fermer la notification"
   }
 }
