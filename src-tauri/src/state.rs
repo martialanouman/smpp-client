@@ -4,6 +4,7 @@
 //! force, and the event emitter. Milestone 002 onwards will add the handles of
 //! the services (`SessionRegistry`, repositories) — never their implementation.
 
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
@@ -13,7 +14,7 @@ use crate::events::EventEmitter;
 #[derive(Debug)]
 pub(crate) struct AppState {
     /// Reader and writer of `config.json`.
-    store: ConfigStore,
+    store: Arc<ConfigStore>,
     /// The preferences currently in force.
     ///
     /// `tokio::sync::RwLock`, not `std::sync::RwLock`: the commands are async
@@ -27,7 +28,7 @@ impl AppState {
     /// Builds the state from a store and the preferences read at startup.
     pub(crate) fn new(store: ConfigStore, settings: AppConfig) -> Self {
         Self {
-            store,
+            store: Arc::new(store),
             settings: RwLock::new(settings),
             events: EventEmitter::default(),
         }
@@ -57,7 +58,24 @@ impl AppState {
         // calls cannot interleave "write A, write B, adopt B, adopt A".
         let mut current = self.settings.write().await;
 
-        self.store.save(&settings)?;
+        // The write goes to `spawn_blocking`: `create_dir_all` and `write` are
+        // blocking syscalls, and CLAUDE.md §4 forbids blocking the runtime.
+        // Two hundred bytes on a local disk return instantly — but a config
+        // directory on a network home, which is ordinary in a company, parks
+        // the worker serving the command, and every command scheduled on that
+        // worker waits behind it.
+        //
+        // Holding the `tokio::sync::RwLock` guard across the await is safe and
+        // intended: it is what keeps two concurrent writes from interleaving.
+        // A `std::sync::RwLock` here would be a bug, which is why `clippy.toml`
+        // bans that type outright.
+        let store = Arc::clone(&self.store);
+        let to_write = settings;
+
+        tauri::async_runtime::spawn_blocking(move || store.save(&to_write))
+            .await
+            .map_err(|error| ConfigError::Unwritable(std::io::Error::other(error)))??;
+
         *current = settings;
 
         Ok(settings)
