@@ -70,6 +70,17 @@ impl DatabaseConfig {
     }
 }
 
+/// One entry of the SQLite catalogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaObject {
+    /// `table`, `index`, `view` or `trigger`.
+    pub kind: String,
+    /// Name of the object.
+    pub name: String,
+    /// Table it belongs to; for a table, its own name.
+    pub table: String,
+}
+
 /// An open database: a connection pool with the schema already migrated.
 ///
 /// Cloning shares the same pool — `SqlitePool` is an `Arc` internally — so a
@@ -169,6 +180,38 @@ impl Database {
             .await?;
 
         Ok(enabled != 0)
+    }
+
+    /// Lists the tables and indexes the file actually holds.
+    ///
+    /// Part of the integrated diagnostics of spec §18.3, and the only way an
+    /// integration test can check the schema without reaching for SQL of its
+    /// own — which CA-002-03 rules out. SQLite's own bookkeeping objects
+    /// (`sqlite_sequence`, the automatic indexes behind a primary key) are
+    /// filtered out: they are not part of what the migrations declare.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Database`] if the catalogue cannot be read.
+    pub async fn schema_objects(&self) -> Result<Vec<SchemaObject>, PersistenceError> {
+        let rows = sqlx::query!(
+            r#"SELECT type AS "kind!: String", name AS "name!: String",
+                      tbl_name AS "table_name!: String"
+               FROM sqlite_master
+               WHERE name NOT LIKE 'sqlite_%'
+               ORDER BY type, name"#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| SchemaObject {
+                kind: row.kind,
+                name: row.name,
+                table: row.table_name,
+            })
+            .collect())
     }
 
     /// Closes the pool, waiting for in-flight statements to finish.

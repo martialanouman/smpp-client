@@ -37,7 +37,7 @@ mod records;
 mod repositories;
 mod time;
 
-pub use db::{Database, DatabaseConfig};
+pub use db::{Database, DatabaseConfig, SchemaObject};
 pub use error::PersistenceError;
 pub use records::{
     BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, ListId,

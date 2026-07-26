@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT type AS \"kind!: String\", name AS \"name!: String\",\n                      tbl_name AS \"table_name!: String\"\n               FROM sqlite_master\n               WHERE name NOT LIKE 'sqlite_%'\n               ORDER BY type, name",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sqlite_master",
+            "name": "type"
+          }
+        }
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sqlite_master",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "table_name!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sqlite_master",
+            "name": "tbl_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8ab870c943f909927d547af7d9cdae0bbf12880e3f5cf12ebd3a9eda051a38b0"
+}
