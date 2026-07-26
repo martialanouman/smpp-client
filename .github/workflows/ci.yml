@@ -119,7 +119,21 @@ jobs:
         run: cargo test --doc --workspace
 
       # --- Step 8: migrations ---
-      # Active from milestone 002, same ratchet pattern as step 4.
+      # Active since milestone 002: `migrations/` holds SQL, so the ratchet in
+      # check-migrations.sh applies it to a fresh database, re-applies it to
+      # check idempotence and the recorded checksums, and compares the `.sqlx`
+      # offline cache against the resulting schema.
+      #
+      # `sqlx-cli` is what the script needs and refuses to run without. Same
+      # installer as nextest and cargo-deny above, for one mental model; it
+      # resolves sqlx-cli through its cargo-binstall fallback, which may build
+      # it from source on a runner with no prebuilt artefact. That cost is
+      # accepted rather than pinning a hand-rolled `cargo install`, whose
+      # binary the rust-cache action does not keep either.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli
+
       - name: Migrations
         shell: bash
         run: bash scripts/check-migrations.sh

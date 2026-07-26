@@ -39,4 +39,24 @@ echo "→ Applying migrations to a fresh database: $database"
 sqlx database create
 sqlx migrate run
 
-echo "✓ Migrations applied cleanly to a pristine database."
+# Second run, on the database the first one just built. Two things are checked
+# here that the first run cannot:
+#   · idempotence — the migrator runs on every application start, so a second
+#     run must be a no-op rather than an error;
+#   · immutability — sqlx compares the checksum of every applied migration
+#     against the file on disk, and refuses a shipped migration that was
+#     edited (guide §11.2). `tests/migrations.rs` pins the same hashes for the
+#     case this one cannot see: an edit made before anything was ever applied.
+echo "→ Re-applying to check idempotence and the recorded checksums"
+sqlx migrate run
+sqlx migrate info
+
+# The compile-time checked queries build from `.sqlx/` when no DATABASE_URL is
+# set, which is how CI compiles offline. A cache that no longer matches the
+# schema still compiles — it just describes columns that have moved. This is
+# the "assumed debt" of ADR 0002, and this is where it is paid: the cache is
+# regenerated against the database built above and compared.
+echo "→ Checking the offline query cache against the fresh schema"
+cargo sqlx prepare --check --workspace -- --all-targets
+
+echo "✓ Migrations applied cleanly to a pristine database, and .sqlx is in sync."
