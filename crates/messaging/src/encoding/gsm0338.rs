@@ -21,6 +21,8 @@
 //! orphan code to the other; [`Self::septet_cost`](septet_cost) exists so the
 //! planner can treat the pair as indivisible.
 
+use smpp_core::values::Gsm7BitCharset;
+
 use crate::encoding::{error::EncodingError, Encoding};
 
 /// The escape septet that introduces an extension-table character.
@@ -189,20 +191,55 @@ pub(crate) fn sequence_of(character: char) -> Option<Sequence> {
     Some(Sequence::Base(base))
 }
 
+/// The sequence for `character` under the session's alt-charset setting.
+///
+/// Under [`Gsm7BitCharset::Gsm0338`] this is [`sequence_of`] verbatim: the
+/// octets *are* alphabet positions.
+///
+/// Under [`Gsm7BitCharset::Latin1`] the message centre transcodes, so the
+/// octet is the character's ISO-8859-1 code point instead — `@` becomes `0x40`
+/// rather than `0x00`. Two kinds of character drop out of the alphabet there,
+/// and both refusals are deliberate:
+///
+/// * the ten characters of the **extension table** (`€ { } [ ] ~ \ | ^` and
+///   form feed). They exist in ISO-8859-1 as single octets, but the message
+///   centre expands them into the two-septet escape pair on the way out — so
+///   one character would occupy one octet here and two septets there. The
+///   segment budget is counted in septets while the body is sliced in octets,
+///   and letting the two disagree is how a segment silently overflows on the
+///   delivery leg. Refusing keeps one character worth exactly one of each.
+/// * the ten **Greek capitals** of the base table (`Δ Φ Γ Λ Ω Π Ψ Σ Θ Ξ`),
+///   which have no ISO-8859-1 code point at all.
+///
+/// A text containing either is refused rather than mangled. The operator's
+/// ways out are to leave the session on [`Gsm7BitCharset::Gsm0338`], or to
+/// force UCS2 for that message.
+pub(crate) fn sequence_in(character: char, charset: Gsm7BitCharset) -> Option<Sequence> {
+    match charset {
+        Gsm7BitCharset::Gsm0338 => sequence_of(character),
+        Gsm7BitCharset::Latin1 => match sequence_of(character)? {
+            Sequence::Base(_) => u8::try_from(u32::from(character)).ok().map(Sequence::Base),
+            Sequence::Extended(_) => None,
+        },
+    }
+}
+
 /// Septets `character` costs, or `None` when GSM 7-bit cannot write it.
 ///
 /// The whole point of CA-004-02: `€` answers 2, and so does every other
-/// extension-table character.
-pub(crate) fn septet_cost(character: char) -> Option<usize> {
-    sequence_of(character).map(Sequence::septets)
+/// extension-table character — under [`Gsm7BitCharset::Gsm0338`]. Under the
+/// alt-charset reading nothing ever costs two, because everything that would
+/// is not representable at all; see [`sequence_in`].
+pub(crate) fn septet_cost(character: char, charset: Gsm7BitCharset) -> Option<usize> {
+    sequence_in(character, charset).map(Sequence::septets)
 }
 
 /// Whether every character of `text` belongs to the alphabet.
 ///
 /// Step 1 of the encoding algorithm in spec §7.5. An empty text qualifies.
-pub(crate) fn is_representable(text: &str) -> bool {
+pub(crate) fn is_representable(text: &str, charset: Gsm7BitCharset) -> bool {
     text.chars()
-        .all(|character| sequence_of(character).is_some())
+        .all(|character| sequence_in(character, charset).is_some())
 }
 
 /// Appends the septet sequence of `text` to `septets`, one octet per septet.
@@ -221,9 +258,13 @@ pub(crate) fn is_representable(text: &str) -> bool {
 /// [`EncodingError::UnrepresentableCharacter`] on the first character outside
 /// the alphabet, with its position in characters. `septets` is left in an
 /// unspecified state.
-pub(crate) fn encode_into(text: &str, septets: &mut Vec<u8>) -> Result<(), EncodingError> {
+pub(crate) fn encode_into(
+    text: &str,
+    charset: Gsm7BitCharset,
+    septets: &mut Vec<u8>,
+) -> Result<(), EncodingError> {
     for (index, character) in text.chars().enumerate() {
-        match sequence_of(character) {
+        match sequence_in(character, charset) {
             Some(Sequence::Base(code)) => septets.push(code),
             Some(Sequence::Extended(code)) => {
                 septets.push(ESCAPE);
@@ -248,7 +289,14 @@ pub(crate) fn encode_into(text: &str, septets: &mut Vec<u8>) -> Result<(), Encod
 /// extension table does not list falls back to the base-table character, and a
 /// trailing escape with nothing after it is dropped. Neither can come out of
 /// [`encode_into`]; both can come off the wire.
-pub(crate) fn decode(septets: &[u8]) -> String {
+pub(crate) fn decode(septets: &[u8], charset: Gsm7BitCharset) -> String {
+    if matches!(charset, Gsm7BitCharset::Latin1) {
+        // Alt-charset octets are ISO-8859-1 code points, which are the first
+        // 256 code points of Unicode. No escape mechanism is involved: under
+        // this reading `sequence_in` refuses everything that would need one.
+        return septets.iter().map(|&octet| char::from(octet)).collect();
+    }
+
     let mut text = String::with_capacity(septets.len());
     let mut septets = septets.iter().copied();
 
@@ -415,8 +463,15 @@ pub(crate) fn unpack(
 /// septet cannot exceed `0x7F`, so such a body was not written by an unpacked
 /// encoder — most likely it is packed, and decoding it here would produce
 /// silent gibberish.
-pub(crate) fn read_unpacked(octets: &[u8], sequence_number: u8) -> Result<Vec<u8>, EncodingError> {
-    if octets.iter().any(|octet| octet & 0x80 != 0) {
+/// Under [`Gsm7BitCharset::Latin1`] the check does not apply: the octets are
+/// ISO-8859-1 code points, and `é` is `0xE9`. A high bit there is data, not a
+/// symptom.
+pub(crate) fn read_unpacked(
+    octets: &[u8],
+    charset: Gsm7BitCharset,
+    sequence_number: u8,
+) -> Result<Vec<u8>, EncodingError> {
+    if matches!(charset, Gsm7BitCharset::Gsm0338) && octets.iter().any(|octet| octet & 0x80 != 0) {
         return Err(EncodingError::MalformedUserData {
             sequence_number,
             encoding: Encoding::Gsm7Bit,
@@ -431,11 +486,22 @@ pub(crate) fn read_unpacked(octets: &[u8], sequence_number: u8) -> Result<Vec<u8
 mod tests {
     use super::*;
 
+    /// The default reading — the octets *are* alphabet positions.
+    const GSM: Gsm7BitCharset = Gsm7BitCharset::Gsm0338;
+
+    /// The alt-charset reading — the octets are ISO-8859-1 code points.
+    const ALT: Gsm7BitCharset = Gsm7BitCharset::Latin1;
+
     /// [`encode_into`] into a fresh vector, for readability in the assertions.
     fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
+        encode_in(text, GSM)
+    }
+
+    /// [`encode`] under an explicit charset.
+    fn encode_in(text: &str, charset: Gsm7BitCharset) -> Result<Vec<u8>, EncodingError> {
         let mut septets = Vec::new();
 
-        encode_into(text, &mut septets)?;
+        encode_into(text, charset, &mut septets)?;
 
         Ok(septets)
     }
@@ -456,7 +522,7 @@ mod tests {
                 Some(Sequence::Base(code)),
                 "base table entry {code:#04X} ({character:?})"
             );
-            assert_eq!(decode(&[code]), character.to_string());
+            assert_eq!(decode(&[code], GSM), character.to_string());
         }
     }
 
@@ -469,8 +535,8 @@ mod tests {
                 Some(Sequence::Extended(code)),
                 "extension table entry {code:#04X} ({character:?})"
             );
-            assert_eq!(septet_cost(character), Some(2));
-            assert_eq!(decode(&[ESCAPE, code]), character.to_string());
+            assert_eq!(septet_cost(character, GSM), Some(2));
+            assert_eq!(decode(&[ESCAPE, code], GSM), character.to_string());
         }
     }
 
@@ -507,13 +573,13 @@ mod tests {
     #[test]
     fn the_escape_code_point_is_not_a_character() {
         assert_eq!(sequence_of('\u{001B}'), None);
-        assert!(!is_representable("\u{001B}"));
+        assert!(!is_representable("\u{001B}", GSM));
     }
 
     /// The euro sign is the canonical trap of spec §7.5.
     #[test]
     fn the_euro_sign_costs_two_septets() {
-        assert_eq!(septet_cost('€'), Some(2));
+        assert_eq!(septet_cost('€', GSM), Some(2));
         assert_eq!(encode("€"), Ok(vec![ESCAPE, 0x65]));
     }
 
@@ -670,10 +736,10 @@ mod tests {
     #[test]
     fn an_unpacked_body_is_its_own_septet_sequence() {
         assert_eq!(
-            read_unpacked(&[0x41, 0x42, 0x00], 1),
+            read_unpacked(&[0x41, 0x42, 0x00], GSM, 1),
             Ok(vec![0x41, 0x42, 0x00])
         );
-        assert_eq!(read_unpacked(&[], 1), Ok(Vec::new()));
+        assert_eq!(read_unpacked(&[], GSM, 1), Ok(Vec::new()));
     }
 
     /// An octet above 0x7F cannot be a septet. Refusing it is what turns
@@ -681,7 +747,7 @@ mod tests {
     #[test]
     fn an_unpacked_body_rejects_an_octet_above_a_septet() {
         assert!(matches!(
-            read_unpacked(&[0x41, 0xE8], 4),
+            read_unpacked(&[0x41, 0xE8], GSM, 4),
             Err(EncodingError::MalformedUserData {
                 sequence_number: 4,
                 ..
@@ -703,17 +769,181 @@ mod tests {
     #[test]
     fn an_unknown_escape_sequence_falls_back_to_the_base_table() {
         // 0x41 has no extension entry; the base table holds 'A' there.
-        assert_eq!(decode(&[ESCAPE, 0x41]), "A");
+        assert_eq!(decode(&[ESCAPE, 0x41], GSM), "A");
         // A doubled escape has no meaning at all.
-        assert_eq!(decode(&[ESCAPE, ESCAPE]), " ");
+        assert_eq!(decode(&[ESCAPE, ESCAPE], GSM), " ");
         // A trailing escape escapes nothing.
-        assert_eq!(decode(&[b'A', ESCAPE]), "A");
+        assert_eq!(decode(&[b'A', ESCAPE], GSM), "A");
     }
 
     #[test]
     fn an_empty_text_encodes_to_nothing() {
         assert_eq!(encode(""), Ok(Vec::new()));
-        assert_eq!(decode(&[]), "");
-        assert!(is_representable(""));
+        assert_eq!(decode(&[], GSM), "");
+        assert!(is_representable("", GSM));
+    }
+
+    // --- The alt-charset (ADR 0009) ----------------------------------------
+    //
+    // Everything below is written on `@ £ $ €` and the accented letters, and
+    // never on plain ASCII. That is not a stylistic choice: ASCII is exactly
+    // the set the two readings agree on, so an ASCII test passes under both
+    // and proves nothing at all. These characters are the whole of the
+    // difference, and they are also the whole of what a French, Spanish or
+    // German message is made of.
+
+    /// The divergence, character by character, in both directions at once.
+    #[test]
+    fn the_two_charsets_write_the_same_character_as_different_octets() {
+        // (character, GSM 03.38 position, ISO-8859-1 code point)
+        for (character, gsm, latin1) in [
+            ('@', 0x00_u8, 0x40_u8),
+            ('£', 0x01, 0xA3),
+            ('$', 0x02, 0x24),
+            ('¥', 0x03, 0xA5),
+            ('è', 0x04, 0xE8),
+            ('é', 0x05, 0xE9),
+            ('ù', 0x06, 0xF9),
+            ('ì', 0x07, 0xEC),
+            ('ò', 0x08, 0xF2),
+            ('Ç', 0x09, 0xC7),
+            ('Ø', 0x0B, 0xD8),
+            ('Å', 0x0E, 0xC5),
+            ('Æ', 0x1C, 0xC6),
+            ('ß', 0x1E, 0xDF),
+            ('É', 0x1F, 0xC9),
+            ('¤', 0x24, 0xA4),
+            ('¡', 0x40, 0xA1),
+            ('Ä', 0x5B, 0xC4),
+            ('Ö', 0x5C, 0xD6),
+            ('Ñ', 0x5D, 0xD1),
+            ('Ü', 0x5E, 0xDC),
+            ('§', 0x5F, 0xA7),
+            ('¿', 0x60, 0xBF),
+            ('ä', 0x7B, 0xE4),
+            ('ö', 0x7C, 0xF6),
+            ('ñ', 0x7D, 0xF1),
+            ('ü', 0x7E, 0xFC),
+            ('à', 0x7F, 0xE0),
+        ] {
+            let text = character.to_string();
+
+            assert_eq!(
+                encode_in(&text, GSM),
+                Ok(vec![gsm]),
+                "{character:?} under GSM 03.38"
+            );
+            assert_eq!(
+                encode_in(&text, ALT),
+                Ok(vec![latin1]),
+                "{character:?} under the alt-charset"
+            );
+            assert_ne!(gsm, latin1, "{character:?} would not tell the two apart");
+        }
+    }
+
+    /// The trap itself, stated as a test: an ASCII message is byte-identical
+    /// under both readings. Any suite written on such a message is blind to
+    /// the whole question.
+    #[test]
+    fn a_pure_ascii_text_is_identical_under_both_charsets() {
+        let text = "Your code is 4821. Reply STOP to opt out.";
+
+        assert_eq!(encode_in(text, GSM), encode_in(text, ALT));
+    }
+
+    /// `€` is the extension-table character, and it has no ISO-8859-1 code
+    /// point at all. Under the alt-charset it is refused rather than written
+    /// as something the message centre would transcode into a different
+    /// character.
+    #[test]
+    fn the_euro_sign_is_an_escape_pair_under_gsm_and_refused_under_the_alt_charset() {
+        assert_eq!(encode_in("€", GSM), Ok(vec![ESCAPE, 0x65]));
+        assert_eq!(septet_cost('€', GSM), Some(2));
+
+        assert_eq!(
+            encode_in("€", ALT),
+            Err(EncodingError::UnrepresentableCharacter {
+                character: '€',
+                index: 0,
+                encoding: Encoding::Gsm7Bit,
+            })
+        );
+        assert_eq!(septet_cost('€', ALT), None);
+        assert!(!is_representable("10 €", ALT));
+    }
+
+    /// The rest of the extension table is refused too, and for the reason
+    /// spelled out on [`sequence_in`]: one octet here would become two septets
+    /// on the delivery leg, and the segment budget counts septets.
+    #[test]
+    fn the_extension_table_is_out_of_reach_under_the_alt_charset() {
+        for character in ['^', '{', '}', '[', ']', '~', '\\', '|', '\u{000C}'] {
+            let text = character.to_string();
+
+            assert_eq!(
+                septet_cost(character, GSM),
+                Some(2),
+                "{character:?} costs two septets under GSM 03.38"
+            );
+            assert_eq!(
+                septet_cost(character, ALT),
+                None,
+                "{character:?} must be refused under the alt-charset"
+            );
+            assert!(encode_in(&text, ALT).is_err());
+        }
+    }
+
+    /// The Greek capitals of the base table have no ISO-8859-1 code point
+    /// either. They are the *other* half of what the alt-charset gives up.
+    #[test]
+    fn the_greek_capitals_are_out_of_reach_under_the_alt_charset() {
+        for character in ['Δ', 'Φ', 'Γ', 'Λ', 'Ω', 'Π', 'Ψ', 'Σ', 'Θ', 'Ξ'] {
+            assert!(septet_cost(character, GSM).is_some());
+            assert_eq!(septet_cost(character, ALT), None);
+        }
+    }
+
+    /// Under the alt-charset every representable character is exactly one
+    /// septet and one octet. That equality is what keeps the segment budget —
+    /// counted in septets — honest while the body is sliced in octets.
+    #[test]
+    fn every_alt_charset_character_costs_exactly_one_unit() {
+        for &character in &BASE_TABLE {
+            let Some(cost) = septet_cost(character, ALT) else {
+                continue;
+            };
+
+            assert_eq!(cost, 1, "{character:?} costs {cost} under the alt-charset");
+            assert_eq!(
+                encode_in(&character.to_string(), ALT).map(|octets| octets.len()),
+                Ok(1)
+            );
+        }
+    }
+
+    #[test]
+    fn an_alt_charset_body_reads_back_as_the_text_that_produced_it() {
+        let text = "Café à 3£ — non: Café à 3£";
+        // The em dash is not in ISO-8859-1; keep the assertion on what is.
+        let text = text.replace(" — non:", "");
+
+        let octets = encode_in(&text, ALT).expect("every character is in both alphabets");
+
+        assert_eq!(decode(&octets, ALT), text);
+        assert_ne!(
+            decode(&octets, GSM),
+            text,
+            "reading alt-charset octets as GSM positions must not look right"
+        );
+    }
+
+    /// An unpacked body carrying `é` has its high bit set. Refusing it as "not
+    /// a septet" is right under GSM 03.38 and wrong under the alt-charset.
+    #[test]
+    fn a_high_octet_is_a_symptom_under_gsm_and_data_under_the_alt_charset() {
+        assert!(read_unpacked(&[0xE9], GSM, 1).is_err());
+        assert_eq!(read_unpacked(&[0xE9], ALT, 1), Ok(vec![0xE9]));
     }
 }

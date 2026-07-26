@@ -35,7 +35,7 @@ use smpp_core::{
 use crate::encoding::{
     gsm0338, latin1,
     preview::{concatenated_filler, octets_for, plan, Placement, MAX_SEGMENTS},
-    ucs2, Encoding, EncodingChoice, EncodingError, Gsm7BitPacking,
+    ucs2, Encoding, EncodingChoice, EncodingError, Gsm7BitCharset, Gsm7BitPacking,
 };
 
 /// Octets a concatenation UDH takes out of the body.
@@ -103,6 +103,9 @@ pub struct SegmentationOptions {
     pub mode: SegmentationMode,
     /// How GSM 7-bit septets sit in the octets of `short_message`.
     pub gsm_packing: Gsm7BitPacking,
+    /// What those octets *mean* — GSM 03.38 positions, or ISO-8859-1 code
+    /// points the message centre transcodes (ADR 0009).
+    pub gsm_charset: Gsm7BitCharset,
 }
 
 impl SegmentationOptions {
@@ -126,6 +129,14 @@ impl SegmentationOptions {
     #[must_use]
     pub const fn with_gsm_packing(mut self, gsm_packing: Gsm7BitPacking) -> Self {
         self.gsm_packing = gsm_packing;
+
+        self
+    }
+
+    /// The same options with another reading of the GSM 7-bit octets.
+    #[must_use]
+    pub const fn with_gsm_charset(mut self, gsm_charset: Gsm7BitCharset) -> Self {
+        self.gsm_charset = gsm_charset;
 
         self
     }
@@ -268,6 +279,7 @@ pub struct Segment {
     total_segments: u8,
     encoding: Encoding,
     gsm_packing: Gsm7BitPacking,
+    gsm_charset: Gsm7BitCharset,
     esm_class: EsmClass,
     header_octets: usize,
     content_units: usize,
@@ -318,6 +330,16 @@ impl Segment {
     #[must_use]
     pub const fn gsm_packing(&self) -> Gsm7BitPacking {
         self.gsm_packing
+    }
+
+    /// What the octets of the body mean. GSM 7-bit only (ADR 0009).
+    ///
+    /// Carried on the segment rather than looked up again at reassembly time:
+    /// the two readings agree on every ASCII character, so a segment decoded
+    /// under the wrong one comes back looking almost right.
+    #[must_use]
+    pub const fn gsm_charset(&self) -> Gsm7BitCharset {
+        self.gsm_charset
     }
 
     /// Encoding units of user data — septets, UTF-16 code units or octets,
@@ -446,7 +468,7 @@ pub fn segment(
     let cuts = cut_offsets(text, encoding, layout.budget, layout.segments, options)?;
     let concatenated = layout.segments > 1;
 
-    let units = EncodedUnits::encode(text, encoding, layout.total_units)?;
+    let units = EncodedUnits::encode(text, encoding, options.gsm_charset, layout.total_units)?;
     let mut segments = Vec::with_capacity(layout.segments);
 
     for index in 0..layout.segments {
@@ -512,6 +534,7 @@ pub fn segment(
             total_segments,
             encoding,
             gsm_packing: packing,
+            gsm_charset: options.gsm_charset,
             esm_class,
             header_octets,
             content_units,
@@ -629,7 +652,7 @@ fn decode_segment(segment: &Segment) -> Result<String, EncodingError> {
         Encoding::Gsm7Bit => {
             let septets = match segment.gsm_packing {
                 Gsm7BitPacking::Unpacked => {
-                    gsm0338::read_unpacked(user_data, segment.sequence_number)?
+                    gsm0338::read_unpacked(user_data, segment.gsm_charset, segment.sequence_number)?
                 }
                 Gsm7BitPacking::Packed => {
                     let fill_bits = gsm0338::fill_bits_after(segment.header_octets);
@@ -660,7 +683,7 @@ fn decode_segment(segment: &Segment) -> Result<String, EncodingError> {
                 });
             }
 
-            Ok(gsm0338::decode(&septets))
+            Ok(gsm0338::decode(&septets, segment.gsm_charset))
         }
         Encoding::Latin1 => Ok(latin1::decode(user_data)),
         Encoding::Ucs2 => {
@@ -696,14 +719,13 @@ fn cut_offsets(
     for (index, character) in text.chars().enumerate() {
         // The planner already proved every character representable; raising
         // the error rather than defaulting to zero keeps that a fact.
-        let cost =
-            encoding
-                .unit_cost(character)
-                .ok_or(EncodingError::UnrepresentableCharacter {
-                    character,
-                    index,
-                    encoding,
-                })?;
+        let cost = encoding
+            .unit_cost_in(character, options.gsm_charset)
+            .ok_or(EncodingError::UnrepresentableCharacter {
+                character,
+                index,
+                encoding,
+            })?;
 
         if let Placement::Opened { rewound } = filler.accept(cost) {
             offsets.push(offset - rewound);
@@ -734,11 +756,16 @@ impl EncodedUnits {
     ///
     /// The planner already counted the units, so the buffer is allocated once
     /// at its final size and never grows (CA-004-10).
-    fn encode(text: &str, encoding: Encoding, units: usize) -> Result<Self, EncodingError> {
+    fn encode(
+        text: &str,
+        encoding: Encoding,
+        charset: Gsm7BitCharset,
+        units: usize,
+    ) -> Result<Self, EncodingError> {
         Ok(match encoding {
             Encoding::Gsm7Bit => {
                 let mut septets = Vec::with_capacity(units);
-                gsm0338::encode_into(text, &mut septets)?;
+                gsm0338::encode_into(text, charset, &mut septets)?;
 
                 Self::Septets(septets)
             }
@@ -922,6 +949,7 @@ mod tests {
                 total_segments: 1,
                 encoding,
                 gsm_packing: Gsm7BitPacking::Unpacked,
+                gsm_charset: Gsm7BitCharset::Gsm0338,
                 esm_class: EsmClass::default(),
                 header_octets,
                 content_units,

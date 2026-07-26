@@ -105,20 +105,40 @@ impl Encoding {
     }
 
     /// Units `character` costs, or `None` when this encoding cannot write it.
+    ///
+    /// Reads GSM 7-bit under [`Gsm7BitCharset::Gsm0338`], the default. Use
+    /// [`Self::unit_cost_in`] for a session that sets the alt-charset.
     #[must_use]
     pub fn unit_cost(self, character: char) -> Option<usize> {
+        self.unit_cost_in(character, Gsm7BitCharset::Gsm0338)
+    }
+
+    /// Units `character` costs under a given GSM 7-bit charset reading.
+    ///
+    /// `charset` is ignored for Latin-1 and UCS2: it only describes how the
+    /// octets of a GSM 7-bit body are to be read.
+    #[must_use]
+    pub fn unit_cost_in(self, character: char, charset: Gsm7BitCharset) -> Option<usize> {
         match self {
-            Self::Gsm7Bit => gsm0338::septet_cost(character),
+            Self::Gsm7Bit => gsm0338::septet_cost(character, charset),
             Self::Latin1 => latin1::octet_cost(character),
             Self::Ucs2 => Some(ucs2::code_unit_cost(character)),
         }
     }
 
     /// Whether every character of `text` can be written in this encoding.
+    ///
+    /// Reads GSM 7-bit under [`Gsm7BitCharset::Gsm0338`], the default.
     #[must_use]
     pub fn can_represent(self, text: &str) -> bool {
+        self.can_represent_in(text, Gsm7BitCharset::Gsm0338)
+    }
+
+    /// Whether every character of `text` fits under a given charset reading.
+    #[must_use]
+    pub fn can_represent_in(self, text: &str, charset: Gsm7BitCharset) -> bool {
         match self {
-            Self::Gsm7Bit => gsm0338::is_representable(text),
+            Self::Gsm7Bit => gsm0338::is_representable(text, charset),
             Self::Latin1 => latin1::is_representable(text),
             Self::Ucs2 => true,
         }
@@ -227,7 +247,19 @@ pub enum EncodingChoice {
 /// own — it represents strictly less than UCS2 for the same 140 octets.
 #[must_use]
 pub fn detect(text: &str) -> Encoding {
-    if gsm0338::is_representable(text) {
+    detect_in(text, Gsm7BitCharset::Gsm0338)
+}
+
+/// The encoding [`EncodingChoice::Automatic`] picks under a charset reading.
+///
+/// The charset is what the *session* declares, and it narrows the GSM
+/// alphabet: under [`Gsm7BitCharset::Latin1`] a text holding `€` or a Greek
+/// capital is no longer GSM-representable, so detection widens it to UCS2
+/// instead of producing octets the message centre would transcode into
+/// something else.
+#[must_use]
+pub fn detect_in(text: &str, charset: Gsm7BitCharset) -> Encoding {
+    if gsm0338::is_representable(text, charset) {
         Encoding::Gsm7Bit
     } else {
         Encoding::Ucs2
@@ -241,14 +273,29 @@ pub fn detect(text: &str) -> Encoding {
 /// [`EncodingError::UnrepresentableCharacter`] when a forced encoding cannot
 /// write some character. Never fails on [`EncodingChoice::Automatic`].
 pub fn resolve(choice: EncodingChoice, text: &str) -> Result<Encoding, EncodingError> {
+    resolve_in(choice, text, Gsm7BitCharset::Gsm0338)
+}
+
+/// Settles [`EncodingChoice`] against `text` under a charset reading.
+///
+/// # Errors
+///
+/// [`EncodingError::UnrepresentableCharacter`] when a forced encoding cannot
+/// write some character. Never fails on [`EncodingChoice::Automatic`], which
+/// widens to UCS2 rather than refusing.
+pub fn resolve_in(
+    choice: EncodingChoice,
+    text: &str,
+    charset: Gsm7BitCharset,
+) -> Result<Encoding, EncodingError> {
     let EncodingChoice::Forced(encoding) = choice else {
-        return Ok(detect(text));
+        return Ok(detect_in(text, charset));
     };
 
     if let Some((index, character)) = text
         .chars()
         .enumerate()
-        .find(|(_, character)| encoding.unit_cost(*character).is_none())
+        .find(|(_, character)| encoding.unit_cost_in(*character, charset).is_none())
     {
         return Err(EncodingError::UnrepresentableCharacter {
             character,

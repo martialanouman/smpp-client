@@ -12,7 +12,7 @@
 use messaging::{
     encoding::{
         preview::{preview, MAX_MESSAGE_PAYLOAD_OCTETS},
-        Encoding, EncodingChoice, EncodingError, Gsm7BitPacking,
+        Encoding, EncodingChoice, EncodingError, Gsm7BitCharset, Gsm7BitPacking,
     },
     segmentation::{
         reassemble, segment, ConcatenationReference, SegmentationMode, SegmentationOptions,
@@ -772,5 +772,121 @@ fn the_segment_budget_is_the_same_in_both_layouts() {
 
         let split = segment(&"a".repeat(161), &options, REFERENCE).unwrap();
         assert_eq!(units_per_segment(&split), vec![153, 8], "{gsm_packing:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The alt-charset — ADR 0009, the debt milestone 004 left open
+// ---------------------------------------------------------------------------
+
+fn alt_charset(mode: SegmentationMode) -> SegmentationOptions {
+    options(mode).with_gsm_charset(Gsm7BitCharset::Latin1)
+}
+
+/// The whole difference, end to end. Written on `@ £ $` and an accented
+/// letter on purpose: those are the only characters the two readings disagree
+/// on, and a test written on ASCII passes under both while proving nothing.
+#[test]
+fn a_segment_carries_gsm_positions_or_latin1_code_points_depending_on_the_session() {
+    let text = "@£$é";
+
+    let gsm = segment(text, &options(SegmentationMode::Udh), REFERENCE).unwrap();
+    assert_eq!(
+        gsm.segments()[0].short_message().unwrap(),
+        &[0x00, 0x01, 0x02, 0x05]
+    );
+
+    let alt = segment(text, &alt_charset(SegmentationMode::Udh), REFERENCE).unwrap();
+    assert_eq!(
+        alt.segments()[0].short_message().unwrap(),
+        &[0x40, 0xA3, 0x24, 0xE9]
+    );
+
+    // Both are GSM 7-bit as far as the PDU is concerned: `data_coding` is 0x00
+    // either way, which is exactly why nothing on the wire reveals a mistake.
+    assert_eq!(gsm.encoding(), Encoding::Gsm7Bit);
+    assert_eq!(alt.encoding(), Encoding::Gsm7Bit);
+    assert_eq!(
+        gsm.segments()[0].data_coding(),
+        alt.segments()[0].data_coding()
+    );
+}
+
+#[test]
+fn an_ascii_message_is_byte_identical_under_both_charsets() {
+    let text = "Your code is 4821";
+
+    let gsm = segment(text, &options(SegmentationMode::Udh), REFERENCE).unwrap();
+    let alt = segment(text, &alt_charset(SegmentationMode::Udh), REFERENCE).unwrap();
+
+    assert_eq!(
+        gsm.segments()[0].short_message(),
+        alt.segments()[0].short_message(),
+        "ASCII is the blind spot: this equality is the trap, stated"
+    );
+}
+
+/// Each segment remembers the reading it was written under, so reassembly
+/// cannot silently apply the other one.
+#[test]
+fn an_alt_charset_message_reassembles_into_the_text_that_produced_it() {
+    let text = "Cafe a 3£ ".repeat(30);
+
+    let message = segment(&text, &alt_charset(SegmentationMode::Udh), REFERENCE).unwrap();
+
+    assert!(message.segments().len() > 1);
+    assert_eq!(reassemble(message.segments()), Ok(text));
+}
+
+/// `€` has no ISO-8859-1 code point. Under the alt-charset the automatic
+/// choice widens to UCS2 rather than writing an octet the message centre would
+/// transcode into something else.
+#[test]
+fn the_euro_sign_widens_an_alt_charset_message_to_ucs2() {
+    let text = "Total : 10€";
+
+    assert_eq!(
+        segment(text, &options(SegmentationMode::Udh), REFERENCE)
+            .unwrap()
+            .encoding(),
+        Encoding::Gsm7Bit
+    );
+    assert_eq!(
+        segment(text, &alt_charset(SegmentationMode::Udh), REFERENCE)
+            .unwrap()
+            .encoding(),
+        Encoding::Ucs2
+    );
+}
+
+/// Forcing GSM 7-bit on a text the alt-charset cannot write is an error, not a
+/// silent widening — the rule CA-004-04 states for the other encodings.
+#[test]
+fn a_forced_gsm_encoding_is_refused_when_the_alt_charset_cannot_write_the_text() {
+    let options =
+        alt_charset(SegmentationMode::Udh).with_encoding(EncodingChoice::Forced(Encoding::Gsm7Bit));
+
+    assert_eq!(
+        segment("10€", &options, REFERENCE),
+        Err(EncodingError::UnrepresentableCharacter {
+            character: '€',
+            index: 2,
+            encoding: Encoding::Gsm7Bit,
+        })
+    );
+}
+
+/// The segment budget is stated in septets and does not move: the alt-charset
+/// changes what the octets mean, not how much fits.
+#[test]
+fn the_segment_budget_is_the_same_under_both_charsets() {
+    for charset in [Gsm7BitCharset::Gsm0338, Gsm7BitCharset::Latin1] {
+        let options = options(SegmentationMode::Udh).with_gsm_charset(charset);
+
+        let single = segment(&"a".repeat(160), &options, REFERENCE).unwrap();
+        assert_eq!(units_per_segment(&single), vec![160], "{charset:?}");
+
+        let split = segment(&"a".repeat(161), &options, REFERENCE).unwrap();
+        assert_eq!(units_per_segment(&split), vec![153, 8], "{charset:?}");
     }
 }
