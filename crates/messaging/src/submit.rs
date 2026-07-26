@@ -52,6 +52,15 @@ const MAX_SERVICE_TYPE: usize = 5;
 /// Exact length of an absolute or relative SMPP time, `YYMMDDhhmmsstnnp`.
 pub const SMPP_TIME_LENGTH: usize = 16;
 
+/// Highest `priority_flag` spec §7.3 defines.
+///
+/// The field is an octet, so a wider value is representable; `0` to `3` is
+/// what GSM defines and what a message centre accepts. The bound lives here
+/// rather than in the interface because CLAUDE.md §3 treats the WebView as
+/// untrusted — a hand-crafted `invoke` carrying `200` must be refused by the
+/// same code the form goes through.
+pub const MAX_PRIORITY_FLAG: u8 = 3;
+
 /// Why a `submit_sm` could not be built.
 ///
 /// Every variant names a field. None carries its value: a message body is
@@ -87,6 +96,13 @@ pub enum SubmitBuildError {
     TlvValueTooLong {
         /// The ceiling, so the interface can show it.
         maximum: usize,
+    },
+
+    /// `priority_flag` is outside the range spec §7.3 defines.
+    #[error("priority_flag holds a value between 0 and {maximum}")]
+    PriorityOutOfRange {
+        /// The ceiling, so the interface can show it.
+        maximum: u8,
     },
 }
 
@@ -243,6 +259,12 @@ pub fn build_submit_sm(
     options: &SubmitOptions,
     segment: &Segment,
 ) -> Result<SubmitSm, SubmitBuildError> {
+    if u8::from(options.priority_flag) > MAX_PRIORITY_FLAG {
+        return Err(SubmitBuildError::PriorityOutOfRange {
+            maximum: MAX_PRIORITY_FLAG,
+        });
+    }
+
     let (source_field, source_ton, source_npi) = match options.source.as_ref() {
         Some(source) => (source.to_field()?, source.ton(), source.npi()),
         // An empty `source_addr` is legal and means "message centre, use your
@@ -351,7 +373,7 @@ fn smpp_time(
 mod tests {
     use super::{
         build_submit_sm, default_registered_delivery, CustomTlv, SubmitBuildError, SubmitOptions,
-        SMPP_TIME_LENGTH,
+        MAX_PRIORITY_FLAG, SMPP_TIME_LENGTH,
     };
     use crate::addressing::{Destination, SourceAddress};
     use crate::segmentation::{
@@ -382,7 +404,7 @@ mod tests {
         let mut typed = options().with_source(SourceAddress::parse("ShinobiSMS").expect("valid"));
         typed.service_type = String::from("CMT");
         typed.protocol_id = 0x42;
-        typed.priority_flag = PriorityFlag::from(3);
+        typed.priority_flag = PriorityFlag::from(MAX_PRIORITY_FLAG);
         typed.schedule_delivery_time = String::from(time);
         typed.validity_period = String::from(time);
         typed.replace_if_present_flag = ReplaceIfPresentFlag::Replace;
@@ -514,6 +536,40 @@ mod tests {
         );
     }
 
+    /// The WebView is untrusted: a `priority_flag` the form would have clamped
+    /// is refused here too, and by the code every caller goes through.
+    #[test]
+    fn a_priority_outside_the_specification_range_is_refused() {
+        let mut typed = options();
+        typed.priority_flag = PriorityFlag::from(4);
+
+        assert_eq!(
+            build_submit_sm(
+                &typed,
+                &one_segment("Bonjour", &SegmentationOptions::default())
+            )
+            .expect_err("out of range"),
+            SubmitBuildError::PriorityOutOfRange {
+                maximum: MAX_PRIORITY_FLAG
+            }
+        );
+
+        // And the whole legal range is accepted.
+        for level in 0..=MAX_PRIORITY_FLAG {
+            let mut typed = options();
+            typed.priority_flag = PriorityFlag::from(level);
+
+            assert!(
+                build_submit_sm(
+                    &typed,
+                    &one_segment("Bonjour", &SegmentationOptions::default())
+                )
+                .is_ok(),
+                "priority {level} was refused"
+            );
+        }
+    }
+
     #[test]
     fn a_service_type_longer_than_the_field_is_refused() {
         let mut typed = options();
@@ -577,6 +633,10 @@ mod tests {
 
         assert_eq!(pdu.data_coding, first.data_coding());
         assert_eq!(pdu.esm_class, first.esm_class());
-        assert_ne!(u8::from(pdu.esm_class), 0, "the UDHI bit must be set");
+        // The exact octet, not "not zero". `assert_ne!(…, 0)` is the shape
+        // that let `EsmClass::default()` — which is `0x08`, an ANSI-41
+        // delivery acknowledgement — pass for three milestones, because the
+        // octet was never zero to begin with. `0x40` is the UDHI bit alone.
+        assert_eq!(u8::from(pdu.esm_class), 0x40);
     }
 }

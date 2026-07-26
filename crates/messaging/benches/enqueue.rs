@@ -50,7 +50,7 @@ const BODIES: [(&str, usize); 4] = [
     ("1-segment", 100),
     ("3-segments", 400),
     ("7-segments", 1_000),
-    ("unicode-3-segments", 150),
+    ("ucs2-3-segments", 150),
 ];
 
 /// The options an ordinary send carries: a sender ID, a recipient, no TLV.
@@ -71,10 +71,16 @@ fn options_with_tlvs() -> SubmitOptions {
 
 /// The body of `size` characters for `name`.
 fn body(name: &str, size: usize) -> String {
-    if name.starts_with("unicode") {
-        // UCS2, so the budget per segment halves and the encoder walks code
-        // units rather than septets.
-        "é".repeat(size)
+    if name.starts_with("ucs2") {
+        // A character GSM 7-bit genuinely cannot write, so `detect` settles on
+        // UCS2 and the per-segment budget halves — 150 of these are three
+        // segments.
+        //
+        // NOT `é`: it sits at position 0x05 of the GSM 03.38 base table, so
+        // this case used to be encoded as GSM 7-bit in ONE segment. The name
+        // said unicode, the comment said UCS2, and the UCS2 path was never
+        // measured at all.
+        "你".repeat(size)
     } else {
         "a".repeat(size)
     }

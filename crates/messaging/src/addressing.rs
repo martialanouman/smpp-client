@@ -266,9 +266,26 @@ impl SourceAddress {
     ///
     /// Same as [`Self::parse`].
     pub fn parse_with(raw: &str, ton: Ton, npi: Npi) -> Result<Self, AddressError> {
-        let parsed = Self::parse(raw)?;
+        Ok(Self::parse(raw)?.with_ton(ton).with_npi(npi))
+    }
 
-        Ok(Self { ton, npi, ..parsed })
+    /// The same address announced under another type of number.
+    ///
+    /// Separate from [`Self::with_npi`] so a caller can override **one** of the
+    /// two. The interface offers them as two independent selectors, and
+    /// requiring both to be set before either is honoured means silently
+    /// discarding a choice the operator made — which CA-006-06 forbids.
+    #[must_use]
+    pub const fn with_ton(mut self, ton: Ton) -> Self {
+        self.ton = ton;
+        self
+    }
+
+    /// The same address announced under another numbering plan.
+    #[must_use]
+    pub const fn with_npi(mut self, npi: Npi) -> Self {
+        self.npi = npi;
+        self
     }
 
     /// Reports whether `character` is one of the accepted separators.
@@ -488,7 +505,26 @@ mod tests {
             SourceAddress::parse_with("3615", Ton::National, Npi::National).expect("valid");
 
         assert_eq!(source.ton(), Ton::National);
+        assert_eq!(source.npi(), Npi::National);
         assert_eq!(source.kind(), SourceKind::Numeric);
+    }
+
+    /// One of the two may be overridden on its own: the interface offers two
+    /// independent selectors, and dropping a choice the operator made because
+    /// the other one was left alone is what CA-006-06 forbids.
+    #[test]
+    fn either_of_the_two_sender_fields_may_be_overridden_alone() {
+        let derived = SourceAddress::parse("ShinobiSMS").expect("valid");
+        assert_eq!(derived.ton(), Ton::Alphanumeric);
+        assert_eq!(derived.npi(), Npi::Unknown);
+
+        let npi_only = derived.clone().with_npi(Npi::Isdn);
+        assert_eq!(npi_only.ton(), Ton::Alphanumeric, "the derived TON stands");
+        assert_eq!(npi_only.npi(), Npi::Isdn, "and the chosen NPI is honoured");
+
+        let ton_only = derived.with_ton(Ton::National);
+        assert_eq!(ton_only.ton(), Ton::National);
+        assert_eq!(ton_only.npi(), Npi::Unknown);
     }
 
     #[test]
