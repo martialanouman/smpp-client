@@ -601,3 +601,76 @@ impl EncodedUnits {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fiche §6 asks for the reference strategy to be decided and documented.
+    /// This pins the decided one: a cyclic counter, per session.
+    #[test]
+    fn the_reference_counter_hands_out_distinct_values_and_wraps() {
+        let counter = ConcatenationReferenceCounter::starting_at(0);
+
+        assert_eq!(counter.next(), ConcatenationReference::new(0));
+        assert_eq!(counter.next(), ConcatenationReference::new(1));
+        assert_eq!(counter.next(), ConcatenationReference::new(2));
+
+        let counter = ConcatenationReferenceCounter::starting_at(u16::MAX);
+
+        assert_eq!(counter.next(), ConcatenationReference::new(u16::MAX));
+        assert_eq!(counter.next(), ConcatenationReference::new(0));
+    }
+
+    /// The 8-bit UDH keeps the low octet, so two references 256 apart collide
+    /// there while staying distinct in `sar_msg_ref_num`. Documented rather
+    /// than fixed: it is the ceiling of the UDH format.
+    #[test]
+    fn the_udh_reference_is_the_low_octet_of_the_sixteen_bit_one() {
+        let reference = ConcatenationReference::new(0xBE_EF);
+
+        assert_eq!(reference.as_u16(), 0xBE_EF);
+        assert_eq!(reference.as_u8(), 0xEF);
+        assert_eq!(ConcatenationReference::new(0x00_EF).as_u8(), 0xEF);
+    }
+
+    #[test]
+    fn the_default_mode_is_the_concatenation_udh() {
+        assert_eq!(SegmentationMode::default(), SegmentationMode::Udh);
+    }
+
+    /// The mode is a property of the message centre, not of the text, so the
+    /// same text under two modes is cut in the same places — only the
+    /// concatenation information differs.
+    #[test]
+    fn udh_and_sar_cut_the_text_in_the_same_places() {
+        let text = "a".repeat(400);
+        let reference = ConcatenationReference::new(7);
+
+        let udh = segment(
+            &text,
+            EncodingChoice::Automatic,
+            SegmentationMode::Udh,
+            reference,
+        )
+        .expect("plain ASCII");
+        let sar = segment(
+            &text,
+            EncodingChoice::Automatic,
+            SegmentationMode::Sar,
+            reference,
+        )
+        .expect("plain ASCII");
+
+        let units = |message: &SegmentedMessage| {
+            message
+                .segments()
+                .iter()
+                .map(Segment::content_units)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(units(&udh), units(&sar));
+        assert_eq!(units(&udh), vec![153, 153, 94]);
+    }
+}
