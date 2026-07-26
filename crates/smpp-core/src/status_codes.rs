@@ -128,19 +128,37 @@ static STATUS_CODES: &[StatusCode] = &[
         "Invalid command ID",
         StatusClass::Fatal,
     ),
+    // 0x04 and 0x05 describe a TRANSIENT DISAGREEMENT ABOUT SESSION STATE, not
+    // a malformed request. Classifying them `Fatal` produces exactly the two
+    // failures the classification exists to prevent:
+    //
+    //   * 0x04 — a `submit_sm` in flight crosses an `unbind` from the SMSC.
+    //     `Fatal` makes `is_retryable()` false, so milestone 010 marks the
+    //     message permanently failed instead of replaying it after a rebind.
+    //
+    //   * 0x05 — the TCP connection drops without `unbind`; we reconnect
+    //     before the SMSC has reaped the stale session. `Fatal` makes
+    //     milestone 005 abandon the reconnection loop, leaving the session
+    //     dead until a human intervenes — while a retry thirty seconds later
+    //     would have succeeded. This is the most ordinary SMPP failure there
+    //     is.
+    //
+    // `Recoverable`, not `Throttling`: the retry must go through the normal
+    // back-off, because 0x05 keeps being returned for as long as the stale
+    // session lives.
     row(
         0x0000_0004,
         "ESME_RINVBNDSTS",
         "État de bind incorrect pour cette commande",
         "Incorrect bind status for given command",
-        StatusClass::Fatal,
+        StatusClass::Recoverable,
     ),
     row(
         0x0000_0005,
         "ESME_RALYBND",
         "Session déjà liée",
         "ESME already in bound state",
-        StatusClass::Fatal,
+        StatusClass::Recoverable,
     ),
     row(
         0x0000_0006,
@@ -755,6 +773,29 @@ mod tests {
         // flagged; replaying it would burn quota on a number that cannot work.
         assert_eq!(classify(CommandStatus::EsmeRinvdstadr), StatusClass::Fatal);
         assert!(!classify(CommandStatus::EsmeRinvdstadr).is_retryable());
+
+        // Session-state disagreements are NOT fatal — regression guard.
+        //
+        // These two were classified `Fatal` and caught in review. Each one
+        // produced a concrete production failure:
+        //
+        //   * RALYBND after a TCP drop without `unbind`: the reconnection loop
+        //     gives up for good, on the most ordinary SMPP failure there is.
+        //   * RINVBNDSTS on a `submit_sm` crossing an `unbind`: the message is
+        //     marked permanently failed instead of being replayed.
+        //
+        // Both must stay retryable. Failing this test means one of those two
+        // regressions is back.
+        assert_eq!(
+            classify(CommandStatus::EsmeRalybnd),
+            StatusClass::Recoverable
+        );
+        assert!(classify(CommandStatus::EsmeRalybnd).is_retryable());
+        assert_eq!(
+            classify(CommandStatus::EsmeRinvbndsts),
+            StatusClass::Recoverable
+        );
+        assert!(classify(CommandStatus::EsmeRinvbndsts).is_retryable());
 
         // Transient failures: replay according to policy.
         assert_eq!(
