@@ -57,8 +57,47 @@ contrainte `CHECK` listant les six états de la spec §14.3, un septième serait
 une migration et une modification de tout écran qui groupe par état — pour une
 distinction que l'opérateur lit déjà, segment par segment, dans le résultat.
 
+Le message ne conserve **aucun** `smsc_message_id`, alors même que ses segments
+acceptés en ont chacun reçu un. Garder celui du premier armerait un bug trois
+jalons plus loin : le SMSC tentera de délivrer ce fragment et enverra un accusé
+pour lui, le jalon 008 corrèle un accusé par `find_message_by_smsc_id`,
+trouverait cette ligne et la ferait passer `FAILED → DELIVERED`. Les
+identifiants ne sont pas perdus : chacun reste sur son segment, dans le
+résultat.
+
+**Ce qui n'est pas fait :** le fragment déjà accepté n'est ni annulé ni tracé en
+base. Renvoyer le message produira donc un **deuxième exemplaire du segment 1**
+chez le SMSC. Annuler un segment déjà soumis demande `cancel_sm`, qu'aucun jalon
+n'a inscrit à son périmètre.
+
 ### Corrigé — jalon 006
 
+- **Un échec du journal *après* l'émission faisait renvoyer le message.**
+  L'erreur des transitions finales remontait comme celle de l'insert
+  write-ahead, sur le même code `MESSAGE_STORAGE`, dont la traduction affirme
+  « rien n'a été envoyé ». Trois segments partis et acceptés, base verrouillée
+  au commit : l'opérateur, informé que rien n'était parti, renvoyait. Un échec
+  postérieur à l'émission est désormais porté par `journalled: false` sur un
+  résultat **réussi**, et l'interface dit de ne pas renvoyer.
+- **La machine d'états était décorative.** `MessageState::can_move_to` n'avait
+  aucun appelant : `UPDATE messages SET state = ?` s'appliquait sans condition.
+  Un accusé arrivant pour un message déjà `FAILED` le faisait passer
+  `DELIVERED` — jamais vu par le destinataire, compté comme délivré — et un lot
+  `[SENT, ACCEPTED]` rejoué rétrogradait une ligne `DELIVERED`. La clause
+  `WHERE` porte maintenant les états qui peuvent légalement précéder celui
+  qu'on écrit.
+- **`sent_at` et `attempts` étaient écrits pour un message jamais émis.** Un
+  `submit_sm` refusé par la session — bind receiver, session tombée — est
+  refusé *avant* la socket, mais la transition `SENT` partait quand même. Le
+  journal aurait affiché une date d'émission pour un message qui n'est jamais
+  parti et le budget de rejeu de la spec §10.7 aurait consommé une tentative.
+- **Un `FAILED` partiel gardait l'identifiant d'un fragment accepté** — voir la
+  section sur l'échec partiel ci-dessus.
+- **L'aperçu n'avait pas de garde d'obsolescence.** Deux réponses dans le
+  désordre figeaient un compteur décrivant un texte déjà dépassé, ce que
+  CA-006-09 interdit.
+- **`priority_flag` n'était borné nulle part côté Rust**, alors que la WebView
+  est traitée comme non fiable.
 - **`esm_class` valait `0x08` sur tout message ordinaire.**
   `EsmClass::default()` de rusmpp n'est pas nul : son champ `ansi41_specific` a
   pour défaut « short message contains delivery acknowledgement ». Chaque
@@ -84,8 +123,13 @@ distinction que l'opérateur lit déjà, segment par segment, dans le résultat.
   changé.
 - Le double de SMSC en mémoire du jalon 005 passe de `tests/support/` à
   `smpp_session::testing`, derrière la feature `test-support`, et gagne le
-  scénario des réponses `submit_sm`. `messaging` s'en sert au lieu d'en écrire
-  un second.
+  scénario des réponses `submit_sm`. Les tests d'envoi bout en bout s'en
+  servent au lieu d'en écrire un second.
+- Les tests bout en bout du chemin d'envoi vivent dans
+  `crates/smpp-session/tests/`, non dans `messaging`. Les y laisser demandait
+  une dev-dépendance `messaging → smpp-session`, donc un cycle — que Cargo
+  tolère pour un dev-kind, mais que CLAUDE.md §3 interdit sans distinguer les
+  kinds. `messaging` n'atteint plus que `smpp-core`, en normal comme en dev.
 
 ### Décisions — jalon 006
 
