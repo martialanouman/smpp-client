@@ -1,0 +1,27 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# ---------------------------------------------------------------------------
+# Provenance of the cases below: none of them ever failed against the committed
+# code. They were produced while DELIBERATELY breaking the segmenter — cutting
+# on unit boundaries instead of character boundaries — to check that these
+# property tests actually catch the bug this milestone is about. The mutation
+# was reverted; the seeds were kept.
+#
+# They are worth keeping because that is exactly the shrinking proptest is good
+# at: the inputs below are dense in the two characters that cost two units and
+# are easy to split in half — U+000C FORM FEED, the only one-byte character of
+# the GSM extension table, and U+10000-and-above, written as a UTF-16 surrogate
+# pair. Replaying them first on every run costs milliseconds.
+# ---------------------------------------------------------------------------
+cc 0b2c90851d1663738c8e1f014a067098e0849c97a9dfc3b26e1d61303297c30b # shrinks to text = "¡𐀀0a𐀀𐀀𐀀0¡𐀀𐀀𐀀 𐀀\0𐀀 a AAa𐀀𐀀0𐀀A¡𐀀  ¡ 𐀀𐀀aa¡A𐀀𐀀¡\0 A𐀀0\0¡ 𐀀0", mode = Udh
+cc 5303c7a76d5f45dae8111b9fd5740b0713299394f5952313dd65e449833f8e7a # shrinks to text = "𐀀0A0𐀀A¡𐀀𐀀0𐀀𐀀¡0𐀀¡0A\0  0¡\0a0𐀀0A𐀀a𐀀\0  \0 a𐀀AAa 𐀀 A\00𐀀A¡ \00A  \0¡ 𐀀 00 𐀀 0𐀀𐀀A ¡aa𐀀¡¡ 𐀀¡ 𐀀𐀀Aa𐀀\0𐀀𐀀¡𐀀¡ 𐀀𐀀\0Aa ¡¡\0 ¡ ¡\0𐀀A𐀀 𐀀aA0\0𐀀\0¡𐀀  A¡ A¡aa\0𐀀0A𐀀 𐀀¡A 𐀀AA¡0¡A𐀀\0𐀀00¡¡𐀀 00\0𐀀𐀀", mode = Udh
+cc 47228b3a51147b9052a189203c5d53f9453d8935690d17a0be23c970567078fb # shrinks to text = " 𐀀Aa\0𐀀0 A0¡0 a \0  A0¡0𐀀𐀀 ¡𐀀 𐀀A \0 A 𐀀aa 𐀀  \0\00¡\0A0𐀀 𐀀 AA 𐀀0¡A 𐀀𐀀a aA¡A𐀀𐀀𐀀¡¡0 00𐀀\0\0𐀀aa¡ a𐀀¡ a\0 ¡𐀀\0 𐀀𐀀𐀀 a¡¡¡ ¡𐀀𐀀 A𐀀𐀀¡𐀀𐀀0A¡A0 A\0 𐀀a 𐀀 𐀀aA  a¡𐀀𐀀A𐀀a𐀀𐀀A¡\0¡a𐀀¡ 0  0A Aa¡0a0A𐀀 \0𐀀 0𐀀aA 𐀀0𐀀\0\u{1022b}\u{feff}'<¥\t\u{107d1e}Ѩ/¥\u{b863a}\u{a7bfd}\rT$\u{202e}'=.\u{5abc0}?}<==�\0\u{d7725}\tg81\"\u{1b}\\\u{202e}`\0$/\0..\u{10a4d3}\u{1b}%*.\u{f0a29}.\u{b6405}\u{feff}\u{eef37}Ⱥ\u{55169}.\u{4b0db}mOѨ\u{37f4d}\u{c862c}\u{1b}+:%.%\u{d13f5}\u{feff}¥{`𧄂[`/�&='\u{5e1e5}¥\u{7f}?\u{cc11d}%/&k\t\rÍC", mode = Udh
+cc 9b6418207dfbf09d11f68b821cfaf66e1e37d7c70921ed2edf35ea6077a3b48d # shrinks to text = "@@@@@@@@@\u{c}@@@@@@@@@@@@@@\u{c}@@@@@@@@@@@@@@@@\u{c}@@@@@@@@@@@@@@@@@@@\u{c}@@@@@@@@@@@\u{c}\u{c}@@@@@\u{c}@@\u{c}@@@@@@@@@@@@@@ì£Ψ~PäÆE)Ås(håè<¡+N}/+E<ΣL^ÜàaigææìwNΣ£èaBxæ1äzaebkXXX!RtÖ()qX€Ξ9uc%*NØatüM~R\nCl]EΩ[?9CUS+/£ÅSa^¥qmk1>UC7<|-øTyT#yì^z€QOHÉNædFì;JgO?Θ7æ+\"Ö_r8IJ.YiÉ¿G¿*\u{c}3\\+\r>Γ\u{c}cäÄRÄñùΞÜ}e:cu]¿6¤|öG Gk+!/¥6¤€AtW:à\rPtFΦl§a|9\n60wéoT4N)\r~\nÉZ<f;>cxΓ0åDΓDlC€ΣòmöQkBiZ89Är¿é4\"AyæC*åIüòT~n9QÅ<Cä€ÄÇ&\\_ñ¤T?9üD,(Gq}M¥IzQ,àP\rΠÉEvÇN[d[z}b€6W6%AÖ€Ω910yßæw=4yuÆ£*cG7/jÆNØø:A#ÅΛyI¿Ψ.*é1åv#ΘÆ\n?è'X[Θm99w§LΩØobR>ù%>Ig_QùΨ^§[eP>Λ¿èèùj;ReG3GDEdΓz§jΔ]£ö&e:Üt åté%{ÜΦΩOΦVS@ñU9|§àulq{G\rΔ3\nèÇÄZknnt{BòßY¡9!à$ΨPøCHFEéP£Γv4Å2ßùW¤H1rÇ_jΛ>^!-vÉZ{\u{c}ò\r=EA*ΔT\u{c}[hQEmxìPrøyI¡:Bw>uB8¿%B')mIIt&Üg\\äFsÇ?ΨvuΔΩ4Jxtvä4cΞüs+/ttN€T8+dU>ø6TRGIu\u{c}fèNZ$\n7ΨhΣm<,w[Y ÆJå0ΦX|RM", mode = Sar
+cc 5268fadba9879acc8af09f7cf3b69a4b729356e956d14854d88e688d4e7a565a # shrinks to text = "¡𐀀 𐀀A0𐀀¡a𐀀¡A 𐀀A𐀀a\0\0\0𐀀\00 𐀀0𐀀 𐀀0a 𐀀 𐀀\0a¡  ¡𐀀\0𐀀¡0𐀀0𐀀 0\0 a   ¡0¡𐀀𐀀𐀀0\0a𐀀\0a¡¡\0𐀀 \0\0𐀀A0𐀀𐀀¡A  ¡\0𐀀𐀀𐀀 A𐀀𐀀𐀀𐀀A\0𐀀A0 A¡0a0𐀀A𐀀𐀀 \0𐀀𐀀AaA¡\0𐀀A  A𐀀¡ 𐀀𐀀 A0𐀀¡𐀀0𐀀𐀀𐀀\0\0 Aa 𐀀0𐀀𐀀0𐀀¡ 𐀀¡ A𐀀/&$\u{7071a}w¥\u{7824a}¥\u{349f5}a{\tl$\u{d76b6},'B\u{7f}\u{feff}CȺ.*\u{5c894}\\\u{57744}\u{7f}\u{66d93}ÙG`\\e\u{5e3e4}Ѩ¥�/\u{b}\u{86fe1}\u{8c}\n{\u{895ed}?\u{7f}`H\u{202e}\n\\o/\u{43963}\u{202e}\t.>{\u{1b}\u{64ac5}\n\u{8c8e6}\u{1b}>AȺ🕴=\u{10170a}爡/Ⱥ¨\"}D.%õ䲰\u{97913}\0K1\u{fb6ef}/\u{be136}/:𲣌*.Ⱥ\u{feff}<\u{202e}:)SȺ=\u{106d48}", mode = Udh
+cc fd970f12ae3e075fcc0634ad7db94336722b037dccb007a5fa7a2047d8fbf433 # shrinks to text = "\u{c}@@@@@@@@@@@@\u{c}@@@\u{c}@@@@\u{c}@@@@@@@@@@\u{c}@@@\u{c}@@@@@@\u{c}@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\u{c}@@@@@@@@@@\u{c}@@@\u{c}@@@@@@@@@@@@@@\u{c}@@@@@@@@@@@@@@@@@@@@@@@@@@@@\u{c}\u{c}@@@@@@@@@@@@@@@@@@@@@@@@\u{c}@@@@@@@@@@@@@\u{c}@@@@@@@@@@\u{c}@@@\u{c}@@@@@@@@@\u{c}@@@@@@@@@@@@@@@$zt3åOΓKmdΞ<?ΨÄ€ß7£_ΩußOzùXΛ1+{£ålÑZWOE?dì#c~*èF<6{lÆq!ΔgéW]/€K--Å~", mode = Udh
+cc fd3e10ceb3a799744e8784603c8d3fc13088930e67510decf432b6e1df84d3a6 # shrinks to text = "0\0\0 a a𐀀¡0\0𐀀a0𐀀 𐀀 𐀀𐀀¡A0¡a\0a aA A𐀀0𐀀𐀀𐀀¡0𐀀¡𐀀𐀀𐀀 A  ¡Aa𐀀¡\0 0\0\00𐀀¡¡𐀀¡𐀀aA𐀀\0 a\000A¡𐀀¡𐀀¡a¡0\0¡𐀀¡𐀀A𐀀A\0𐀀a𐀀 𐀀𐀀 \0  Aa 𐀀 𐀀A  0¡A\0a𐀀\0 0𐀀A0𐀀A\0𐀀𐀀𐀀A  aa𐀥*\0<$\u{e7f15}\u{7f}\u{1018d9}\u{c29db}<¥x\u{10b3c7}4`\u{392a3}Ѩ$\u{feff}I\u{feff}{ru.🕴\u{202e}$Ⱥ\u{feff}ㆀ/\u{c05d2}\u{1b}\u{5bc8d}\u{feff}\u{9a514}\u{f27d3}`e%\\🕴¥\u{a3827}|?\u{feff}5\nSó\0C+F𥗍%\u{5784d}!&$`ȺѨ\"¡\u{7f}�%A0s\u{b2f1a}v\"^bM\u{39a87}\u{7f};6%\u{10d8b9}áv\u{43960}\u{ef069}?\u{7d921}*벵\u{c0c01}&*\u{844b1}\u{f469a}m\u{7f}\t\u{ccddc}\u{109bb6}Ⱥ\t𡲖$\n\u{b}\\6\u{fe8ac}\u{7f}𢺬�Q[\u{e8a36}%Ѩ:a\"\"%\u{900ef}\u{6a343}xN\\?\"\"-U\u{c6b9d}\u{14951}Z\u{e18a1}n¬x;F\u{10e67f}M\u{7315b}q\u{b}ȺѨ\u{4abad}¥\u{7f}${\u{feff}\u{1b}=\u{1b}?\u{8e245}\u{7f}\u{e56cb}Ⱥ\u{d9efd}\u{b}¥,Ⱥ R3Ⱥ\u{74ff1}\\.�\u{202e}H\0D?ë\u{b5d0a}`¥\u{b}\u{202e}\u{ddb89}|\0\u{fd003}\u{36e1e}'¥lKѨ\u{a2157}Ⱥ{\u{c3919}\\%/*¥{$🕴\u{f668d}\"\u{63f28}Ⱥr\u{c45f6}�\u{9bcef}..Y\u{7316e}\u{fd85c}:N\u{1b}>\u{99d6a}\u{93363}\u{7f}p\u{66a6b}\u{9d0e5}8\"\u{d4f0e}í\"$\u{f8180}\u{202e}贺\u{f3bfe}/\rm🕴\u{9616a}{�\u{202e}\u{96df0}#pP\u{1b}³\u{472c5}{\u{b}\u{10c2f9}`:`Ѩ{\u{64723}\u{2f560}y\rB/\u{d3f6c}\u{f0a77}%%\u{86}\u{8373d}'Ⱥ𐌮&??�\u{e08e3}ѨѨ\n\u{c5925}", mode = Sar

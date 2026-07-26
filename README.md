@@ -99,6 +99,7 @@ Toute décision structurante est consignée dans une ADR immuable.
 - [ADR 0004 — Utiliser pnpm et placer le `package.json` à la racine](docs/adr/0004-gestionnaire-de-paquets-frontend.md)
 - [ADR 0005 — Fixer les versions de la chaîne frontend](docs/adr/0005-versions-de-la-chaine-frontend.md)
 - [ADR 0006 — Relever la version minimale de Rust à 1.85](docs/adr/0006-version-minimale-de-rust.md)
+- [ADR 0008 — Segmenter au caractère, en septets non packés par défaut](docs/adr/0008-strategie-de-segmentation.md)
 - [Modèle d'ADR](docs/adr/0000-template.md)
 
 ## Documentation

@@ -68,6 +68,85 @@ majeur.
 - [ADR 0006](docs/adr/0006-version-minimale-de-rust.md) : MSRV portée à
   **1.88**, calculée depuis le graphe et vérifiée en CI.
 
+### Ajouté — jalon 004, encodage et segmentation
+
+- **Alphabet GSM 03.38**, table de base et table d'extension, avec détection
+  automatique de l'encodage (spec §7.5) et forçage manuel GSM 7-bit /
+  Latin-1 / UCS2. Un forçage impossible retourne une erreur nommant le
+  caractère et sa position, jamais un message corrompu.
+- **Encodeurs** : GSM 7-bit, Latin-1, UCS2 en UTF-16BE. La disposition des
+  septets GSM dans `short_message` est **configurable par session** —
+  `unpacked` (défaut) ou `packed`. GSM 03.38 §6.1.2.1.1 décrit le format
+  radio, pas le contenu du champ : le parc réel attend un septet par octet et
+  laisse le SMSC packer. Se tromper est silencieux — `ESME_ROK`, DLR
+  `DELIVRD`, charabia sur le combiné.
+- Les budgets de la spec §7.5 sont des **septets**, pas des caractères : 160
+  et 153 valent dans les deux dispositions, et un texte de 153 caractères
+  contenant un `€` fait 154 septets.
+- **Bourrage `CR`** des sept bits libres d'un dernier octet packé, suivant
+  TS 23.038 §6.1.2.3.1 — sans lui le téléphone affiche un `@` fantôme.
+- **Segmenteur** UDH (IEI 0x00, six octets, bit UDHI), TLV `sar_*`, et
+  `message_payload` jusqu'à 64 Ko. Le mode est fourni par l'appelant, jamais
+  déduit du texte.
+- **La coupure est décidée au caractère, jamais au septet.** Un caractère de
+  la table d'extension coûte deux septets et ne peut pas être scindé : s'il
+  ne rentre pas, il passe entier au segment suivant et le septet restant est
+  perdu. Même règle pour les paires de substitution UCS2. Les tests balaient
+  toutes les positions autour de la coupure — c'est le bug que rien d'autre
+  n'attrape, puisque le nombre de segments reste juste et chaque segment reste
+  bien formé.
+- **API de prévisualisation** pour le compteur en direct de l'éditeur, sans
+  aucune allocation. Elle partage son remplisseur avec la segmentation
+  réelle : leur accord est structurel, pas vérifié après coup.
+- **Réassemblage** des segments, dans n'importe quel ordre, qui refuse un
+  corps finissant sur un échappement orphelin ou une demi-paire de
+  substitution.
+- **Propriétés `proptest`** : aller-retour d'encodage, restitution du message
+  par concaténation inverse pour les trois modes, accord prévision ⇄
+  segmentation, croissance monotone du nombre de segments.
+- **Banc `criterion`** de référence pour le jalon 017.
+
+### Corrigé
+
+- **Retour à la ligne parasite au milieu d'un message packé.** Un segment
+  ramené à 152 septets par la règle de la paire d'échappement occupe les mêmes
+  134 octets que 153 ; un récepteur qui ne dispose que de `sm_length` divise,
+  lit 153 et trouve le `CR` de bourrage. Le remplisseur refuse désormais de
+  fermer un segment **non final** sur un compte que le récepteur ne
+  retrouverait pas, et rend son dernier caractère au suivant. Le segment final
+  n'est pas réparable — c'est le cas que TS 23.038 §6.1.2.3.1 couvre, et le
+  réassembleur retire le bourrage.
+- **Le réassembleur recalcule le nombre de septets depuis la longueur en
+  octets** au lieu de le lire dans la structure du segment. Un récepteur n'a
+  que `sm_length` ; l'ancien oracle était structurellement aveugle à cette
+  classe d'erreurs, ce qui est précisément pourquoi aucun test ne la voyait.
+- **Le compteur de référence de concaténation est amorcé aléatoirement.** Un
+  départ à zéro donne, après un redémarrage, la référence de segments encore
+  en vol au message suivant, et le combiné les fusionne.
+- Le jalon 003 réexportait `EsmClass` sans les types de ses quatre champs, et
+  laissait `MessagePayload` sous un chemin que la liste curatée ne couvrait
+  pas : l'alternative `message_payload` de la spec §7.5 était
+  inconstructible depuis l'extérieur de `smpp-core` et le bit UDHI n'était
+  pas assertable. Le module `udhs` est exposé pour la même raison. Un test
+  d'intégration tient désormais cette surface.
+
+### Décisions
+
+- [ADR 0008](docs/adr/0008-strategie-de-segmentation.md) : découpage au
+  caractère avec un remplisseur glouton unique, budget de la spec §7.5 en
+  septets appliqué quel que soit le mode — le mode `sar_*` renonce à 7 septets
+  par segment parce que de nombreux SMSC retraduisent les TLV en UDH sur la
+  branche de livraison. GSM 7-bit non packé par défaut, packé disponible par
+  session. Référence de concaténation par compteur cyclique de session, amorcé
+  aléatoirement.
+
+  L'ADR consigne aussi un point **à trancher au jalon 005** : l'interprétation
+  des octets non packés, valeurs GSM 03.38 ou valeurs Latin-1 transcodées par
+  le SMSC (l'`alt-charset` de Kannel). Un texte purement ASCII traverse les
+  deux à l'identique, donc les tests restent verts et seuls `@ £ $ €` et les
+  accents se corrompent en production. C'est une caractéristique de session,
+  au même titre que le packing.
+
 ### Ajouté
 
 - **Workspace Cargo** avec les neuf crates métier squelettes (`smpp-core`,

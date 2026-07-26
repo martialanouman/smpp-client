@@ -1,5 +1,7 @@
 //! Error type for this crate.
 
+use crate::encoding::EncodingError;
+
 /// Errors produced by this crate.
 ///
 /// Per guide §6.1, every crate exposes **one** exhaustive `thiserror` type.
@@ -15,4 +17,14 @@ pub enum MessagingError {
     /// by real variants as soon as its layer is implemented.
     #[error("not implemented yet")]
     NotImplemented,
+
+    /// The text could not be encoded, or could not be split into segments.
+    ///
+    /// [`EncodingError`] is a type of its own rather than a handful of
+    /// variants here because the callers that need to *discriminate* — the
+    /// live preview, the campaign validator — only ever see encoding
+    /// failures. Guide §6.1 still holds: this enum remains the single error
+    /// type of the crate, and carries that one as a source.
+    #[error("encoding or segmentation failed")]
+    Encoding(#[from] EncodingError),
 }

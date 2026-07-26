@@ -16,5 +16,29 @@ thiserror.workspace = true
 smpp-session = { path = "../smpp-session" }
 persistence = { path = "../persistence" }
 
+# Direct, although `smpp-session` already brings it in transitively: milestone
+# 004 names `DataCoding`, `EsmClass`, `MessagePayload` and the concatenation
+# UDH in its own public API. Relying on a re-export through a sibling crate
+# would tie this crate's compilation to a dependency it does not control.
+smpp-core = { path = "../smpp-core" }
+
+# Only for the random seed of the concatenation reference counter: a
+# deterministic start would hand a restarting session a reference that may
+# still be in flight. A v4 UUID is platform entropy, and `uuid` is already in
+# the graph — adding a random-number crate for two octets would not pass
+# CLAUDE.md §2.
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+# CA-004-10 asks for a `criterion` micro-benchmark as the milestone 017
+# baseline. `harness = false` hands the target over to criterion instead of
+# libtest.
+[[bench]]
+name = "segmentation"
+harness = false
+
 [lints]
 workspace = true

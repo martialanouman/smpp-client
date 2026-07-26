@@ -10,7 +10,7 @@ correspondante, dans le dernier commit de cette PR. La fiche passe alors de
 | ☑ | [001](../tasks-done/step-001.md) | Socle applicatif : shell Tauri, UI et contrat IPC typé | 000 | [#4](https://github.com/martialanouman/smpp-client/pull/4) |
 | ☐ | [002](step-002.md) | Persistance SQLite : schéma, migrations et repositories | 001 | |
 | ☑ | [003](../tasks-done/step-003.md) | Cœur protocolaire `smpp-core` | 000 | [#3](https://github.com/martialanouman/smpp-client/pull/3) |
-| ☐ | [004](step-004.md) | Encodage du texte et segmentation des messages longs | 003 | |
+| ☑ | [004](../tasks-done/step-004.md) | Encodage du texte et segmentation des messages longs | 003 | [#5](https://github.com/martialanouman/smpp-client/pull/5) |
 | ☐ | [005](step-005.md) | Session SMPP unique : acteurs, bind, keep-alive et reconnexion | 002, 003 | |
 | ☐ | [006](step-006.md) | Envoi simple de bout en bout — **M1** | 004, 005 | |
 | ☐ | [007](step-007.md) | Fenêtrage, contrôle de débit et métriques temps réel | 006 | |
