@@ -264,6 +264,9 @@ impl SessionProfile {
     /// centre that closes on an unexpected `enquire_link`, and a bad idea
     /// otherwise: without it a session can sit `BOUND` on a socket that no
     /// longer carries anything.
+    ///
+    /// When it is not zero it is strictly greater than
+    /// [`Self::response_timeout`] — see [`ProfileBuilder::build`].
     #[must_use]
     pub const fn enquire_link_interval(&self) -> Duration {
         self.enquire_link_interval
@@ -536,6 +539,23 @@ impl ProfileBuilder {
         if !self.gsm7_charset.is_compatible_with(self.gsm7_packing) {
             return Err(SessionError::invalid_profile(
                 "gsm7_charset",
+                ProfileRejection::Contradictory,
+            ));
+        }
+
+        // An `enquire_link` must be able to time out *before* the next one is
+        // due. Otherwise every period opens a request the period after it
+        // replaces, no verdict is ever reached, and the keep-alive stops being
+        // able to detect anything at all — the session sits `BOUND` on a
+        // socket that carries nothing (CA-005-04).
+        //
+        // Both bounds were validated on their own and their *relation* was
+        // not, which is exactly how the hole stayed open: `enquire_link_s = 10`
+        // with `response_timeout_s = 30` is a plausible setting for a distant
+        // message centre, and nothing refused it.
+        if self.enquire_link_s != 0 && self.response_timeout_s >= self.enquire_link_s {
+            return Err(SessionError::invalid_profile(
+                "response_timeout_s",
                 ProfileRejection::Contradictory,
             ));
         }

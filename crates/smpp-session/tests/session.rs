@@ -237,7 +237,11 @@ async fn ca_005_04_enquire_link_is_emitted_at_the_configured_interval() {
     const INTERVAL: Duration = Duration::from_secs(10);
 
     let (smsc, mut seen) = Smsc::always(Script::Accept);
-    let profile = builder(a_profile()).enquire_link_s(10).build().unwrap();
+    let profile = builder(a_profile())
+        .enquire_link_s(10)
+        .response_timeout_s(3)
+        .build()
+        .unwrap();
     let session = start(profile, smsc);
 
     wait_until_bound(&session.handle).await;
@@ -300,15 +304,102 @@ async fn ca_005_04_a_session_that_stops_answering_is_declared_dead() {
     session.handle.shutdown().await.unwrap();
 }
 
+/// **Regression, and the exact configuration that used to hide the hole.**
+///
+/// The original test ran `enquire_link_s = 5` with `response_timeout_s = 2` —
+/// the only ordering under which the defect is invisible. Reverse the two and
+/// nothing was ever detected: the tick overwrote the outstanding waiter, its
+/// correlation entry was swept because the receiver had gone, the missed
+/// counter stayed at zero for ever, and a black-holed session with a healthy
+/// socket sat `BOUND` until someone noticed by hand.
+///
+/// The pair is now refused at construction — `response_timeout_s` must be
+/// strictly under `enquire_link_s`, so an `enquire_link` always reaches a
+/// verdict before the next one is due.
+#[test]
+fn ca_005_04_a_response_timeout_that_outlives_the_keep_alive_period_is_refused() {
+    let refused = builder(a_profile())
+        .enquire_link_s(10)
+        .response_timeout_s(30)
+        .build()
+        .expect_err("an enquire_link that cannot time out before the next one detects nothing");
+
+    assert_eq!(
+        refused.to_string(),
+        "invalid value for `response_timeout_s`: value contradicts another setting"
+    );
+
+    // Equal is refused too: the verdict and the next tick would land together,
+    // which is a race rather than a margin.
+    assert!(builder(a_profile())
+        .enquire_link_s(10)
+        .response_timeout_s(10)
+        .build()
+        .is_err());
+
+    // Strictly under is what a working keep-alive needs.
+    assert!(builder(a_profile())
+        .enquire_link_s(10)
+        .response_timeout_s(9)
+        .build()
+        .is_ok());
+
+    // And the rule does not apply when the keep-alive is off: there is no
+    // period for the timeout to outlive.
+    assert!(builder(a_profile())
+        .enquire_link_s(0)
+        .response_timeout_s(300)
+        .build()
+        .is_ok());
+}
+
+/// The same black-hole scenario at the magnitudes it was reported with — a
+/// ten-second period against a distant message centre — rather than the
+/// five-second one the original test used.
+#[tokio::test(start_paused = true)]
+async fn ca_005_04_a_long_period_still_detects_a_black_holed_session() {
+    let (smsc, _seen) = Smsc::scripted(vec![Script::AcceptThenGoSilent], Script::Accept);
+    let profile = builder(a_profile())
+        .enquire_link_s(10)
+        .response_timeout_s(3)
+        .reconnect(tight_backoff())
+        .build()
+        .unwrap();
+
+    let session = start(profile, smsc.clone());
+
+    wait_until_bound(&session.handle).await;
+    assert_eq!(smsc.connections(), 1);
+
+    wait_for_code(&session.handle, "RECONNECT").await;
+    wait_until_bound(&session.handle).await;
+
+    assert!(smsc.connections() >= 2);
+
+    session.handle.shutdown().await.unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // CA-005-05 — back-off: growing, bounded, and not all identical
 // ---------------------------------------------------------------------------
 
 /// The reconnection is driven from a real socket drop, and the intervals are
 /// measured on the virtual clock between successive connection attempts.
+///
+/// # Why the double refuses every attempt after the first
+///
+/// It used to accept and drop *every* connection, and the test still asserted
+/// growth — which it only saw because the attempt counter was never reset. Now
+/// that a successful bind starts the back-off over, a script of
+/// bind-then-drop produces a flat one-second retry for ever, which is the
+/// **correct** behaviour and no longer this criterion's subject.
+///
+/// The back-off grows across *consecutive failures*. So: one brutal drop to
+/// prove a lost socket triggers the reconnection at all, then a peer that will
+/// not answer, which is what makes the attempts consecutive failures.
 #[tokio::test(start_paused = true)]
 async fn ca_005_05_a_dropped_socket_is_retried_with_a_growing_bounded_back_off() {
-    let (smsc, _seen) = Smsc::always(Script::AcceptThenDrop);
+    let (smsc, _seen) = Smsc::scripted(vec![Script::AcceptThenDrop], Script::RefuseConnection);
     let policy = smpp_session::reconnect::ReconnectPolicy::new(true, 1, 8, true).unwrap();
     let profile = builder(a_profile())
         .enquire_link_s(0)
@@ -371,6 +462,71 @@ async fn ca_005_05_a_dropped_socket_is_retried_with_a_growing_bounded_back_off()
     session.handle.shutdown().await.unwrap();
 }
 
+/// **Regression: the attempt counter is reset by a successful bind.**
+///
+/// It used to only ever grow. Six failures while a VPN came up left it at six,
+/// and the first blip after a whole day of healthy operation waited the
+/// sixty-second ceiling instead of one second — then a minute again for every
+/// blip after that. No existing test saw it, because none of them ever held a
+/// bind and then lost it: they either fail from the start or succeed and stop.
+///
+/// The assertion is on the *delay*, measured on the virtual clock between the
+/// drop and the next connection attempt. With the counter left at four it
+/// would be the ceiling; reset, it is the first step.
+#[tokio::test(start_paused = true)]
+async fn ca_005_05_a_successful_bind_resets_the_back_off() {
+    let policy = smpp_session::reconnect::ReconnectPolicy::new(true, 1, 60, false).unwrap();
+    let profile = builder(a_profile())
+        .enquire_link_s(5)
+        .response_timeout_s(2)
+        .reconnect(policy)
+        .build()
+        .unwrap();
+
+    // Four refused connections, then one that binds and *stays* bound long
+    // enough to be observed — a session that dropped instantly would already
+    // have reconnected by the time the test looked at it.
+    let (smsc, _seen) = Smsc::scripted(
+        vec![
+            Script::RefuseConnection,
+            Script::RefuseConnection,
+            Script::RefuseConnection,
+            Script::RefuseConnection,
+            Script::AcceptThenGoSilent,
+        ],
+        Script::Accept,
+    );
+
+    let session = start(profile, smsc.clone());
+
+    // The fifth attempt binds; the counter has climbed to four by then.
+    wait_until_bound(&session.handle).await;
+    assert_eq!(smsc.connections(), 5);
+
+    // The counterfactual, stated: left un-reset, the next failure would wait
+    // this long.
+    assert_eq!(policy.base_delay(5), Duration::from_secs(16));
+
+    // The peer then goes silent and the keep-alive tears the session down.
+    wait_for_code(&session.handle, "RECONNECT").await;
+    let lost_at = tokio::time::Instant::now();
+
+    while smsc.connections() < 6 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let waited = tokio::time::Instant::now() - lost_at;
+
+    assert!(
+        waited < Duration::from_secs(2),
+        "a successful bind must start the back-off over: waited {waited:?}, \
+         which is the {:?} of an un-reset counter",
+        policy.base_delay(5)
+    );
+
+    session.handle.shutdown().await.unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // CA-005-06 — a response that never comes frees its entry
 // ---------------------------------------------------------------------------
@@ -412,7 +568,11 @@ async fn ca_005_06_a_request_that_is_never_answered_leaves_no_entry_behind() {
 #[tokio::test(start_paused = true)]
 async fn ca_005_07_a_malformed_pdu_is_nacked_and_the_session_stays_bound() {
     let (smsc, mut seen) = Smsc::always(Script::AcceptThenSendGarbage);
-    let profile = builder(a_profile()).enquire_link_s(5).build().unwrap();
+    let profile = builder(a_profile())
+        .enquire_link_s(5)
+        .response_timeout_s(2)
+        .build()
+        .unwrap();
     let session = start(profile, smsc.clone());
 
     wait_until_bound(&session.handle).await;

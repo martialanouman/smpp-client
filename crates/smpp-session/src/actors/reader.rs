@@ -74,10 +74,10 @@ where
                 // request on the peer's side.
                 tracing::warn!(error = %error, "malformed PDU, answering generic_nack");
 
-                send(&outgoing, nack(0)).await
+                send(&outgoing, nack(0), &token).await
             }
             Some(Ok(Ok(command))) => {
-                handle(command, &pending, &outgoing, deliveries.as_ref()).await
+                handle(command, &pending, &outgoing, deliveries.as_ref(), &token).await
             }
         };
 
@@ -102,6 +102,7 @@ async fn handle(
     pending: &Pending,
     outgoing: &mpsc::Sender<Command>,
     deliveries: Option<&mpsc::Sender<Command>>,
+    token: &CancellationToken,
 ) -> Step {
     let sequence = command.sequence_number();
 
@@ -117,11 +118,13 @@ async fn handle(
     }
 
     match command.id() {
-        CommandId::EnquireLink => send(outgoing, response(sequence, Pdu::EnquireLinkResp)).await,
+        CommandId::EnquireLink => {
+            send(outgoing, response(sequence, Pdu::EnquireLinkResp), token).await
+        }
         CommandId::Unbind => {
             tracing::info!(sequence, "the message centre is unbinding the session");
 
-            match send(outgoing, response(sequence, Pdu::UnbindResp)).await {
+            match send(outgoing, response(sequence, Pdu::UnbindResp), token).await {
                 Step::Continue => Step::Stop(ReaderOutcome::PeerUnbound),
                 stop => stop,
             }
@@ -133,6 +136,7 @@ async fn handle(
                     sequence,
                     Pdu::DeliverSmResp(smpp_core::pdus::DeliverSmResp::default()),
                 ),
+                token,
             )
             .await;
 
@@ -159,7 +163,7 @@ async fn handle(
                 "unexpected operation, answering generic_nack"
             );
 
-            send(outgoing, nack(sequence)).await
+            send(outgoing, nack(sequence), token).await
         }
     }
 }
@@ -174,17 +178,39 @@ fn nack(sequence: u32) -> Command {
     Command::new(CommandStatus::EsmeRinvcmdid, sequence, Pdu::GenericNack)
 }
 
-/// Pushes a command onto the outgoing queue.
+/// Pushes a command onto the outgoing queue, watching the shutdown signal.
 ///
 /// The queue is **bounded**, so this awaits when the writer is behind — which
 /// is the back-pressure CLAUDE.md §4 asks for, applied to our own responses as
 /// much as to a campaign's.
-async fn send(outgoing: &mpsc::Sender<Command>, command: Command) -> Step {
+///
+/// # Why the token is in the `select!`
+///
+/// It was not, and the pair of tasks could deadlock permanently. Once the
+/// supervisor leaves its loop nothing drains this queue, and the supervisor
+/// holds a `Sender` on it too — so the channel never closes and the `await`
+/// cannot even fail. The reader parked here for ever; the supervisor sent its
+/// `unbind`, cancelled the token the reader was no longer in a position to
+/// observe, and then waited on the join. Neither ever moved, and `shutdown()`
+/// never returned.
+///
+/// Answering the token here is the fix; the bounded join in the supervisor is
+/// the belt to this pair of braces.
+async fn send(
+    outgoing: &mpsc::Sender<Command>,
+    command: Command,
+    token: &CancellationToken,
+) -> Step {
     tracing::trace!(pdu = %pdu_debug::redacted(&command), "queuing outgoing PDU");
 
-    if outgoing.send(command).await.is_err() {
-        return Step::Stop(ReaderOutcome::WriterGone);
+    tokio::select! {
+        () = token.cancelled() => Step::Stop(ReaderOutcome::Cancelled),
+        result = outgoing.send(command) => {
+            if result.is_err() {
+                Step::Stop(ReaderOutcome::WriterGone)
+            } else {
+                Step::Continue
+            }
+        }
     }
-
-    Step::Continue
 }

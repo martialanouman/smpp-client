@@ -23,11 +23,19 @@
 //!
 //! # Shutdown
 //!
-//! One [`CancellationToken`] per session and a child token per connection. On
-//! cancellation the supervisor sends `unbind`, waits for `unbind_resp` under a
-//! bounded timeout, cancels the child token, joins the reader, and returns.
-//! Every request still in flight is failed rather than left waiting for a
-//! response that can never come.
+//! One [`CancellationToken`] per session, and a **separate** one per
+//! connection — see [`serve`] for why it is not a child. On cancellation the
+//! supervisor sends `unbind`, waits for `unbind_resp` under a bounded timeout,
+//! cancels the connection token, joins the reader under a bounded timeout too,
+//! and returns. Every request still in flight is failed, and everything the
+//! outgoing queue still held is dropped, rather than left to be written on the
+//! next connection.
+//!
+//! **Every await that can block is bounded, cancellable, or both.** That is
+//! not defensive habit: `SessionHandle::shutdown` waits on this task, the
+//! registry's lock waits on `shutdown`, every session command waits on the
+//! lock, and the application's exit hook `block_on`s the lot on the main
+//! thread. One unbounded await here freezes the window.
 
 use std::sync::Arc;
 
@@ -67,6 +75,13 @@ const UNBIND_TIMEOUT: Duration = Duration::from_secs(5);
 /// idle tick, so an empty table does not spin.
 const IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long the supervisor waits for the reader to stop before aborting it.
+///
+/// The reader watches the connection token everywhere it can block, so it
+/// normally stops at once. This is the backstop that keeps `shutdown()` from
+/// hanging if it ever does not.
+const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Everything the supervisor needs to run a session.
 pub(crate) struct SupervisorContext<T: Transport> {
     /// The profile being bound.
@@ -101,13 +116,13 @@ pub(crate) async fn run<T: Transport>(mut context: SupervisorContext<T>) {
 
     loop {
         if context.token.is_cancelled() {
-            publish(&context.state, SessionState::Unbound, None, None);
+            conclude(&context.state);
             return;
         }
 
-        let failure = match attempt_connection(&mut context).await {
+        let failure = match attempt_connection(&mut context, &mut attempt).await {
             Ok(Stop::Shutdown { .. }) => {
-                publish(&context.state, SessionState::Unbound, None, None);
+                conclude(&context.state);
                 return;
             }
             Ok(Stop::Retry(error)) | Err(error) => error,
@@ -121,6 +136,21 @@ pub(crate) async fn run<T: Transport>(mut context: SupervisorContext<T>) {
                 abandoned,
                 "requests in flight were lost with the connection"
             );
+        }
+
+        // And so is everything the queue was still holding. A PDU queued
+        // before the drop would otherwise be written on the **next**
+        // connection, carrying a `sequence_number` whose correlation entry
+        // `fail_all` has just removed — a response that matches nothing, and
+        // at milestone 006 a `submit_sm` sent twice. What survives a
+        // connection is the message journal, which is durable; a queue is a
+        // hand-off, and a hand-off does not outlive its recipient.
+        let mut discarded = 0_u32;
+        while context.outgoing.try_recv().is_ok() {
+            discarded = discarded.saturating_add(1);
+        }
+        if discarded > 0 {
+            tracing::warn!(discarded, "queued PDUs were dropped with the connection");
         }
 
         attempt = attempt.saturating_add(1);
@@ -157,7 +187,7 @@ pub(crate) async fn run<T: Transport>(mut context: SupervisorContext<T>) {
 
                 tokio::select! {
                     () = context.token.cancelled() => {
-                        publish(&context.state, SessionState::Unbound, None, None);
+                        conclude(&context.state);
                         return;
                     }
                     () = tokio::time::sleep(delay) => {}
@@ -186,6 +216,7 @@ enum Stop {
 /// One attempt: connect, bind, serve.
 async fn attempt_connection<T: Transport>(
     context: &mut SupervisorContext<T>,
+    attempt: &mut u32,
 ) -> Result<Stop, SessionError> {
     publish(&context.state, SessionState::Connecting, None, None);
 
@@ -214,7 +245,32 @@ async fn attempt_connection<T: Transport>(
     tracing::info!(mode = ?mode, version = context.profile.version().label(), "session bound");
     publish(&context.state, SessionState::Bound(mode), None, None);
 
+    // A successful bind ends the run of failures, so the back-off starts over.
+    // Without this the counter only ever grew: six failed attempts while a VPN
+    // was still coming up left it at six, and the *first* blip after a full day
+    // of healthy operation waited the sixty-second ceiling instead of one
+    // second. Every later blip cost another minute of downtime, and no test
+    // saw it because none of them ever held a bind and then lost it.
+    *attempt = 0;
+
     Ok(serve(framed, context).await)
+}
+
+/// Publishes the state a session ends in.
+///
+/// `UNBOUND` says "it was up and now it is not". A session cancelled before it
+/// ever connected was never up: it stays `CLOSED`, which is both true and an
+/// edge spec §7.9 draws. Publishing `UNBOUND` from `CLOSED` used to log an
+/// `error!` about an illegal transition on a completely ordinary path — start
+/// the application, close it without binding anything.
+fn conclude(state: &watch::Sender<SessionSnapshot>) {
+    let current = state.borrow().state;
+
+    if matches!(current, SessionState::Closed) {
+        return;
+    }
+
+    publish(state, SessionState::Unbound, None, None);
 }
 
 /// The bound phase: read, write, keep alive, sweep.
@@ -297,27 +353,61 @@ async fn serve<T: Transport>(
             // again, so the session closes rather than idling on a socket.
             Event::Outgoing(None) => break Stop::Shutdown { needs_unbind: true },
             Event::Outgoing(Some(command)) => {
-                tracing::trace!(pdu = %pdu_debug::redacted(&command), "writing PDU");
-
-                if let Err(source) = sink.send(command).await {
-                    break Stop::Retry(SessionError::Transport {
-                        operation: "writing",
-                        source,
-                    });
+                match write(&mut sink, command, timeout, &context.token).await {
+                    Written::Ok => {}
+                    Written::Cancelled => {
+                        break Stop::Shutdown {
+                            needs_unbind: false,
+                        }
+                    }
+                    Written::Failed(error) => break Stop::Retry(error),
                 }
             }
             Event::KeepaliveTick => {
                 next_keepalive = keepalive_deadline(interval);
 
+                // An `enquire_link` still unanswered when the next period
+                // comes round IS a miss, and counting it here is the whole
+                // point. The slot used to be overwritten silently: the old
+                // waiter was dropped, `expire` swept its entry because the
+                // receiver had gone, and `missed_keepalives` stayed at zero
+                // for ever. A message centre that had become a black hole with
+                // the socket still open was never detected, and the session
+                // sat `BOUND` indefinitely.
+                //
+                // `build()` now refuses `response_timeout_s >= enquire_link_s`,
+                // so a waiter outliving its period is no longer reachable
+                // through configuration. This stays because the check that
+                // makes it unreachable lives in another file.
+                // `take()` rather than a test then a clear: it reads *and*
+                // drops the stale waiter, so the receiver cannot be polled
+                // again — which would panic — and the intent is one call.
+                if keepalive_waiter.take().is_some() {
+                    missed_keepalives = missed_keepalives.saturating_add(1);
+
+                    tracing::warn!(
+                        missed = missed_keepalives,
+                        limit = MAX_MISSED_ENQUIRE_LINKS,
+                        "the previous enquire_link was still unanswered a whole period later"
+                    );
+
+                    if missed_keepalives >= MAX_MISSED_ENQUIRE_LINKS {
+                        break Stop::Retry(dead_link());
+                    }
+                }
+
                 match enquire_link(&context.pending, timeout).await {
                     Ok((command, waiter)) => {
                         keepalive_waiter = Some(waiter);
 
-                        if let Err(source) = sink.send(command).await {
-                            break Stop::Retry(SessionError::Transport {
-                                operation: "writing the enquire_link",
-                                source,
-                            });
+                        match write(&mut sink, command, timeout, &context.token).await {
+                            Written::Ok => {}
+                            Written::Cancelled => {
+                                break Stop::Shutdown {
+                                    needs_unbind: false,
+                                }
+                            }
+                            Written::Failed(error) => break Stop::Retry(error),
                         }
                     }
                     Err(error) => break Stop::Retry(error),
@@ -345,13 +435,7 @@ async fn serve<T: Transport>(
                 );
 
                 if missed_keepalives >= MAX_MISSED_ENQUIRE_LINKS {
-                    break Stop::Retry(SessionError::Transport {
-                        operation: "keeping the session alive",
-                        source: std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "the message centre stopped answering enquire_link",
-                        ),
-                    });
+                    break Stop::Retry(dead_link());
                 }
             }
             Event::Sweep => {
@@ -365,19 +449,103 @@ async fn serve<T: Transport>(
     };
 
     if matches!(stop, Stop::Shutdown { needs_unbind: true }) {
-        unbind(&mut sink, &context.pending, &context.profile).await;
+        unbind(&mut sink, &context.pending, &context.profile, timeout).await;
     }
 
-    // No task outlives this function (CA-005-08): the child token stops the
-    // reader, and the join is awaited rather than detached. Awaiting a handle
-    // that already completed would panic, hence the flag.
+    // No task outlives this function (CA-005-08): the connection token stops
+    // the reader, and the join is awaited rather than detached. Awaiting a
+    // handle that already completed would panic, hence the flag.
     connection_token.cancel();
 
     if !reader_finished {
-        let _joined = (&mut reader_handle).await;
+        // Bounded, and not out of caution: an unbounded join here was half of
+        // a deadlock. The reader parks on a full outgoing queue, the
+        // supervisor has already left the loop so nothing drains it, and each
+        // waits for the other for ever — `shutdown()` never returns and the
+        // application cannot be closed. The reader now watches the token
+        // while it queues, which fixes the cause; this bounds the consequence
+        // of anything else that might hold it.
+        if tokio::time::timeout(READER_JOIN_TIMEOUT, &mut reader_handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                timeout_s = READER_JOIN_TIMEOUT.as_secs(),
+                "the reader did not stop in time, aborting it"
+            );
+            reader_handle.abort();
+        }
     }
 
     stop
+}
+
+/// What a write to the socket did.
+enum Written {
+    /// The PDU went out.
+    Ok,
+    /// The session was cancelled mid-write.
+    Cancelled,
+    /// The socket refused it, or took too long.
+    Failed(SessionError),
+}
+
+/// Writes one PDU, watching the shutdown signal and a deadline.
+///
+/// # Why a bare `sink.send(command).await` was not enough
+///
+/// A message centre applying back-pressure — throttling, and it simply stops
+/// reading without closing — makes `send` block indefinitely. The supervisor
+/// then never reaches its `select!` again, so it stops watching the token.
+/// From there: the operator clicks *Unbind*, the registry takes its lock and
+/// waits on `handle.shutdown()`, which waits on the supervisor's `JoinHandle`,
+/// which will never finish. Every session command queues behind the registry
+/// lock, and `RunEvent::ExitRequested` does a `block_on(shutdown())` on the
+/// main thread — the application freezes on close and has to be killed.
+///
+/// Only `enquire_link` and responses travel this path at milestone 005, so the
+/// odds are low today. Milestone 006 puts a campaign on it, and the guarantee
+/// belongs here, next to the write, rather than in the code that will lean on
+/// it.
+async fn write<W>(
+    sink: &mut W,
+    command: Command,
+    deadline: Duration,
+    token: &CancellationToken,
+) -> Written
+where
+    W: futures_util::Sink<Command, Error = std::io::Error> + Unpin,
+{
+    tracing::trace!(pdu = %pdu_debug::redacted(&command), "writing PDU");
+
+    tokio::select! {
+        () = token.cancelled() => Written::Cancelled,
+        result = tokio::time::timeout(deadline, sink.send(command)) => match result {
+            Ok(Ok(())) => Written::Ok,
+            Ok(Err(source)) => Written::Failed(SessionError::Transport {
+                operation: "writing",
+                source,
+            }),
+            Err(_) => Written::Failed(SessionError::Transport {
+                operation: "writing",
+                source: std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the message centre stopped reading",
+                ),
+            }),
+        },
+    }
+}
+
+/// The failure a session reports when its keep-alive goes unanswered.
+fn dead_link() -> SessionError {
+    SessionError::Transport {
+        operation: "keeping the session alive",
+        source: std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the message centre stopped answering enquire_link",
+        ),
+    }
 }
 
 /// The events the bound loop reacts to.
@@ -443,8 +611,12 @@ async fn enquire_link(
 ///
 /// Failures are logged and swallowed: we are closing, and a message centre that
 /// will not say goodbye must not keep the application open.
-async fn unbind<W>(sink: &mut W, pending: &Pending, profile: &SessionProfile)
-where
+async fn unbind<W>(
+    sink: &mut W,
+    pending: &Pending,
+    profile: &SessionProfile,
+    write_deadline: Duration,
+) where
     W: futures_util::Sink<Command, Error = std::io::Error> + Unpin,
 {
     let Ok((sequence, waiter)) = pending.register(CommandId::Unbind, UNBIND_TIMEOUT).await else {
@@ -452,16 +624,23 @@ where
         return;
     };
 
-    if let Err(error) = sink
-        .send(Command::new(
-            CommandStatus::EsmeRok,
-            sequence.get(),
-            Pdu::Unbind,
-        ))
-        .await
-    {
-        tracing::warn!(error = %error, "could not send the unbind, closing anyway");
-        return;
+    // Bounded, like every other write, and here it matters most: this one runs
+    // *during* a shutdown, so a message centre that stopped reading would hold
+    // the application's exit open (CA-005-08). No cancellation token: the
+    // token is already cancelled by the time we get here, and passing it would
+    // make the goodbye impossible to say at all.
+    let command = Command::new(CommandStatus::EsmeRok, sequence.get(), Pdu::Unbind);
+
+    match tokio::time::timeout(write_deadline, sink.send(command)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(error = %error, "could not send the unbind, closing anyway");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!("the unbind could not be written in time, closing anyway");
+            return;
+        }
     }
 
     match tokio::time::timeout(UNBIND_TIMEOUT, waiter).await {
