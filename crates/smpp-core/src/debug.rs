@@ -13,6 +13,10 @@
 //! `From` that would print the body as a side effect of formatting something
 //! else.
 //!
+//! For logging a decoded command rather than raw bytes, [`redacted`] is the
+//! sanctioned path — see its documentation for why `{:?}` on a `Command` is
+//! a leak.
+//!
 //! What is freely available is [`header_dump`], which renders the 16 header
 //! octets only — `command_length`, `command_id`, `command_status`,
 //! `sequence_number`. Those four fields hold no user data and are what one
@@ -116,6 +120,43 @@ pub fn full_dump(bytes: &[u8], _authorisation: DebugDumpAuthorisation) -> String
     }
 
     rendered
+}
+
+/// Renders a command for a log, without any of its body.
+///
+/// # Why this exists
+///
+/// The gate above guards the front door while a window stays open: `Command`,
+/// `Pdu` and the bind bodies are re-exported from `rusmpp` with their
+/// `derive(Debug)` intact, and `COctetString` implements `Display`. So
+/// `tracing::debug!(?command)` on a `bind_transmitter` writes the SMSC
+/// password in clear — and it is the most natural thing a Rust developer will
+/// reach for.
+///
+/// This function is the sanctioned way to log a command. It renders the four
+/// header fields, which carry no user data and are what one actually needs to
+/// follow a session, and names the operation without ever touching the body.
+///
+/// **Never log a `Command` with `{:?}` — use this.** Milestone 015 adds the
+/// lint that makes the rule mechanical rather than a matter of discipline.
+///
+/// ```
+/// use smpp_core::{codec::{Command, Pdu}, debug, values::CommandStatus};
+///
+/// let command = Command::new(CommandStatus::EsmeRok, 42, Pdu::EnquireLink);
+/// let line = debug::redacted(&command);
+///
+/// assert!(line.contains("EnquireLink"));
+/// assert!(line.contains("42"));
+/// ```
+#[must_use]
+pub fn redacted(command: &crate::codec::Command) -> String {
+    format!(
+        "{:?} status={:?} sequence={} (body redacted)",
+        command.id(),
+        command.status(),
+        command.sequence_number(),
+    )
 }
 
 #[cfg(test)]
