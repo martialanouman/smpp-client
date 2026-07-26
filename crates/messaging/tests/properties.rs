@@ -95,6 +95,11 @@ proptest! {
         text in gsm_text(70),
         gsm_packing in any_packing(),
     ) {
+        // Same documented limit of the packed layout as below: a genuine
+        // trailing carriage return at the padding alignment is
+        // indistinguishable from padding.
+        prop_assume!(gsm_packing == Gsm7BitPacking::Unpacked || !text.ends_with('\r'));
+
         let options = SegmentationOptions::default().with_gsm_packing(gsm_packing);
         let message = segment(&text, &options, REFERENCE).unwrap();
 
