@@ -263,7 +263,140 @@ fn a_truncated_tlv_is_reported() {
     assert!(codec::decode(&bytes).is_err());
 }
 
+/// Octets *inside* `command_length` belong to the PDU, whatever the body
+/// parser makes of them.
+///
+/// `CommandCodec::decode` never advances the buffer to `command_length`, and
+/// several PDUs — the three `bind_*`, `outbind`, `query_sm`, `query_sm_resp`,
+/// `cancel_sm` — are parsed without a length. A vendor TLV appended to a bind
+/// therefore stayed in the buffer and was reported as `TrailingBytes`, even
+/// though the sender had counted it in `command_length`.
+///
+/// The same codec goes on a `Framed` at milestone 005. There the leftover
+/// raises nothing: it is read as the start of the next PDU, silently
+/// desynchronising the framing. This test pins the boundary decision to the
+/// header.
+#[test]
+fn a_vendor_tlv_inside_command_length_is_not_reported_as_trailing() {
+    let bind = Command::new(
+        CommandStatus::EsmeRok,
+        1,
+        Pdu::BindTransceiver(BindTransceiver::default()),
+    );
+    let encoded = codec::encode(&bind).expect("encoding");
+
+    // A five-octet TLV the body parser will not consume: tag 0x1400 (vendor
+    // range), length 1, value 0x2A.
+    let extra: [u8; 5] = [0x14, 0x00, 0x00, 0x01, 0x2A];
+
+    let mut framed = encoded.clone();
+    framed.extend_from_slice(&extra);
+
+    // The sender counts it in `command_length`, as the specification requires.
+    let total = u32::try_from(framed.len()).expect("small");
+    framed[0..4].copy_from_slice(&total.to_be_bytes());
+
+    let decoded =
+        codec::decode(&framed).expect("a PDU carrying an unconsumed vendor TLV must still decode");
+    assert_eq!(decoded.id(), CommandId::BindTransceiver);
+
+    // Contrast: the same octets left OUTSIDE `command_length` are genuine
+    // trailing bytes and must be refused.
+    let mut with_real_trailing = encoded;
+    with_real_trailing.extend_from_slice(&extra);
+
+    assert!(
+        matches!(
+            codec::decode(&with_real_trailing),
+            Err(SmppError::TrailingBytes { count: 5 })
+        ),
+        "octets beyond command_length must be rejected"
+    );
+}
+
+/// A `command_length` below the header size is self-contradictory: no extra
+/// byte would ever make it valid, so it is not an `Incomplete`.
+#[test]
+fn a_command_length_below_the_header_is_malformed_not_incomplete() {
+    let bytes: Vec<u8> = vec![
+        0x00, 0x00, 0x00, 0x08, // command_length = 8, below the 16-byte header
+        0x00, 0x00, 0x00, 0x15, // enquire_link
+        0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x01, //
+    ];
+
+    assert!(matches!(
+        codec::decode(&bytes),
+        Err(SmppError::Malformed {
+            announced: 8,
+            minimum: 16
+        })
+    ));
+}
+
+/// CLAUDE.md §8 — the sanctioned log line must not leak the body.
+///
+/// Uses a real password so the assertion has something to catch. The contrast
+/// with `{:?}` is asserted too: if a future version of the re-exported types
+/// stopped leaking, this test would say so rather than silently guarding
+/// nothing.
+#[test]
+fn the_redacted_form_never_leaks_the_bind_password() {
+    // `password` is a COctetString<1, 9>: eight characters plus the NUL.
+    const PASSWORD: &str = "s3cr3t08";
+
+    let bind = BindTransmitter::builder()
+        .system_id(
+            smpp_core::octets::COctetString::from_string("SMPP3TEST".to_owned()).expect("bounded"),
+        )
+        .password(
+            smpp_core::octets::COctetString::from_string(PASSWORD.to_owned()).expect("bounded"),
+        )
+        .build();
+
+    let command = Command::new(CommandStatus::EsmeRok, 7, Pdu::BindTransmitter(bind));
+
+    let line = smpp_core::debug::redacted(&command);
+    assert!(
+        !line.contains(PASSWORD),
+        "the redacted form leaked the password: {line}"
+    );
+    assert!(
+        line.contains("BindTransmitter"),
+        "the operation must stay visible"
+    );
+    assert!(line.contains('7'), "the sequence_number must stay visible");
+
+    // The very leak this function exists to avoid.
+    assert!(
+        format!("{command:?}").contains(PASSWORD),
+        "the derived Debug no longer leaks — `redacted` may have lost its purpose"
+    );
+}
+
 /// CA-003-03 — light fuzzing: 10 000 pseudo-random inputs, no panic.
+///
+/// # Why the header is built rather than drawn
+///
+/// A first version drew all four header bytes at random too. Measured over
+/// its own 10 000 inputs, the outcome was:
+///
+/// ```text
+/// too_large=8720  incomplete=1280  decode_err=0  trailing=0  ok=0
+/// ```
+///
+/// Not a single input reached `Pdu::decode`: a uniformly drawn
+/// `command_length` averages two billion, so `MAX_COMMAND_LENGTH` rejected
+/// everything at the door. The test proved the length guard does not panic
+/// and nothing else — while the property that matters, "the body decoder
+/// survives arbitrary bytes", went untested.
+///
+/// So three quarters of the inputs now carry a coherent header — real
+/// `command_id`, `command_length` equal to the actual buffer size — and only
+/// the body is random. The remaining quarter stays fully random to keep
+/// covering the guard itself. The distribution is asserted below: a future
+/// change that silently stops reaching the decoder fails the test instead of
+/// passing quietly.
 #[test]
 fn random_bytes_never_panic() {
     // Deterministic generator (guide §13: no uncontrolled randomness).
@@ -275,16 +408,64 @@ fn random_bytes_never_panic() {
         state
     };
 
-    for _ in 0..10_000 {
-        let length = usize::try_from(next() % 128).expect("fits");
-        let mut bytes = Vec::with_capacity(length);
-        for _ in 0..length {
-            bytes.push(u8::try_from(next() & 0xFF).expect("masked to a byte"));
+    // Real command ids, so the header steers the decoder towards an actual
+    // body parser rather than being rejected as unknown.
+    let known_ids: Vec<u32> = operations_of_the_specification()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+
+    let mut reached_the_body_decoder = 0_u32;
+
+    for round in 0..10_000_u32 {
+        let body_length = usize::try_from(next() % 96).expect("fits");
+
+        let mut body = Vec::with_capacity(body_length);
+        for _ in 0..body_length {
+            body.push(u8::try_from(next() & 0xFF).expect("masked to a byte"));
         }
+
+        let bytes = if round % 4 == 0 {
+            // A quarter fully random: keeps the length guard under test.
+            let mut raw = Vec::with_capacity(body_length + 4);
+            for _ in 0..4 {
+                raw.push(u8::try_from(next() & 0xFF).expect("masked to a byte"));
+            }
+            raw.extend_from_slice(&body);
+            raw
+        } else {
+            // Three quarters with a coherent header: the body decoder is the
+            // thing actually being fuzzed.
+            let index = usize::try_from(next() % 64).expect("fits") % known_ids.len();
+            let command_id = known_ids[index];
+            let status = next() % 0x0000_0100;
+            let sequence = 1 + u32::try_from(next() % 0x7FFF_FFFE).expect("fits");
+
+            let total = u32::try_from(16 + body.len()).expect("bounded by the loop");
+
+            let mut framed = Vec::with_capacity(body.len() + 16);
+            framed.extend_from_slice(&total.to_be_bytes());
+            framed.extend_from_slice(&command_id.to_be_bytes());
+            framed.extend_from_slice(&status.to_be_bytes());
+            framed.extend_from_slice(&sequence.to_be_bytes());
+            framed.extend_from_slice(&body);
+
+            reached_the_body_decoder += 1;
+            framed
+        };
 
         // The contract is "returns", not "succeeds".
         let _ = codec::decode(&bytes);
     }
+
+    // Guards the property this test exists for. Without it, a change to the
+    // generator could quietly bring us back to fuzzing nothing but the length
+    // check — which is precisely the bug this version fixes.
+    assert!(
+        reached_the_body_decoder > 7_000,
+        "only {reached_the_body_decoder} inputs carried a decodable header; \
+         the body decoder is barely being fuzzed"
+    );
 }
 
 /// CA-003-03 — every truncation of a valid PDU must be rejected cleanly.
@@ -294,7 +475,13 @@ fn every_truncation_of_a_valid_pdu_is_rejected() {
         let bytes = codec::encode(&Command::new(CommandStatus::EsmeRok, 7, pdu)).expect("encoding");
 
         for cut in 0..bytes.len() {
-            let _ = codec::decode(&bytes[..cut]);
+            // Every truncation is strictly shorter than `command_length`, so a
+            // rejection is guaranteed — asserting it is what makes the test
+            // match its own name. Without this it only proved "no panic".
+            assert!(
+                codec::decode(&bytes[..cut]).is_err(),
+                "a PDU truncated to {cut} byte(s) was accepted"
+            );
         }
     }
 }
@@ -306,12 +493,12 @@ fn every_truncation_of_a_valid_pdu_is_rejected() {
 /// ASCII payload, from empty to `max` characters: covers "empty body" and
 /// "maximal body" without writing two separate tests.
 fn ascii(max: usize) -> impl Strategy<Value = String> {
-    proptest::collection::vec(0x21u8..0x7Fu8, 0..max)
+    proptest::collection::vec(0x21u8..0x7Fu8, 0..=max)
         .prop_map(|bytes| String::from_utf8(bytes).unwrap_or_default())
 }
 
 fn bytes(max: usize) -> impl Strategy<Value = Vec<u8>> {
-    proptest::collection::vec(any::<u8>(), 0..max)
+    proptest::collection::vec(any::<u8>(), 0..=max)
 }
 
 /// Builds a `COctetString` from a possibly empty string.
