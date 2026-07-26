@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::SqlitePool;
+use sqlx::{ConnectOptions as _, SqlitePool};
 
 use crate::PersistenceError;
 
@@ -259,6 +259,19 @@ fn connect_options(config: &DatabaseConfig) -> SqliteConnectOptions {
         // written before 3.6.19. The schema declares foreign keys, so leaving
         // this off would make them decorative.
         .foreign_keys(true)
+        // sqlx logs any statement outstanding for more than a second at WARN,
+        // with its full text, when the `QueryLogger` is dropped. That default
+        // is written for a request/response service; here the longest-lived
+        // statement by design is `stream_messages`, and an export of a large
+        // campaign would emit a WARN carrying the whole SELECT every time.
+        // Noise, not a leak — the bound parameters are not part of it — but
+        // noise that would teach the reader to ignore WARN.
+        //
+        // `Debug` rather than `Off`: a slow statement is still worth seeing
+        // when someone goes looking, and the threshold is raised to thirty
+        // seconds so it means "something is wrong" rather than "a traversal is
+        // running".
+        .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(30))
 }
 
 #[cfg(test)]
