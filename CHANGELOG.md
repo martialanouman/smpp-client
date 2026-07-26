@@ -59,8 +59,41 @@ majeur.
   graphe complet et vérifiée par une toolchain épinglée. Elle était déclarée
   à 1.78 depuis le jalon 000, valeur jamais vraie et que rien ne vérifiait.
 
+### Ajouté — jalon 002, persistance SQLite
+
+- **Base SQLite en mode WAL** : `Database::open` applique `journal_mode=WAL`,
+  `synchronous=NORMAL`, `busy_timeout` et `foreign_keys` par les options de
+  connexion du pool, donc sur **chaque** connexion. Un test lit les pragmas
+  huit fois de suite pour le prouver : WAL est une demande que SQLite peut
+  décliner en silence.
+- **Schéma de la spec §14.2** dans une migration réversible unique, embarquée
+  dans le binaire par `sqlx::migrate!()` — une application packagée n'a aucun
+  fichier à emporter à côté.
+- **Cinq repositories typés** (messages, contacts, campagnes, profils de
+  session, journal PDU) derrière autant de traits de port. Pagination **par
+  curseur**, jamais par `OFFSET`, qui reparcourt les lignes qu'il saute ;
+  parcours en flux dont la mémoire ne grandit pas avec le nombre de lignes,
+  mesuré sur 100 000 messages avec un allocateur compteur.
+- **Écritures groupées en une transaction** : un lot de N transitions d'état
+  produit un commit, pas N. La propriété est vérifiée par son observable —
+  l'atomicité — puisque SQLite n'expose aucun compteur de transactions.
+- **Aucun SQL hors de `persistence`** : le pool est `pub(crate)`, donc la règle
+  est tenue par le compilateur et non par la revue. Toutes les requêtes passent
+  par `query!`/`query_as!` et le cache `.sqlx/` est commité, ce qui rend la
+  compilation possible sans base accessible.
+- **Étape 8 de la CI réellement vérifiante** : migrations appliquées sur base
+  neuve, réappliquées pour l'idempotence et la validation des empreintes, puis
+  cache `.sqlx` comparé au schéma obtenu. Les empreintes SHA-256 des migrations
+  livrées sont aussi épinglées dans un test — `sqlx` ne détecte une migration
+  éditée que sur une base déjà migrée, jamais sur un clone neuf.
+
 ### Décisions
 
+- [ADR 0007](docs/adr/0007-emplacement-des-traits-de-port.md) : les traits de
+  port vivent dans `persistence` jusqu'à ce que `messaging` et `contacts`
+  existent. L'inversion de dépendance n'a de valeur que pour un consommateur
+  qui l'utilise ; en payer le coût — l'arête remontante — face à une crate vide
+  imite la forme du principe sans en obtenir le bénéfice.
 - [ADR 0001](docs/adr/0001-choix-de-la-pile-smpp.md) passe en **Accepté** :
   niveau d'API rusmpp tranché au **niveau bas** (`CommandCodec`), `rusmppc`
   écarté. Le critère décisif est la propriété de la corrélation des
