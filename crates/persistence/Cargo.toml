@@ -10,6 +10,28 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+sqlx.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+# The domain newtypes (`SessionId`, `ClientMessageId`, `Msisdn`) and the typed
+# protocol values (`Ton`, `Npi`, `DataCoding`, `CommandStatus`) live in
+# `smpp-core`, the bottom layer. Depending on it is a DOWNWARD edge (guide
+# §8.1), and the only alternative would be to store those columns as bare
+# `String`/`u8` — exactly what CLAUDE.md §4 forbids.
+smpp-core = { path = "../smpp-core" }
+
+# `tokio::fs` for creating the data directory. Async on purpose: the blocking
+# `std::fs` equivalent on a runtime thread is what CLAUDE.md §4 rules out.
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
