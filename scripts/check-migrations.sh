@@ -32,7 +32,20 @@ if ! command -v sqlx >/dev/null 2>&1; then
   exit 1
 fi
 
-database="$(mktemp -d)/check.db"
+# A RELATIVE path under target/, not `mktemp -d`.
+#
+# `mktemp -d` returns an MSYS path (`/tmp/tmp.XXXX`) under Git-bash on the
+# Windows runner. Git-bash rewrites such paths when it passes them as bare
+# arguments, and does not when they are buried inside a URL — so
+# `sqlite:///tmp/tmp.XXXX/check.db` reached sqlx verbatim and named a directory
+# no Windows program can open. The step had never actually exercised its active
+# branch there, since it was still passing vacuously when it was written.
+#
+# A relative path has no drive letter and no prefix to translate, so the three
+# runners read it identically.
+database="target/migration-check/check.db"
+rm -rf target/migration-check
+mkdir -p target/migration-check
 export DATABASE_URL="sqlite://${database}?mode=rwc"
 
 echo "→ Applying migrations to a fresh database: $database"
