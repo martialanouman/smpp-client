@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                      contact_id, msisdn, country, valid, line_type,\n                      attributes, source, created_at\n               FROM contacts\n               WHERE rowid > ?\n               ORDER BY rowid\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "contact_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "contact_id"
+          }
+        }
+      },
+      {
+        "name": "msisdn",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "msisdn"
+          }
+        }
+      },
+      {
+        "name": "country",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "country"
+          }
+        }
+      },
+      {
+        "name": "valid",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "valid"
+          }
+        }
+      },
+      {
+        "name": "line_type",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "line_type"
+          }
+        }
+      },
+      {
+        "name": "attributes",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "attributes"
+          }
+        }
+      },
+      {
+        "name": "source",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contacts",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "82ea38d3649adf6bcb76bb3fd6daa50fadc88eaf077d79357acb12808e0e9ea5"
+}

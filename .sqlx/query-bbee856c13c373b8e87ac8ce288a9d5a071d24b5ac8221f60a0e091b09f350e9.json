@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE messages\n           SET state = ?,\n               smsc_message_id = COALESCE(?, smsc_message_id),\n               command_status = COALESCE(?, command_status),\n               dlr_stat = COALESCE(?, dlr_stat),\n               dlr_err = COALESCE(?, dlr_err),\n               sent_at = COALESCE(?, sent_at),\n               resp_at = COALESCE(?, resp_at),\n               dlr_at = COALESCE(?, dlr_at),\n               attempts = attempts + ?\n           WHERE client_message_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "bbee856c13c373b8e87ac8ce288a9d5a071d24b5ac8221f60a0e091b09f350e9"
+}

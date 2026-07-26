@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO campaigns (\n                   campaign_id, name, status, template, send_config,\n                   total_count, sent_count, delivered_count, failed_count,\n                   created_at, started_at, completed_at\n               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n               ON CONFLICT (campaign_id) DO UPDATE SET\n                   name = excluded.name,\n                   status = excluded.status,\n                   template = excluded.template,\n                   send_config = excluded.send_config,\n                   total_count = excluded.total_count,\n                   sent_count = excluded.sent_count,\n                   delivered_count = excluded.delivered_count,\n                   failed_count = excluded.failed_count,\n                   started_at = excluded.started_at,\n                   completed_at = excluded.completed_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "66c735a7c62ef1292475ef8d047f03d0f6072c8e3ea853a2f63a4ba50a47b688"
+}
