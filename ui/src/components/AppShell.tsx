@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { usePreferences } from "../store/preferences";
 import { PlaceholderView } from "../views/PlaceholderView";
+import { SessionsView } from "../views/Sessions/SessionsView";
 import { SettingsView } from "../views/SettingsView";
 import { Navigation } from "./Navigation";
 import { Notifications } from "./Notifications";
@@ -47,7 +48,11 @@ export function AppShell() {
       <main className="flex-1 border-l border-[var(--shinobi-border)] p-8">
         <h1 className="mb-6 text-2xl font-semibold tracking-tight">{t(`nav.${screen}`)}</h1>
 
-        {screen === "settings" ? <SettingsView /> : <PlaceholderView screen={screen} />}
+        {screen === "settings" ? <SettingsView /> : null}
+        {screen === "sessions" ? <SessionsView /> : null}
+        {screen !== "settings" && screen !== "sessions" ? (
+          <PlaceholderView screen={screen} />
+        ) : null}
       </main>
 
       <Notifications />

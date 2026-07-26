@@ -56,47 +56,16 @@ pub enum Encoding {
     Ucs2,
 }
 
-/// How GSM 7-bit septets are laid out in the octets of `short_message`.
+/// The two GSM 7-bit layout characteristics, re-exported from
+/// [`smpp_core::values`].
 ///
-/// # Why this is a choice at all
-///
-/// GSM 03.38 §6.1.2.1.1 describes the **over-the-air** format, where eight
-/// septets are squeezed into seven octets. That format applies between the
-/// message centre and the handset — *not* to the `short_message` field of a
-/// `submit_sm`. On the SMPP link the near-universal convention is the opposite
-/// one: **one septet per octet**, high bit clear, and the message centre packs
-/// before the radio interface. Kannel, Jasmin, CloudHopper and the large
-/// commercial aggregators all expect that. Packing on the SMPP link exists —
-/// some ZTE and legacy operator equipment — but it is the documented exception.
-///
-/// Getting it wrong is silent in both directions: the message centre answers
-/// `ESME_ROK`, the delivery receipt says `DELIVRD`, and the handset shows
-/// gibberish. Nothing ever comes back. Hence the default, and hence the fact
-/// that this is configured per session rather than guessed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Gsm7BitPacking {
-    /// One septet per octet, high bit clear. The default and the common case.
-    ///
-    /// `sm_length` counts one octet per septet, so a full single segment is
-    /// 160 octets — well within the 254 the field allows. The message centre
-    /// packs before the radio interface.
-    #[default]
-    Unpacked,
-    /// Eight septets in seven octets, as GSM 03.38 §6.1.2.1.1 packs them.
-    ///
-    /// For the message centres that require it. Two consequences worth knowing
-    /// before turning it on:
-    ///
-    /// * `sm_length` is in octets, so the receiver has to *recompute* the
-    ///   septet count from it. The segmenter therefore refuses to close a
-    ///   non-final segment on a count that would not come back exactly.
-    /// * on the **last** segment the recomputation can still yield one septet
-    ///   too many, which the padding makes a carriage return. That case is
-    ///   unavoidable — there is no later segment to push a character into —
-    ///   and it is the one TS 23.038 §6.1.2.3.1 covers by prescribing `CR` as
-    ///   the pad value precisely so it stays harmless.
-    Packed,
-}
+/// [`Gsm7BitPacking`] was defined here at milestone 004. It moved down to
+/// `smpp-core` at milestone 005, when [`Gsm7BitCharset`] joined it: both are
+/// decided by the **message centre**, so both are fields of the session
+/// profile — and the profile lives in `smpp-session`, a layer *below* this
+/// one. A value the profile carries and this crate applies has to sit under
+/// both. The re-export keeps the milestone-004 paths working.
+pub use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking};
 
 impl Encoding {
     /// The `data_coding` value of spec §7.5 for this encoding.
@@ -136,20 +105,40 @@ impl Encoding {
     }
 
     /// Units `character` costs, or `None` when this encoding cannot write it.
+    ///
+    /// Reads GSM 7-bit under [`Gsm7BitCharset::Gsm0338`], the default. Use
+    /// [`Self::unit_cost_in`] for a session that sets the alt-charset.
     #[must_use]
     pub fn unit_cost(self, character: char) -> Option<usize> {
+        self.unit_cost_in(character, Gsm7BitCharset::Gsm0338)
+    }
+
+    /// Units `character` costs under a given GSM 7-bit charset reading.
+    ///
+    /// `charset` is ignored for Latin-1 and UCS2: it only describes how the
+    /// octets of a GSM 7-bit body are to be read.
+    #[must_use]
+    pub fn unit_cost_in(self, character: char, charset: Gsm7BitCharset) -> Option<usize> {
         match self {
-            Self::Gsm7Bit => gsm0338::septet_cost(character),
+            Self::Gsm7Bit => gsm0338::septet_cost(character, charset),
             Self::Latin1 => latin1::octet_cost(character),
             Self::Ucs2 => Some(ucs2::code_unit_cost(character)),
         }
     }
 
     /// Whether every character of `text` can be written in this encoding.
+    ///
+    /// Reads GSM 7-bit under [`Gsm7BitCharset::Gsm0338`], the default.
     #[must_use]
     pub fn can_represent(self, text: &str) -> bool {
+        self.can_represent_in(text, Gsm7BitCharset::Gsm0338)
+    }
+
+    /// Whether every character of `text` fits under a given charset reading.
+    #[must_use]
+    pub fn can_represent_in(self, text: &str, charset: Gsm7BitCharset) -> bool {
         match self {
-            Self::Gsm7Bit => gsm0338::is_representable(text),
+            Self::Gsm7Bit => gsm0338::is_representable(text, charset),
             Self::Latin1 => latin1::is_representable(text),
             Self::Ucs2 => true,
         }
@@ -258,7 +247,19 @@ pub enum EncodingChoice {
 /// own — it represents strictly less than UCS2 for the same 140 octets.
 #[must_use]
 pub fn detect(text: &str) -> Encoding {
-    if gsm0338::is_representable(text) {
+    detect_in(text, Gsm7BitCharset::Gsm0338)
+}
+
+/// The encoding [`EncodingChoice::Automatic`] picks under a charset reading.
+///
+/// The charset is what the *session* declares, and it narrows the GSM
+/// alphabet: under [`Gsm7BitCharset::Latin1`] a text holding `€` or a Greek
+/// capital is no longer GSM-representable, so detection widens it to UCS2
+/// instead of producing octets the message centre would transcode into
+/// something else.
+#[must_use]
+pub fn detect_in(text: &str, charset: Gsm7BitCharset) -> Encoding {
+    if gsm0338::is_representable(text, charset) {
         Encoding::Gsm7Bit
     } else {
         Encoding::Ucs2
@@ -272,14 +273,29 @@ pub fn detect(text: &str) -> Encoding {
 /// [`EncodingError::UnrepresentableCharacter`] when a forced encoding cannot
 /// write some character. Never fails on [`EncodingChoice::Automatic`].
 pub fn resolve(choice: EncodingChoice, text: &str) -> Result<Encoding, EncodingError> {
+    resolve_in(choice, text, Gsm7BitCharset::Gsm0338)
+}
+
+/// Settles [`EncodingChoice`] against `text` under a charset reading.
+///
+/// # Errors
+///
+/// [`EncodingError::UnrepresentableCharacter`] when a forced encoding cannot
+/// write some character. Never fails on [`EncodingChoice::Automatic`], which
+/// widens to UCS2 rather than refusing.
+pub fn resolve_in(
+    choice: EncodingChoice,
+    text: &str,
+    charset: Gsm7BitCharset,
+) -> Result<Encoding, EncodingError> {
     let EncodingChoice::Forced(encoding) = choice else {
-        return Ok(detect(text));
+        return Ok(detect_in(text, charset));
     };
 
     if let Some((index, character)) = text
         .chars()
         .enumerate()
-        .find(|(_, character)| encoding.unit_cost(*character).is_none())
+        .find(|(_, character)| encoding.unit_cost_in(*character, charset).is_none())
     {
         return Err(EncodingError::UnrepresentableCharacter {
             character,

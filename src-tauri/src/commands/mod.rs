@@ -13,3 +13,4 @@
 //! business logic and belongs in a module or a crate below.
 
 pub(crate) mod config;
+pub(crate) mod session;

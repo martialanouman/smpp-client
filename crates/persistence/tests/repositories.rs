@@ -18,7 +18,7 @@ use persistence::{
     SqliteSessionProfileRepository,
 };
 use smpp_core::types::{ClientMessageId, SessionId};
-use smpp_core::values::CommandStatus;
+use smpp_core::values::{CommandStatus, Gsm7BitCharset, Gsm7BitPacking};
 
 use support::{
     a_campaign, a_contact, a_contact_list, a_queued_message, a_session_profile, instant,
@@ -42,6 +42,45 @@ async fn a_session_profile_survives_a_round_trip() {
         .expect("the profile was just written");
 
     assert_eq!(read_back, profile);
+}
+
+/// ADR 0009 — the two GSM 7-bit layout settings are stored, not defaulted.
+///
+/// The fixture uses the defaults, so the round-trip test above would pass just
+/// as well if the columns were dropped on the way in and re-defaulted on the
+/// way out. This one writes the non-default pair.
+#[tokio::test]
+async fn the_gsm7_layout_of_a_profile_is_stored_rather_than_defaulted() {
+    let harness = temp_database().await;
+    let repository = SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let mut profile = a_session_profile(SessionId::new(), "kannel");
+    profile.gsm7_charset = Gsm7BitCharset::Latin1;
+    profile.gsm7_packing = Gsm7BitPacking::Unpacked;
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    let read_back = repository
+        .find_session_profile(profile.session_id)
+        .await
+        .unwrap()
+        .expect("the profile was just written");
+
+    assert_eq!(read_back.gsm7_charset, Gsm7BitCharset::Latin1);
+    assert_eq!(read_back.gsm7_packing, Gsm7BitPacking::Unpacked);
+
+    // And the other layout, so neither value is the one that happens to win.
+    profile.gsm7_charset = Gsm7BitCharset::Gsm0338;
+    profile.gsm7_packing = Gsm7BitPacking::Packed;
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    let read_back = repository
+        .find_session_profile(profile.session_id)
+        .await
+        .unwrap()
+        .expect("the profile was just updated");
+
+    assert_eq!(read_back.gsm7_charset, Gsm7BitCharset::Gsm0338);
+    assert_eq!(read_back.gsm7_packing, Gsm7BitPacking::Packed);
 }
 
 #[tokio::test]

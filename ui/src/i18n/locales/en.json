@@ -41,12 +41,77 @@
   },
   "error": {
     "CONFIG_INVALID_LANGUAGE": "Unsupported language.",
-    "CONFIG_INVALID_THEME": "Unsupported theme.",
     "CONFIG_INVALID_LOG_LEVEL": "Unknown log level.",
     "CONFIG_INVALID_RETENTION": "Retention is outside the accepted range.",
+    "CONFIG_INVALID_THEME": "Unsupported theme.",
+    "CONFIG_MALFORMED": "The preferences file could not be parsed.",
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
-    "CONFIG_MALFORMED": "The preferences file could not be parsed.",
+    "SESSION_BIND_REJECTED": "The message centre refused the bind.",
+    "SESSION_BUSY": "Another session is already open. Close it before opening a second one.",
+    "SESSION_CLOSED": "The session is not available.",
+    "SESSION_INVALID_ID": "Invalid session identifier.",
+    "SESSION_INVALID_PROFILE": "The connection profile holds an invalid value.",
+    "SESSION_NOT_FOUND": "No such connection profile.",
+    "SESSION_STORAGE": "The database could not be read or written.",
+    "SESSION_TRANSPORT": "The connection to the message centre failed.",
     "unknown": "Something went wrong."
+  },
+  "sessions": {
+    "empty": "No connection profile yet. Create one to open a session to a message centre.",
+    "newProfile": "New profile",
+    "edit": "Edit",
+    "close": "Close",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel",
+    "bind": "Bind",
+    "unbind": "Unbind",
+    "password": "SMSC password",
+    "inFlight": "{{count}} in flight",
+    "gsm7Hint": "The GSM 7-bit layout is dictated by the message centre: it cannot be guessed, and getting it wrong only shows on the recipient's handset.",
+    "state": {
+      "CLOSED": "Closed",
+      "CONNECTING": "Connecting…",
+      "BINDING": "Binding…",
+      "BOUND": "Bound",
+      "UNBOUND": "Unbound",
+      "RECONNECT": "Reconnecting…",
+      "ERROR": "Error"
+    },
+    "giveUp": {
+      "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
+      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
+      "SESSION_ENDED": "The session ended and will not restart on its own."
+    },
+    "bindType": {
+      "transmitter": "Transmit only (TX)",
+      "receiver": "Receive only (RX)",
+      "transceiver": "Transmit and receive (TRX)"
+    },
+    "gsm7Packing": {
+      "unpacked": "Unpacked (default)",
+      "packed": "Packed"
+    },
+    "gsm7Charset": {
+      "gsm0338": "GSM 03.38 (default)",
+      "latin1": "Latin-1 (alt-charset)"
+    },
+    "field": {
+      "name": "Name",
+      "host": "Host",
+      "port": "Port",
+      "systemId": "system_id",
+      "systemType": "system_type",
+      "bindType": "Bind type",
+      "interfaceVersion": "SMPP version",
+      "windowSize": "Window",
+      "enquireLinkS": "enquire_link (s)",
+      "responseTimeoutS": "Response timeout (s)",
+      "minBackoffS": "Min back-off (s)",
+      "maxBackoffS": "Max back-off (s)",
+      "reconnectEnabled": "Automatic reconnection",
+      "jitter": "Jitter on the back-off"
+    }
   }
 }

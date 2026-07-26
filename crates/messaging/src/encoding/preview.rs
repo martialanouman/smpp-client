@@ -251,7 +251,18 @@ pub(crate) fn plan(
     text: &str,
     options: &SegmentationOptions,
 ) -> Result<SegmentPlan, EncodingError> {
-    let encoding = super::resolve(options.encoding, text)?;
+    // ADR 0009 §7, checked at the one point both `segment` and `preview` go
+    // through. Leaving it to the session profile alone left a hole: nothing
+    // stops a `SegmentationOptions` being built by hand, and `pack` would
+    // then quietly mask the high bit off every accented character.
+    if !options.gsm_charset.is_compatible_with(options.gsm_packing) {
+        return Err(EncodingError::IncompatibleGsm7Layout {
+            charset: options.gsm_charset.code(),
+            packing: options.gsm_packing.code(),
+        });
+    }
+
+    let encoding = super::resolve_in(options.encoding, text, options.gsm_charset)?;
     let mode = options.mode;
     let (single, concatenated) = capacities(encoding, options);
 
@@ -259,7 +270,7 @@ pub(crate) fn plan(
     let mut characters = 0_usize;
 
     for (index, character) in text.chars().enumerate() {
-        let Some(cost) = encoding.unit_cost(character) else {
+        let Some(cost) = encoding.unit_cost_in(character, options.gsm_charset) else {
             return Err(EncodingError::UnrepresentableCharacter {
                 character,
                 index,
@@ -297,14 +308,13 @@ pub(crate) fn plan(
     for (index, character) in text.chars().enumerate() {
         // The first pass proved every character representable; raising the
         // error rather than defaulting to zero keeps that a fact.
-        let cost =
-            encoding
-                .unit_cost(character)
-                .ok_or(EncodingError::UnrepresentableCharacter {
-                    character,
-                    index,
-                    encoding,
-                })?;
+        let cost = encoding
+            .unit_cost_in(character, options.gsm_charset)
+            .ok_or(EncodingError::UnrepresentableCharacter {
+                character,
+                index,
+                encoding,
+            })?;
 
         filler.accept(cost);
     }

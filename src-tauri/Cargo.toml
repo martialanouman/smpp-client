@@ -60,13 +60,21 @@ specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 
-# NOTE — no business crate is wired in yet: milestone 001 only carries the
-# application shell and the IPC contract. Dependencies on `messaging`,
-# `contacts`, `numbers-gen` and `logging-export` appear with their commands.
+# --- Business crates (milestone 005) ----------------------------------------
+#
+# The IPC layer holds their handles and calls them; it implements none of them
+# (CLAUDE.md §3). `messaging`, `contacts`, `numbers-gen` and `logging-export`
+# join the list with their own commands.
+persistence = { path = "../crates/persistence" }
+smpp-session = { path = "../crates/smpp-session" }
+
+# ONLY for `debug::redacted`, the sanctioned way to log a decoded command, and
+# for `types::SessionId`. No PDU is built here.
+smpp-core = { path = "../crates/smpp-core" }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "test-util", "time", "sync"] }
 
 [lints]
 workspace = true

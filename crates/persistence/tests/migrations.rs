@@ -40,6 +40,15 @@ const SHIPPED_MIGRATIONS: &[(&str, &str)] = &[
         "20260726120000_initial_schema.up.sql",
         "1a7aa1dc5a997eb11a414689c9ce4f04e767004700e244d8b8a7b667d285ce75",
     ),
+    // Milestone 005, ADR 0009: the two GSM 7-bit layout characteristics.
+    (
+        "20260726180000_session_gsm7_layout.down.sql",
+        "a13e8b4c2c1364b7991ac4f19f983f806611402ab9050d045a21729e5cd17db1",
+    ),
+    (
+        "20260726180000_session_gsm7_layout.up.sql",
+        "7d75d2de3b026e5a44738ebd97e56250bba3579caa19e89ac63807d6cd0756e0",
+    ),
 ];
 
 /// The `migrations/` directory, resolved from this crate's manifest.

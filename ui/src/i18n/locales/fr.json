@@ -41,12 +41,77 @@
   },
   "error": {
     "CONFIG_INVALID_LANGUAGE": "Langue non prise en charge.",
-    "CONFIG_INVALID_THEME": "Thème non pris en charge.",
     "CONFIG_INVALID_LOG_LEVEL": "Niveau de journalisation inconnu.",
     "CONFIG_INVALID_RETENTION": "Durée de rétention hors des bornes autorisées.",
+    "CONFIG_INVALID_THEME": "Thème non pris en charge.",
+    "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
-    "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
+    "SESSION_BIND_REJECTED": "Le SMSC a refusé le bind.",
+    "SESSION_BUSY": "Une autre session est déjà ouverte. Fermez-la avant d'en ouvrir une seconde.",
+    "SESSION_CLOSED": "La session n'est pas disponible.",
+    "SESSION_INVALID_ID": "Identifiant de session invalide.",
+    "SESSION_INVALID_PROFILE": "Le profil de connexion contient une valeur invalide.",
+    "SESSION_NOT_FOUND": "Ce profil de connexion n'existe pas.",
+    "SESSION_STORAGE": "La base de données n'a pas pu être lue ou écrite.",
+    "SESSION_TRANSPORT": "La connexion au SMSC a échoué.",
     "unknown": "Une erreur est survenue."
+  },
+  "sessions": {
+    "empty": "Aucun profil de connexion. Créez-en un pour ouvrir une session vers un SMSC.",
+    "newProfile": "Nouveau profil",
+    "edit": "Modifier",
+    "close": "Fermer",
+    "delete": "Supprimer",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "bind": "Se connecter",
+    "unbind": "Se déconnecter",
+    "password": "Mot de passe SMSC",
+    "inFlight": "{{count}} en attente",
+    "gsm7Hint": "La disposition GSM 7 bits est imposée par le SMSC : elle ne se devine pas, et une erreur ne se voit que sur le téléphone du destinataire.",
+    "state": {
+      "CLOSED": "Fermée",
+      "CONNECTING": "Connexion…",
+      "BINDING": "Bind en cours…",
+      "BOUND": "Connectée",
+      "UNBOUND": "Déconnectée",
+      "RECONNECT": "Reconnexion…",
+      "ERROR": "Erreur"
+    },
+    "giveUp": {
+      "FATAL_STATUS": "Le SMSC a refusé le bind définitivement. Vérifiez les identifiants : aucune nouvelle tentative ne sera faite.",
+      "RECONNECT_DISABLED": "La reconnexion automatique est désactivée sur ce profil.",
+      "SESSION_ENDED": "La session s'est terminée et ne redémarrera pas d'elle-même."
+    },
+    "bindType": {
+      "transmitter": "Émission (TX)",
+      "receiver": "Réception (RX)",
+      "transceiver": "Émission et réception (TRX)"
+    },
+    "gsm7Packing": {
+      "unpacked": "Non packé (défaut)",
+      "packed": "Packé"
+    },
+    "gsm7Charset": {
+      "gsm0338": "GSM 03.38 (défaut)",
+      "latin1": "Latin-1 (alt-charset)"
+    },
+    "field": {
+      "name": "Nom",
+      "host": "Hôte",
+      "port": "Port",
+      "systemId": "system_id",
+      "systemType": "system_type",
+      "bindType": "Type de bind",
+      "interfaceVersion": "Version SMPP",
+      "windowSize": "Fenêtre",
+      "enquireLinkS": "enquire_link (s)",
+      "responseTimeoutS": "Délai de réponse (s)",
+      "minBackoffS": "Back-off min (s)",
+      "maxBackoffS": "Back-off max (s)",
+      "reconnectEnabled": "Reconnexion automatique",
+      "jitter": "Jitter sur le back-off"
+    }
   }
 }

@@ -14,7 +14,9 @@ pub use enums::{BindType, CampaignStatus, MessageState, PduDirection};
 pub use ids::{CampaignId, ContactId, ListId};
 
 use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
-use smpp_core::values::{CommandStatus, DataCoding, Npi, SmppVersion, Ton};
+use smpp_core::values::{
+    CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
+};
 
 use crate::Timestamp;
 
@@ -64,6 +66,14 @@ pub struct SessionProfile {
     pub response_timeout_s: u32,
     /// Reconnection policy, as an opaque JSON document.
     pub reconnect_config: Option<String>,
+    /// How GSM 7-bit septets sit in `short_message` (ADR 0008).
+    pub gsm7_packing: Gsm7BitPacking,
+    /// What those octets mean — GSM 03.38 positions, or ISO-8859-1 code
+    /// points the message centre transcodes (ADR 0009).
+    ///
+    /// A column rather than a guess: nothing on the wire distinguishes the
+    /// two, and a pure-ASCII message is identical under both.
+    pub gsm7_charset: Gsm7BitCharset,
     /// Number of parallel binds for this logical session (spec §8.5).
     pub bind_count: u32,
     /// When the profile was created.
@@ -99,6 +109,8 @@ impl core::fmt::Debug for SessionProfile {
             .field("enquire_link_s", &self.enquire_link_s)
             .field("response_timeout_s", &self.response_timeout_s)
             .field("reconnect_config", &self.reconnect_config)
+            .field("gsm7_packing", &self.gsm7_packing)
+            .field("gsm7_charset", &self.gsm7_charset)
             .field("bind_count", &self.bind_count)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
@@ -457,7 +469,7 @@ mod tests {
     };
     use crate::records::BindType;
     use crate::Timestamp;
-    use smpp_core::values::SmppVersion;
+    use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 
     fn a_profile() -> SessionProfile {
         SessionProfile {
@@ -476,6 +488,8 @@ mod tests {
             enquire_link_s: 30,
             response_timeout_s: 10,
             reconnect_config: None,
+            gsm7_packing: Gsm7BitPacking::Unpacked,
+            gsm7_charset: Gsm7BitCharset::Gsm0338,
             bind_count: 1,
             created_at: Timestamp::now(),
             updated_at: Timestamp::now(),

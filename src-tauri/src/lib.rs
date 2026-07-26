@@ -32,6 +32,7 @@ mod error;
 mod events;
 mod ipc;
 mod paths;
+mod sessions;
 mod state;
 mod telemetry;
 
@@ -85,9 +86,25 @@ pub fn run() -> anyhow::Result<()> {
                 telemetry::init(&paths.log_dir, settings.log_level, settings.retention_days)
                     .context("failed to install the tracing subscriber")?;
 
+            // The database is opened and migrated **before** the state is
+            // handed to Tauri: a command that found an unmigrated file would
+            // fail on a missing table, which reads as a bug rather than as a
+            // failed start. `block_on` at the entry point is the one place
+            // `clippy.toml` allows it, and `setup` is not async.
+            let database_file = paths.database_file();
+            let database = tauri::async_runtime::block_on(async {
+                let database =
+                    persistence::Database::open(persistence::DatabaseConfig::new(&database_file))
+                        .await?;
+                database.migrate().await?;
+
+                Ok::<_, persistence::PersistenceError>(database)
+            })
+            .context("failed to open the application database")?;
+
             app.manage(guard);
             app.manage(level_handle);
-            app.manage(state::AppState::new(store, settings));
+            app.manage(state::AppState::new(store, settings, database));
 
             if let Some(error) = load_failure {
                 tracing::warn!(
@@ -105,6 +122,24 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .context("failed to start the Tauri application")
+        .build(tauri::generate_context!())
+        .context("failed to start the Tauri application")?
+        .run(|app, event| {
+            // CA-005-08 — closing the application unbinds every live session:
+            // `unbind`, a bounded wait for `unbind_resp`, then the socket.
+            // Without this the process exits on an open bind, and the message
+            // centre keeps the session until its own timeout reaps it — which
+            // makes the next start fail with `ESME_RALYBND`.
+            //
+            // `ExitRequested` rather than `Exit`: by the time `Exit` fires the
+            // runtime is already winding down and an `unbind` would not get
+            // out.
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                let state = app.state::<state::AppState>();
+
+                tauri::async_runtime::block_on(state.sessions().shutdown());
+            }
+        });
+
+    Ok(())
 }

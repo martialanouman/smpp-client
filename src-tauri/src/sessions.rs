@@ -1,0 +1,302 @@
+//! What the session commands are allowed to reach.
+//!
+//! Three handles and no logic (CLAUDE.md §3): the profile repository, the
+//! session registry of spec §8.3, and the emitter that pushes `sessions:state`.
+//! Everything that decides anything lives in `smpp-session` or `persistence`.
+//!
+//! The one piece of behaviour here is the **forwarder**: a task per session
+//! that watches the session's `watch` channel and turns each change into an
+//! event. It has to be somewhere, and it cannot be in `smpp-session` — that
+//! crate must not know Tauri exists.
+
+use std::sync::Arc;
+
+use core::time::Duration;
+
+use persistence::{Database, SqliteSessionProfileRepository};
+use smpp_session::profile::{Password, SessionProfile};
+use smpp_session::{SessionHandle, SessionRegistry, TcpTransport};
+use tauri::{AppHandle, Runtime};
+use tokio::sync::watch;
+
+use crate::commands::session::statuses;
+use crate::error::ErrorDto;
+use crate::events::{EventEmitter, SESSIONS_STATE_INTERVAL};
+
+/// The session half of the application state.
+pub(crate) struct SessionServices {
+    profiles: SqliteSessionProfileRepository,
+    registry: Arc<SessionRegistry<TcpTransport>>,
+    events: Arc<EventEmitter>,
+}
+
+impl core::fmt::Debug for SessionServices {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SessionServices")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SessionServices {
+    /// Binds the services to an open database.
+    pub(crate) fn new(database: Database, events: Arc<EventEmitter>) -> Self {
+        Self {
+            profiles: SqliteSessionProfileRepository::new(database),
+            registry: Arc::new(SessionRegistry::new(TcpTransport)),
+            events,
+        }
+    }
+
+    /// The profile repository.
+    pub(crate) const fn profiles(&self) -> &SqliteSessionProfileRepository {
+        &self.profiles
+    }
+
+    /// The session registry.
+    pub(crate) const fn registry(&self) -> &Arc<SessionRegistry<TcpTransport>> {
+        &self.registry
+    }
+
+    /// Opens a session and starts forwarding its state to the interface.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the registry refuses — `SESSION_BUSY`, most often.
+    pub(crate) async fn bind<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        profile: SessionProfile,
+        password: Password,
+    ) -> Result<SessionHandle, ErrorDto> {
+        let session = self
+            .registry
+            .bind(profile, password)
+            .await
+            .map_err(|error| ErrorDto::from(&error))?;
+
+        let handle = session.handle.clone();
+
+        self.spawn_forwarder(app, &handle);
+        self.drain_deliveries(session);
+
+        Ok(handle)
+    }
+
+    /// Emits `sessions:state` with the current picture.
+    ///
+    /// Called right after a command: the interface has just asked for
+    /// something and must see the answer.
+    pub(crate) async fn publish<R: Runtime>(&self, app: &AppHandle<R>) {
+        let payload = statuses(&self.registry).await;
+
+        self.events.emit_sessions(app, &payload);
+    }
+
+    /// Closes every live session. Called when the application exits.
+    pub(crate) async fn shutdown(&self) {
+        self.registry.shutdown_all().await;
+    }
+
+    /// Watches one session's state and turns each change into an event.
+    ///
+    /// The task ends when the session's `watch` sender drops, which happens
+    /// when the supervisor returns — so it has an owner and a defined end, and
+    /// is not the orphan CLAUDE.md §4 forbids. It is not joined: the session
+    /// it follows is already gone by the time it stops, and there is nothing
+    /// left to wait for.
+    ///
+    /// # Pacing, not filtering
+    ///
+    /// This loop emits, then sleeps [`SESSIONS_STATE_INTERVAL`], then waits
+    /// for the next change — and when it wakes it **re-reads the registry**
+    /// rather than emitting a payload it prepared earlier. Transitions that
+    /// happened during the sleep are therefore coalesced into the state that
+    /// followed them, and the last state is always delivered.
+    ///
+    /// That is the property a throttle at the emitter could not have. It used
+    /// to discard emissions arriving too close together, and since a healthy
+    /// session stops changing once it is `BOUND`, the discarded one was
+    /// frequently the last: `CONNECTING` at t=0 was shown, `BINDING` at t=1 ms
+    /// and `BOUND` at t=6 ms were both dropped, and the screen said
+    /// `CONNECTING` for as long as the session lived. `watch` keeps only the
+    /// latest value, which is exactly the semantics this loop needs.
+    fn spawn_forwarder<R: Runtime>(&self, app: &AppHandle<R>, handle: &SessionHandle) {
+        let watch = handle.watch();
+        let registry = Arc::clone(&self.registry);
+        let events = Arc::clone(&self.events);
+        let app = app.clone();
+
+        // The Arcs are cloned per call rather than borrowed: a closure that
+        // lends to the future it returns is not something stable Rust can
+        // express, and an `Arc::clone` per state change is free next to
+        // crossing the IPC bridge.
+        let publish = move || {
+            let registry = Arc::clone(&registry);
+            let events = Arc::clone(&events);
+            let app = app.clone();
+
+            async move {
+                let payload = statuses(&registry).await;
+
+                events.emit_sessions(&app, &payload);
+            }
+        };
+
+        tauri::async_runtime::spawn(forward(watch, SESSIONS_STATE_INTERVAL, publish));
+    }
+
+    /// Drains the delivery queue of a session, dropping what it holds.
+    ///
+    /// Milestone 008 is what reads delivery receipts; until then the queue
+    /// still has to be drained, because a full one makes the reader log a
+    /// warning per PDU. Draining and dropping is the honest placeholder, and
+    /// it says so in the log.
+    fn drain_deliveries(&self, mut session: smpp_session::Session) {
+        tauri::async_runtime::spawn(async move {
+            while let Some(command) = session.deliveries.recv().await {
+                tracing::debug!(
+                    pdu = %smpp_core::debug::redacted(&command),
+                    "incoming PDU dropped: delivery receipts arrive at milestone 008"
+                );
+            }
+        });
+    }
+}
+
+/// Emits on every change, paced by `interval`, always reading the state fresh.
+///
+/// Split out of [`SessionServices::spawn_forwarder`] so the property that
+/// matters can be tested without a Tauri runtime: **the last state a session
+/// reaches is always emitted**, whatever happened in the milliseconds before
+/// it. `publish` is called *after* the wake-up and after the pause, never with
+/// a payload prepared earlier — that ordering is the whole fix.
+async fn forward<T, P, Fut>(mut watch: watch::Receiver<T>, interval: Duration, publish: P)
+where
+    P: Fn() -> Fut,
+    Fut: core::future::Future<Output = ()>,
+{
+    loop {
+        let ended = watch.changed().await.is_err();
+
+        publish().await;
+
+        if ended {
+            return;
+        }
+
+        // Coalesce whatever happens next. `watch` reports a change immediately
+        // after this if one occurred meanwhile, and the read inside `publish`
+        // then picks up the newest state rather than the one that woke us.
+        tokio::time::sleep(interval).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // `#[tokio::test]` expands to `Runtime::block_on`, which `clippy.toml`
+    // reserves for a binary entry point. A test harness is one.
+    #![allow(clippy::disallowed_methods)]
+
+    use super::*;
+
+    const INTERVAL: Duration = Duration::from_millis(100);
+
+    /// The state cell the recorder reads, standing in for the registry.
+    type Cell = Arc<tokio::sync::Mutex<&'static str>>;
+
+    /// What `forward` chose to emit, in order.
+    type Log = Arc<tokio::sync::Mutex<Vec<&'static str>>>;
+
+    /// A `publish` that reads the cell **at call time**, the way the real one
+    /// reads the registry.
+    fn recorder(
+        state: &Cell,
+        seen: &Log,
+    ) -> impl Fn() -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send>> {
+        let state = Arc::clone(state);
+        let seen = Arc::clone(seen);
+
+        move || {
+            let state = Arc::clone(&state);
+            let seen = Arc::clone(&seen);
+
+            Box::pin(async move {
+                let current = *state.lock().await;
+
+                seen.lock().await.push(current);
+            })
+        }
+    }
+
+    /// **The regression.** A message centre on the same host completes the
+    /// handshake in milliseconds. Under the old throttle `CONNECTING` was
+    /// admitted and both `BINDING` and `BOUND` were discarded with nothing to
+    /// replay them, so the screen showed `CONNECTING` for as long as the
+    /// session lived.
+    ///
+    /// What must hold is not "every transition is delivered" — coalescing is
+    /// wanted — but "the **last** one always is".
+    #[tokio::test(start_paused = true)]
+    async fn the_final_state_is_emitted_however_fast_the_transitions_were() {
+        let state: Cell = Arc::new(tokio::sync::Mutex::new("CLOSED"));
+        let seen: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (sender, receiver) = watch::channel(0_u32);
+
+        let forwarder = tokio::spawn(forward(receiver, INTERVAL, recorder(&state, &seen)));
+
+        for (at, next) in [(0, "CONNECTING"), (1, "BINDING"), (6, "BOUND")] {
+            tokio::time::sleep(Duration::from_millis(at)).await;
+            *state.lock().await = next;
+            sender.send_modify(|version| *version += 1);
+        }
+
+        // Let the pacing run its course, then end the session.
+        tokio::time::sleep(INTERVAL * 3).await;
+        drop(sender);
+        forwarder.await.expect("the forwarder ends with its sender");
+
+        let seen = seen.lock().await.clone();
+
+        assert_eq!(
+            seen.last(),
+            Some(&"BOUND"),
+            "the state the session settled in must reach the interface: {seen:?}"
+        );
+        assert!(
+            seen.contains(&"CONNECTING"),
+            "the first transition is not delayed by the pacing: {seen:?}"
+        );
+    }
+
+    /// The pacing still holds: a storm of changes does not produce one
+    /// emission each.
+    #[tokio::test(start_paused = true)]
+    async fn a_burst_of_changes_is_coalesced_rather_than_replayed_one_by_one() {
+        let state: Cell = Arc::new(tokio::sync::Mutex::new("CLOSED"));
+        let seen: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (sender, receiver) = watch::channel(0_u32);
+
+        let forwarder = tokio::spawn(forward(receiver, INTERVAL, recorder(&state, &seen)));
+
+        for _ in 0..50_u32 {
+            *state.lock().await = "RECONNECT";
+            sender.send_modify(|version| *version += 1);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        *state.lock().await = "BOUND";
+        sender.send_modify(|version| *version += 1);
+        tokio::time::sleep(INTERVAL * 3).await;
+        drop(sender);
+        forwarder.await.expect("the forwarder ends with its sender");
+
+        let seen = seen.lock().await.clone();
+
+        assert!(
+            seen.len() < 10,
+            "fifty changes over fifty milliseconds must not be fifty emissions: {seen:?}"
+        );
+        assert_eq!(seen.last(), Some(&"BOUND"), "and the last one still wins");
+    }
+}

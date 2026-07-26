@@ -56,6 +56,23 @@ pub(crate) enum ErrorCode {
     ConfigUnwritable,
     /// The preferences file is not valid JSON.
     ConfigMalformed,
+
+    /// A session profile field failed validation.
+    SessionInvalidProfile,
+    /// The `session_id` is not a well-formed identifier.
+    SessionInvalidId,
+    /// No profile carries that identifier.
+    SessionNotFound,
+    /// Another session is already live (milestone 011 lifts this).
+    SessionBusy,
+    /// The message centre refused the bind.
+    SessionBindRejected,
+    /// The socket failed.
+    SessionTransport,
+    /// The session is gone, or its tasks ended abnormally.
+    SessionClosed,
+    /// The database could not be read or written.
+    SessionStorage,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -146,6 +163,82 @@ impl From<&ConfigError> for ErrorDto {
             ConfigError::Unwritable(_) => Self::bare(ErrorCode::ConfigUnwritable, error),
             ConfigError::Malformed(_) => Self::bare(ErrorCode::ConfigMalformed, error),
         }
+    }
+}
+
+impl ErrorDto {
+    /// The identifier the interface sent is not a UUID.
+    pub(crate) fn session_invalid_id() -> Self {
+        Self::detailed(
+            ErrorCode::SessionInvalidId,
+            &"session identifier is not a well-formed UUID",
+            [(FIELD, "sessionId".to_owned())],
+        )
+    }
+
+    /// No profile carries that identifier.
+    pub(crate) fn session_not_found() -> Self {
+        Self::bare(ErrorCode::SessionNotFound, &"no such session profile")
+    }
+}
+
+impl From<&smpp_session::SessionError> for ErrorDto {
+    /// Projects a session failure onto the IPC contract.
+    ///
+    /// # Why every arm is written out
+    ///
+    /// A catch-all would be shorter and would quietly give a new variant the
+    /// wrong code — and the code is what the interface branches on and
+    /// translates. Listing them makes a new variant a compile error here,
+    /// which is where the decision belongs.
+    ///
+    /// No arm carries a value from the failure into `details`: a
+    /// `SessionError` message names a status or a field, never a credential
+    /// (there is a test in `smpp-session`), and keeping `details` to constants
+    /// is what makes CA-001-06 structural rather than careful.
+    fn from(error: &smpp_session::SessionError) -> Self {
+        use smpp_session::SessionError as Failure;
+
+        match error {
+            Failure::InvalidProfile { field, .. } => Self::detailed(
+                ErrorCode::SessionInvalidProfile,
+                error,
+                [(FIELD, (*field).to_owned())],
+            ),
+            Failure::TooManySessions { .. } => Self::bare(ErrorCode::SessionBusy, error),
+            Failure::BindRejected { symbol, .. } => Self::detailed(
+                ErrorCode::SessionBindRejected,
+                error,
+                [("status", (*symbol).to_owned())],
+            ),
+            Failure::Transport { .. } | Failure::Protocol(_) | Failure::ResponseTimeout { .. } => {
+                Self::bare(ErrorCode::SessionTransport, error)
+            }
+            Failure::Persistence(inner) => Self::from(inner),
+            Failure::Closed
+            | Failure::Cancelled
+            | Failure::NotBound { .. }
+            | Failure::OperationNotAllowed { .. }
+            | Failure::IllegalTransition { .. }
+            | Failure::UnexpectedResponse { .. }
+            | Failure::SequenceSpaceExhausted { .. } => Self::bare(ErrorCode::SessionClosed, error),
+            // `SessionError` is `#[non_exhaustive]`, so a wildcard is
+            // required. It reports the most conservative code rather than
+            // guessing.
+            _ => Self::bare(ErrorCode::SessionClosed, error),
+        }
+    }
+}
+
+impl From<&persistence::PersistenceError> for ErrorDto {
+    /// Projects a storage failure onto the IPC contract.
+    ///
+    /// One code for all of them, and deliberately: a `MalformedRow`, a
+    /// conflict and a locked file are the same thing to the interface — the
+    /// database would not cooperate — and the distinction that matters is in
+    /// the log, with the source chain the DTO drops.
+    fn from(error: &persistence::PersistenceError) -> Self {
+        Self::bare(ErrorCode::SessionStorage, error)
     }
 }
 

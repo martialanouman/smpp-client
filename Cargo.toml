@@ -116,6 +116,26 @@ sqlx = { version = "0.9", default-features = false, features = [
 
 tokio = { version = "1.48", default-features = false }
 
+# --- Session actors (milestone 005) -----------------------------------------
+#
+# `CancellationToken`, the one shutdown signal every long-running task of
+# `smpp-session` watches (CLAUDE.md §4). Already in the tree for its `codec`
+# feature; the `rt` feature is what brings `tokio_util::sync` in.
+#
+# NOTE — no `tokio-stream`: `futures-util` already provides the `StreamExt`
+# and `SinkExt` a `Framed` is driven with, and it is compiled here anyway.
+
+# Jitter on the reconnection back-off (spec §7.9, CA-005-05). Without it, N
+# sessions that drop together retry together, and the SMSC sees a thundering
+# herd. `default-features = false` plus `std_rng` and `thread_rng`: the OS
+# generator for production, and `StdRng::seed_from_u64` for the tests, which
+# is what makes a jitter assertion reproducible at all.
+rand = { version = "0.9", default-features = false, features = [
+  "std",
+  "std_rng",
+  "thread_rng",
+] }
+
 # `BoxStream` in the signature of `stream_messages` (guide §11.3).
 # `futures-core` holds the trait and the alias alone; `futures-util` adds the
 # combinators used to build the stream, and is already compiled in this tree
@@ -144,6 +164,15 @@ time = { version = "0.3", default-features = false, features = [
 # Test-only.
 tempfile = "3.24"
 sha2 = "0.10"
+
+# CA-005-11 wants a test that captures what `tracing` actually writes during a
+# bind and searches it for the password. That needs a subscriber with a writer
+# the test owns, which is what `tracing-subscriber` provides. Test-only in the
+# business crates; `src-tauri` already depends on it for the real subscriber.
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "fmt",
+  "std",
+] }
 
 # Reading the `.sqlx` query cache back in the plan regression test
 # (`persistence::repositories::plans`). Already compiled in this tree.

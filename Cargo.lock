@@ -3401,8 +3401,11 @@ name = "shinobismpp"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "persistence",
  "serde",
  "serde_json",
+ "smpp-core",
+ "smpp-session",
  "specta",
  "specta-typescript",
  "tauri",
@@ -3465,9 +3468,16 @@ dependencies = [
 name = "smpp-session"
 version = "0.0.1"
 dependencies = [
+ "futures-util",
+ "persistence",
+ "rand 0.9.5",
  "rate-control",
  "smpp-core",
  "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4376,6 +4386,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

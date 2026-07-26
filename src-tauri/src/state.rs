@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
 use crate::events::EventEmitter;
+use crate::sessions::SessionServices;
 
 /// What the IPC commands are allowed to reach.
 #[derive(Debug)]
@@ -21,16 +22,26 @@ pub(crate) struct AppState {
     /// and CLAUDE.md §4 bans a std guard held across an `.await`.
     settings: RwLock<AppConfig>,
     /// The single place events are emitted from.
-    events: EventEmitter,
+    events: Arc<EventEmitter>,
+    /// The session repository, registry and event forwarding (milestone 005).
+    sessions: SessionServices,
 }
 
 impl AppState {
-    /// Builds the state from a store and the preferences read at startup.
-    pub(crate) fn new(store: ConfigStore, settings: AppConfig) -> Self {
+    /// Builds the state from a store, the preferences read at startup, and an
+    /// open database.
+    pub(crate) fn new(
+        store: ConfigStore,
+        settings: AppConfig,
+        database: persistence::Database,
+    ) -> Self {
+        let events = Arc::new(EventEmitter::default());
+
         Self {
             store: Arc::new(store),
             settings: RwLock::new(settings),
-            events: EventEmitter::default(),
+            sessions: SessionServices::new(database, Arc::clone(&events)),
+            events,
         }
     }
 
@@ -82,8 +93,13 @@ impl AppState {
     }
 
     /// The event emitter.
-    pub(crate) const fn events(&self) -> &EventEmitter {
+    pub(crate) fn events(&self) -> &EventEmitter {
         &self.events
+    }
+
+    /// The session services (milestone 005).
+    pub(crate) const fn sessions(&self) -> &SessionServices {
+        &self.sessions
     }
 }
 
@@ -96,21 +112,31 @@ mod tests {
     use super::*;
     use crate::config::{Language, LogLevel, RetentionDays, Theme};
 
-    fn state_in(directory: &std::path::Path) -> AppState {
-        AppState::new(ConfigStore::new(directory), AppConfig::default())
+    /// A state over an in-memory database: these tests are about preferences,
+    /// and a file on disk would only add a way for them to fail.
+    async fn state_in(directory: &std::path::Path) -> AppState {
+        let database = persistence::Database::open(persistence::DatabaseConfig::new(":memory:"))
+            .await
+            .expect("an in-memory database always opens");
+        database.migrate().await.expect("the migrations apply");
+
+        AppState::new(ConfigStore::new(directory), AppConfig::default(), database)
     }
 
     #[tokio::test]
     async fn starts_from_the_preferences_it_was_given() {
         let dir = tempfile::tempdir().expect("a temporary directory must be creatable");
 
-        assert_eq!(state_in(dir.path()).settings().await, AppConfig::default());
+        assert_eq!(
+            state_in(dir.path()).await.settings().await,
+            AppConfig::default()
+        );
     }
 
     #[tokio::test]
     async fn persists_before_adopting_new_preferences() {
         let dir = tempfile::tempdir().expect("a temporary directory must be creatable");
-        let state = state_in(dir.path());
+        let state = state_in(dir.path()).await;
         let wanted = AppConfig {
             language: Language::En,
             theme: Theme::Dark,
@@ -143,7 +169,7 @@ mod tests {
         let blocked = dir.path().join("blocked");
         std::fs::write(&blocked, "not a directory").expect("writing must succeed");
 
-        let state = state_in(&blocked);
+        let state = state_in(&blocked).await;
         let wanted = AppConfig {
             language: Language::En,
             ..AppConfig::default()
