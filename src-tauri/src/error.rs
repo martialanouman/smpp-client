@@ -73,6 +73,35 @@ pub(crate) enum ErrorCode {
     SessionClosed,
     /// The database could not be read or written.
     SessionStorage,
+
+    /// The recipient is not a number this client can put on the wire.
+    MessageInvalidDestination,
+    /// The sender address was refused.
+    MessageInvalidSource,
+    /// A field of spec §7.3 does not fit its protocol slot.
+    MessageInvalidField,
+    /// A custom TLV is not readable hexadecimal, or is too long.
+    MessageInvalidTlv,
+    /// The text cannot be written under the chosen encoding, or needs more
+    /// than 255 segments.
+    MessageEncoding,
+    /// No live session carries the identifier the interface sent.
+    MessageSessionNotBound,
+    /// The message journal refused a read or a write.
+    ///
+    /// On the write-ahead insert this means **nothing was sent**: the
+    /// orchestrator does not submit a message it could not persist. A journal
+    /// failure *after* the send is not reported here at all — it comes back on
+    /// the successful result as `journalled: false`, because the two say
+    /// opposite things.
+    MessageStorage,
+    /// A message already exists under that `client_message_id`.
+    ///
+    /// Its own code rather than [`Self::MessageStorage`]: a replay is the
+    /// guard that makes a resumed send idempotent (spec §10.5), and it is not
+    /// a fault the way a full disk is. The interface tells the operator the
+    /// message is already there, not that the database broke.
+    MessageDuplicate,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -179,6 +208,79 @@ impl ErrorDto {
     /// No profile carries that identifier.
     pub(crate) fn session_not_found() -> Self {
         Self::bare(ErrorCode::SessionNotFound, &"no such session profile")
+    }
+
+    /// The recipient was refused.
+    ///
+    /// The rejection message is the one `messaging` produced, and no variant
+    /// of `AddressError` echoes the value it refused — an MSISDN is personal
+    /// data (CLAUDE.md §8), and there is a test on that side.
+    pub(crate) fn message_invalid_destination(error: &impl ToString) -> Self {
+        Self::detailed(
+            ErrorCode::MessageInvalidDestination,
+            error,
+            [(FIELD, "destination".to_owned())],
+        )
+    }
+
+    /// The sender address was refused.
+    pub(crate) fn message_invalid_source(error: &impl ToString) -> Self {
+        Self::detailed(
+            ErrorCode::MessageInvalidSource,
+            error,
+            [(FIELD, "source".to_owned())],
+        )
+    }
+
+    /// A field of spec §7.3 does not fit.
+    pub(crate) fn message_invalid_field(error: &impl ToString) -> Self {
+        Self::bare(ErrorCode::MessageInvalidField, error)
+    }
+
+    /// A custom TLV could not be read.
+    pub(crate) fn message_invalid_tlv() -> Self {
+        Self::detailed(
+            ErrorCode::MessageInvalidTlv,
+            &"a TLV value must be an even number of hexadecimal digits",
+            [(FIELD, "tlvs".to_owned())],
+        )
+    }
+
+    /// The text could not be encoded or split.
+    pub(crate) fn message_encoding(message: &str) -> Self {
+        Self::detailed(
+            ErrorCode::MessageEncoding,
+            &message,
+            [(FIELD, "text".to_owned())],
+        )
+    }
+
+    /// No live session carries that identifier.
+    pub(crate) fn message_session_not_bound() -> Self {
+        Self::bare(
+            ErrorCode::MessageSessionNotBound,
+            &"no live session carries that identifier",
+        )
+    }
+
+    /// The journal refused the operation.
+    ///
+    /// One code for every storage failure, and no details: `MessageStoreError`
+    /// already drops the source chain, and what is left — "database query
+    /// failed" — says nothing the interface can act on beyond the code itself.
+    pub(crate) fn message_storage() -> Self {
+        Self::bare(
+            ErrorCode::MessageStorage,
+            &"the message journal refused the operation",
+        )
+    }
+
+    /// A message already exists under that identifier.
+    pub(crate) fn message_duplicate() -> Self {
+        Self::bare(
+            ErrorCode::MessageDuplicate,
+            &"a message already exists under this client_message_id",
+        )
     }
 }
 

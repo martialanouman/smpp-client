@@ -12,6 +12,14 @@ publish.workspace = true
 bytes.workspace = true
 rusmpp.workspace = true
 thiserror.workspace = true
+
+# `Timestamp`, the single instant format of the application (spec §14.2). It
+# moved down here from `persistence` at milestone 006: both `persistence` and
+# `messaging` now carry the same `created_at`, and two formats would make a
+# row one crate wrote unreadable by the other. Same feature set as the
+# workspace default — RFC 3339 in, RFC 3339 out, nothing else.
+time.workspace = true
+
 tokio-util.workspace = true
 uuid.workspace = true
 

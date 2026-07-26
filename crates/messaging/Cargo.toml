@@ -11,16 +11,26 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
-# Layering boundaries from guide §4.2: dependencies always point
-# downwards, never up. Any violation becomes a compile error.
-smpp-session = { path = "../smpp-session" }
-persistence = { path = "../persistence" }
-
-# Direct, although `smpp-session` already brings it in transitively: milestone
-# 004 names `DataCoding`, `EsmClass`, `MessagePayload` and the concatenation
-# UDH in its own public API. Relying on a re-export through a sibling crate
-# would tie this crate's compilation to a dependency it does not control.
+# THE ONLY INTERNAL DEPENDENCY, and that is the milestone-006 change.
+#
+# This crate used to depend on `smpp-session` and `persistence`. It now
+# declares two ports instead — `MessageRepository` and `SmscSession` — which
+# those crates implement (ADR 0010). The edges therefore point *at* this
+# crate, which is what dependency inversion means (CLAUDE.md §3): the
+# orchestrator states its contract, the layers below satisfy it, and a test
+# needs neither a socket nor a database file.
+#
+# It is also what makes the graph acyclic. `smpp-session` depends on
+# `persistence` for the session-profile record; had this crate kept its own
+# edge to `smpp-session`, moving `MessageRepository` here would have closed
+# the loop `messaging -> smpp-session -> persistence -> messaging`.
 smpp-core = { path = "../smpp-core" }
+
+# `attributes` for `#[tracing::instrument]`: CLAUDE.md §4 asks for a span per
+# `session_id` and per `campaign_id`, and the attribute is the only way to open
+# one that covers a whole `async fn` without hand-rolled guards across every
+# `.await`.
+tracing = { workspace = true, features = ["attributes"] }
 
 # Only for the random seed of the concatenation reference counter: a
 # deterministic start would hand a restarting session a reference that may
@@ -33,11 +43,25 @@ uuid.workspace = true
 proptest.workspace = true
 criterion.workspace = true
 
+# NO dev-dependency on `smpp-session`, deliberately. The end-to-end tests of
+# the send path need both crates, and putting them here would mean
+# `messaging (dev) -> smpp-session -> messaging`. Cargo allows that cycle, but
+# CLAUDE.md §3 says "no cycle" without distinguishing kinds. They live in
+# `crates/smpp-session/tests/sending.rs` instead, which reaches both with no
+# new edge — see that file's header.
+
 # CA-004-10 asks for a `criterion` micro-benchmark as the milestone 017
 # baseline. `harness = false` hands the target over to criterion instead of
 # libtest.
 [[bench]]
 name = "segmentation"
+harness = false
+
+# CA-006-10 asks for the enqueue latency to stay under 1 ms at p99. The bench
+# measures the CPU half of that path — validate, segment, build the PDUs — and
+# says in its header what it deliberately leaves out.
+[[bench]]
+name = "enqueue"
 harness = false
 
 [lints]

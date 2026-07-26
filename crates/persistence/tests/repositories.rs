@@ -7,8 +7,9 @@
 mod support;
 
 use futures_util::StreamExt;
+use messaging::ports::{MessageRepository, MessageStoreError};
 use persistence::ports::{
-    CampaignRepository, ContactRepository, MessageRepository, PduLogRepository,
+    CampaignRepository, ContactRepository, MessageJournal, PduLogRepository,
     SessionProfileRepository,
 };
 use persistence::{
@@ -435,7 +436,7 @@ async fn inserting_the_same_client_message_identifier_twice_is_a_conflict() {
     let rejection = repository.insert_message(&message).await.unwrap_err();
 
     assert!(
-        matches!(rejection, PersistenceError::Conflict { entity, .. } if entity == "messages"),
+        rejection == MessageStoreError::Conflict,
         "expected a conflict, got {rejection:?}"
     );
 }
@@ -684,7 +685,7 @@ async fn a_transition_on_an_unknown_message_is_not_found() {
         .unwrap_err();
 
     assert!(
-        matches!(rejection, PersistenceError::NotFound { entity, .. } if entity == "messages"),
+        rejection == MessageStoreError::NotFound,
         "expected a not-found, got {rejection:?}"
     );
 }

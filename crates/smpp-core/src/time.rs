@@ -1,17 +1,29 @@
-//! The single timestamp format of the database.
+//! The single instant format of the application, and the clock port.
+//!
+//! # Why this sits in `smpp-core`
+//!
+//! It arrived at milestone 002 inside `persistence`, where it was "the
+//! database's timestamp format". Milestone 006 moved the message aggregate up
+//! into `messaging`, so that crate could own its own repository port
+//! (ADR 0010), and the aggregate carries five instants. Two crates on
+//! different layers now need the *same* type — a second one would let a
+//! `created_at` written by one be unreadable by the other — so it moved down
+//! to the crate both already depend on.
+//!
+//! `persistence` re-exports it, so `persistence::Timestamp` still resolves.
 
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::PersistenceError;
+use crate::error::{FieldRejection, SmppError};
 
 /// An instant, as stored in every `*_at` and `ts` column.
 ///
 /// Spec §14.2 types those columns `TEXT`; step-002 §6 asks for one conversion
 /// helper so a second format cannot appear. This type **is** that helper: it is
 /// the only thing the repositories accept and return, and
-/// [`Self::to_storage`] is the only function in the crate that produces the
-/// text SQLite sees.
+/// [`Self::to_storage`] is the only function that produces the text SQLite
+/// sees.
 ///
 /// The stored form is RFC 3339 with a `Z` offset — a subset of ISO-8601 that
 /// sorts lexicographically in the same order as chronologically, which is what
@@ -20,18 +32,18 @@ use crate::PersistenceError;
 /// # Why repositories never call [`Self::now`]
 ///
 /// CLAUDE.md §7 requires a test to be deterministic, with the clock injected.
-/// Rather than thread a `Clock` trait through four repositories, this crate
+/// Rather than thread a [`Clock`] through four repositories, `persistence`
 /// takes the simpler road: **a repository never reads the clock**. Every
 /// timestamp arrives inside the record being written, so a test writes the
-/// instants it chose and asserts on them exactly. [`Self::now`] exists for the
-/// callers who legitimately mint a fresh instant, in the layers above.
+/// instants it chose and asserts on them exactly. The layers above, which do
+/// mint fresh instants, take a [`Clock`] instead of calling [`Self::now`].
 ///
 /// ```
-/// use persistence::Timestamp;
+/// use smpp_core::time::Timestamp;
 ///
 /// let stored = Timestamp::parse("2026-07-26T12:00:00Z")?;
 /// assert_eq!(stored.to_storage(), "2026-07-26T12:00:00Z");
-/// # Ok::<(), persistence::PersistenceError>(())
+/// # Ok::<(), smpp_core::SmppError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(OffsetDateTime);
@@ -45,8 +57,8 @@ impl Timestamp {
     #[must_use]
     // clippy::new_without_default does not fire here (this is `now`, not
     // `new`), and `Default` is deliberately absent for the same reason as on
-    // the identifier newtypes of `smpp-core`: a silently defaulted timestamp
-    // in a struct literal is a wrong `created_at` nobody notices.
+    // the identifier newtypes: a silently defaulted timestamp in a struct
+    // literal is a wrong `created_at` nobody notices.
     pub fn now() -> Self {
         Self(OffsetDateTime::now_utc().replace_nanosecond(0).unwrap_or(
             // INVARIANT: `replace_nanosecond` only rejects values above
@@ -60,18 +72,14 @@ impl Timestamp {
     ///
     /// # Errors
     ///
-    /// [`PersistenceError::MalformedRow`] if the text is not RFC 3339. The
-    /// offending value is deliberately absent from the error: a timestamp is
-    /// not a secret, but the rule "no column value in an error message" is
-    /// only worth anything if it has no exceptions.
-    pub fn parse(raw: &str) -> Result<Self, PersistenceError> {
+    /// [`SmppError::InvalidField`] if the text is not RFC 3339. The offending
+    /// value is deliberately absent from the error: a timestamp is not a
+    /// secret, but the rule "no column value in an error message" is only
+    /// worth anything if it has no exceptions.
+    pub fn parse(raw: &str) -> Result<Self, SmppError> {
         OffsetDateTime::parse(raw, &Rfc3339)
             .map(|instant| Self(instant.to_offset(time::UtcOffset::UTC)))
-            .map_err(|_| PersistenceError::MalformedRow {
-                table: "any",
-                column: "a timestamp column",
-                expected: "an RFC 3339 instant such as 2026-07-26T12:00:00Z",
-            })
+            .map_err(|_| SmppError::invalid_field("timestamp", FieldRejection::MalformedTimestamp))
     }
 
     /// Renders the text form written to the database.
@@ -100,9 +108,33 @@ impl core::fmt::Display for Timestamp {
     }
 }
 
+/// Where a layer that stamps records reads "now".
+///
+/// CLAUDE.md §7: a test must be deterministic, with the clock **injected**.
+/// The write-ahead orchestrator of milestone 006 stamps `created_at`,
+/// `sent_at` and `resp_at`, and a test that asserts on those cannot afford to
+/// read the wall clock.
+///
+/// Deliberately not `async`: reading a clock does no I/O, and an async method
+/// would force every call site into an `.await` for nothing.
+pub trait Clock: Send + Sync {
+    /// The current instant, truncated to the second.
+    fn now(&self) -> Timestamp;
+}
+
+/// The clock that reads the operating system.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Timestamp;
+    use super::{Clock as _, SystemClock, Timestamp};
 
     #[test]
     fn a_stored_instant_survives_a_round_trip() {
@@ -138,7 +170,16 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_instant_is_rejected() {
-        assert!(Timestamp::parse("26/07/2026 12:34").is_err());
+    fn a_malformed_instant_is_rejected_without_being_echoed() {
+        let rejection = Timestamp::parse("26/07/2026 12:34").expect_err("must be rejected");
+
+        assert!(!rejection.to_string().contains("26/07/2026"));
+    }
+
+    #[test]
+    fn the_system_clock_reads_a_plausible_instant() {
+        let floor = Timestamp::parse("2020-01-01T00:00:00Z").expect("valid RFC 3339");
+
+        assert!(SystemClock.now() > floor);
     }
 }

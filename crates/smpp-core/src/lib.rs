@@ -11,7 +11,8 @@
 //! | [`codec`] | encode/decode a whole PDU, and the `CommandCodec` milestone 005 will mount on a socket |
 //! | [`values`] | the constrained protocol enums — TON, NPI, DCS, `command_id`, `command_status` |
 //! | [`status_codes`] | the `command_status` table: labels for the UI, classification for the retry policy |
-//! | [`types`] | domain newtypes: [`types::Msisdn`], [`types::SessionId`], [`types::ClientMessageId`], [`types::SequenceNumber`] |
+//! | [`types`] | domain newtypes: [`types::Msisdn`], [`types::SessionId`], [`types::ClientMessageId`], [`types::CampaignId`], [`types::SequenceNumber`] |
+//! | [`time`] | [`time::Timestamp`], the single instant format, and the [`time::Clock`] port |
 //! | [`debug`] | PDU hex dump, gated behind an explicit authorisation |
 //!
 //! Not here, by design: any I/O (milestone 005), text encoding and
@@ -37,6 +38,7 @@ pub mod codec;
 pub mod debug;
 mod error;
 pub mod status_codes;
+pub mod time;
 pub mod types;
 pub mod values;
 

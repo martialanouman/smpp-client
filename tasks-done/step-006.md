@@ -1,6 +1,6 @@
 # Jalon 006 — Envoi simple de bout en bout (= M1)
 
-> **Statut :** À faire · **Dépend de :** step-004, step-005 · **Réf. spec :** §5.4, §10.1, §7.3 · **Exigences :** EF-MSG-01, EF-MSG-05, EF-MSG-06, EF-MSG-07 (partiel)
+> **Statut :** Terminé (2026-07-26) — 11 critères sur 12 ; CA-006-12 est une recette opérateur · **Dépend de :** step-004, step-005 · **Réf. spec :** §5.4, §10.1, §7.3 · **Exigences :** EF-MSG-01, EF-MSG-05, EF-MSG-06, EF-MSG-07 (partiel)
 
 ## 1. Objectif
 
@@ -42,17 +42,17 @@ Il assemble les briques précédentes selon le flux nominal de la spec §5.4 : v
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-006-01** — Depuis l'UI, un message court part vers le SMSC de test et son `smsc_message_id` s'affiche ; l'état passe `QUEUED → SENT → ACCEPTED`.
-- [ ] **CA-006-02** — Le message est présent en base à l'état `QUEUED` **avant** que le `submit_sm` ne soit écrit sur le socket (test d'ordonnancement avec repository instrumenté).
-- [ ] **CA-006-03** — Un arrêt brutal simulé entre la persistance et l'émission laisse le message en `QUEUED` — récupérable, jamais perdu ni dupliqué.
-- [ ] **CA-006-04** — Un message de 400 caractères GSM produit 3 segments, 3 `submit_sm`, et un état de message logique cohérent (agrégation des réponses des segments).
-- [ ] **CA-006-05** — Un `submit_sm_resp` en erreur passe l'état à `FAILED` en conservant le `command_status` brut **et** son libellé en clair, affiché tel quel dans l'UI (ENF-UTI-02).
-- [ ] **CA-006-06** — Tous les champs de la spec §7.3 sont réglables depuis l'UI et effectivement transmis dans le PDU (test comparant le PDU émis aux valeurs saisies).
-- [ ] **CA-006-07** — Un destinataire invalide est rejeté **avant** toute persistance et toute émission, avec un `ErrorDto` explicite.
-- [ ] **CA-006-08** — Un TLV personnalisé saisi dans l'UI apparaît dans le PDU émis avec le bon tag et la bonne longueur.
-- [ ] **CA-006-09** — Le compteur de l'éditeur affiche en direct l'encodage détecté, les caractères utilisés/restants et le nombre de segments, et coïncide avec la segmentation réelle.
-- [ ] **CA-006-10** — La latence d'enfilement (appel de commande → message en file) reste sous 1 ms au p99 sur 10 000 envois (mesure `criterion`, ENF-PERF-02).
-- [ ] **CA-006-11** — Aucune logique métier dans `src-tauri` : la commande `message_send` valide, appelle le service, sérialise — revue explicite du fichier.
+- [x] **CA-006-01** — Depuis l'UI, un message court part vers le SMSC de test et son `smsc_message_id` s'affiche ; l'état passe `QUEUED → SENT → ACCEPTED`.
+- [x] **CA-006-02** — Le message est présent en base à l'état `QUEUED` **avant** que le `submit_sm` ne soit écrit sur le socket (test d'ordonnancement avec repository instrumenté).
+- [x] **CA-006-03** — Un arrêt brutal simulé entre la persistance et l'émission laisse le message en `QUEUED` — récupérable, jamais perdu ni dupliqué.
+- [x] **CA-006-04** — Un message de 400 caractères GSM produit 3 segments, 3 `submit_sm`, et un état de message logique cohérent (agrégation des réponses des segments).
+- [x] **CA-006-05** — Un `submit_sm_resp` en erreur passe l'état à `FAILED` en conservant le `command_status` brut **et** son libellé en clair, affiché tel quel dans l'UI (ENF-UTI-02).
+- [x] **CA-006-06** — Tous les champs de la spec §7.3 sont réglables depuis l'UI et effectivement transmis dans le PDU (test comparant le PDU émis aux valeurs saisies).
+- [x] **CA-006-07** — Un destinataire invalide est rejeté **avant** toute persistance et toute émission, avec un `ErrorDto` explicite.
+- [x] **CA-006-08** — Un TLV personnalisé saisi dans l'UI apparaît dans le PDU émis avec le bon tag et la bonne longueur.
+- [x] **CA-006-09** — Le compteur de l'éditeur affiche en direct l'encodage détecté, les caractères utilisés/restants et le nombre de segments, et coïncide avec la segmentation réelle.
+- [x] **CA-006-10** — La latence d'enfilement (appel de commande → message en file) reste sous 1 ms au p99 sur 10 000 envois (mesure `criterion`, ENF-PERF-02).
+- [x] **CA-006-11** — Aucune logique métier dans `src-tauri` : la commande `message_send` valide, appelle le service, sérialise — revue explicite du fichier.
 - [ ] **CA-006-12** — **Recette M1 :** un opérateur qui n'a jamais vu l'application envoie un SMS et lit sa réponse en moins de 5 minutes (ENF-UTI-01).
 
 ## 5. Tests attendus

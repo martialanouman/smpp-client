@@ -1,6 +1,9 @@
 //! Error type for this crate.
 
+use crate::addressing::AddressError;
 use crate::encoding::EncodingError;
+use crate::ports::MessageStoreError;
+use crate::submit::SubmitBuildError;
 
 /// Errors produced by this crate.
 ///
@@ -27,4 +30,22 @@ pub enum MessagingError {
     /// type of the crate, and carries that one as a source.
     #[error("encoding or segmentation failed")]
     Encoding(#[from] EncodingError),
+
+    /// An address did not pass validation.
+    ///
+    /// Reached **before** anything is persisted or sent (CA-006-07), so a
+    /// message that fails this way leaves no row behind.
+    #[error("an address was rejected")]
+    Address(#[from] AddressError),
+
+    /// A field of spec §7.3 does not fit the PDU.
+    #[error("the submit_sm could not be built")]
+    Submit(#[from] SubmitBuildError),
+
+    /// The message journal refused a read or a write.
+    ///
+    /// On the write-ahead insert this means **nothing was sent**: the
+    /// orchestrator does not submit a message it could not persist.
+    #[error("the message journal refused the operation")]
+    Store(#[from] MessageStoreError),
 }

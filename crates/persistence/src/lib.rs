@@ -21,12 +21,11 @@
 //! | [`ports`] | the four repository traits, for injection and test doubles |
 //! | [`records`] | the aggregates the repositories read and write |
 //! | [`repositories`] | the SQLx implementations |
-//! | [`time`] | [`Timestamp`], the crate's only timestamp format |
 //!
 //! # Volumetry
 //!
 //! Guide §11.3 forbids loading a large set into memory. Two shapes are
-//! offered and no third: [`ports::MessageRepository::stream_messages`] for a
+//! offered and no third: [`ports::MessageJournal::stream_messages`] for a
 //! traversal, and cursor pagination — never `OFFSET`, which re-walks the rows
 //! it skips and degrades linearly with the page number — for a screen.
 //!
@@ -40,20 +39,25 @@ mod error;
 pub mod ports;
 mod records;
 mod repositories;
-mod time;
 
 pub use db::{Database, DatabaseConfig, SchemaObject};
 pub use error::PersistenceError;
 pub use records::{
     BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, ListId,
     Message, MessageFilter, MessageState, MessageStateUpdate, PduDirection, PduLogEntry,
-    SessionProfile,
+    SessionProfile, SmscMessageIdUpdate,
 };
 pub use repositories::{
     SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
     SqlitePduLogRepository, SqliteSessionProfileRepository,
 };
-pub use time::Timestamp;
+
+/// The single instant format of every `*_at` and `ts` column.
+///
+/// Defined in `smpp-core` since milestone 006 — see
+/// [`smpp_core::time::Timestamp`] for why — and re-exported here because this
+/// crate's whole public surface speaks in it.
+pub use smpp_core::time::Timestamp;
 
 /// Opaque position in a paginated result set.
 ///

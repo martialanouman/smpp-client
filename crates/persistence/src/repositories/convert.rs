@@ -12,7 +12,7 @@ use smpp_core::values::{
     CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
 };
 
-use crate::records::{CampaignId, ContactId, ListId};
+use crate::records::{CampaignId, ContactId, ListId, MessageState};
 use crate::{PersistenceError, Timestamp};
 
 /// Widens an unsigned count to the signed integer SQLite stores.
@@ -179,11 +179,37 @@ pub(crate) fn read_client_message_id(
     })
 }
 
+/// Reads the `messages.state` column.
+///
+/// `MessageState` moved to `messaging` at milestone 006 (ADR 0010) and parses
+/// to an `Option` rather than to an error, because its two callers want
+/// different errors out of the same failure. This is the storage one.
+pub(crate) fn read_message_state(raw: &str) -> Result<MessageState, PersistenceError> {
+    MessageState::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "messages",
+        column: "state",
+        expected: "one of QUEUED, SENT, ACCEPTED, DELIVERED, FAILED, EXPIRED",
+    })
+}
+
+/// Reads a required campaign identifier column.
+///
+/// `CampaignId` moved to `smpp-core` at milestone 006 (ADR 0010), so its
+/// `parse` reports an `SmppError`; the column context that makes a malformed
+/// row actionable is restored here, where it is known.
+pub(crate) fn read_campaign_id(raw: &str) -> Result<CampaignId, PersistenceError> {
+    CampaignId::parse(raw).map_err(|_| PersistenceError::MalformedRow {
+        table: "campaigns",
+        column: "campaign_id",
+        expected: "a UUID in canonical form",
+    })
+}
+
 /// Reads an optional campaign identifier column.
 pub(crate) fn read_optional_campaign_id(
     raw: Option<&str>,
 ) -> Result<Option<CampaignId>, PersistenceError> {
-    raw.map(CampaignId::parse).transpose()
+    raw.map(read_campaign_id).transpose()
 }
 
 /// Reads a contact identifier column.

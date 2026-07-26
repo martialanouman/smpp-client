@@ -47,6 +47,14 @@
     "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
+    "MESSAGE_DUPLICATE": "Un message existe déjà sous cet identifiant ; il n'a pas été réémis.",
+    "MESSAGE_ENCODING": "Le texte ne peut pas être écrit dans l'encodage choisi.",
+    "MESSAGE_INVALID_DESTINATION": "Destinataire invalide. Saisissez un numéro au format international.",
+    "MESSAGE_INVALID_FIELD": "Un champ du submit_sm ne tient pas dans son emplacement protocolaire.",
+    "MESSAGE_INVALID_SOURCE": "Adresse d'expéditeur invalide.",
+    "MESSAGE_INVALID_TLV": "Un paramètre optionnel n'est pas un hexadécimal valide.",
+    "MESSAGE_SESSION_NOT_BOUND": "Aucune session ouverte ne porte cet identifiant.",
+    "MESSAGE_STORAGE": "Le journal des messages a refusé l'opération ; rien n'a été envoyé.",
     "SESSION_BIND_REJECTED": "Le SMSC a refusé le bind.",
     "SESSION_BUSY": "Une autre session est déjà ouverte. Fermez-la avant d'en ouvrir une seconde.",
     "SESSION_CLOSED": "La session n'est pas disponible.",
@@ -113,5 +121,114 @@
       "reconnectEnabled": "Reconnexion automatique",
       "jitter": "Jitter sur le back-off"
     }
+  },
+  "send": {
+    "intro": "Envoyez un message unitaire vers un SMSC et lisez sa réponse. Les champs avancés reprennent la table de la spécification SMPP §7.3.",
+    "session": "Session",
+    "sessionPlaceholder": "Choisissez une session ouverte",
+    "noBoundSession": "Aucune session n'est ouverte. Connectez-vous depuis l'écran Sessions.",
+    "destination": "Destinataire",
+    "destinationHint": "Format international, indicatif pays compris.",
+    "destTon": "Type de numéro (destinataire)",
+    "destNpi": "Plan de numérotation (destinataire)",
+    "source": "Expéditeur",
+    "sourceHint": "Laissez vide pour laisser le SMSC choisir.",
+    "sourceTon": "Type de numéro (expéditeur)",
+    "sourceNpi": "Plan de numérotation (expéditeur)",
+    "alphanumericWarning": "Un expéditeur alphanumérique impose source_addr_ton = 5 et n'est pas accepté par tous les opérateurs.",
+    "text": "Message",
+    "encodingLabel": "Encodage (DCS)",
+    "mode": "Concaténation",
+    "registeredDelivery": "Accusé de réception",
+    "advanced": "Champs avancés (spec §7.3)",
+    "serviceType": "service_type",
+    "serviceTypeHint": "Cinq caractères au plus ; vide pour le défaut du SMSC.",
+    "protocolId": "protocol_id",
+    "priorityFlag": "priority_flag",
+    "priorityFlagHint": "0 à 3.",
+    "scheduleDeliveryTime": "schedule_delivery_time",
+    "validityPeriod": "validity_period",
+    "timeHint": "Vide, ou exactement seize caractères.",
+    "smDefaultMsgId": "sm_default_msg_id",
+    "replaceIfPresent": "Remplacer un message existant (replace_if_present_flag)",
+    "submit": "Envoyer",
+    "sending": "Envoi en cours…",
+    "counter": {
+      "pending": "Compteur en cours de calcul…",
+      "encoding": "Encodage :",
+      "characters": "{{count}} caractère(s)",
+      "units": "{{used}} unité(s) utilisées, {{remaining}} restantes dans le segment",
+      "segments": "{{count}} segment(s)"
+    },
+    "encoding": {
+      "automatic": "Automatique",
+      "gsm7Bit": "GSM 7 bits",
+      "latin1": "ISO-8859-1",
+      "ucs2": "UCS2"
+    },
+    "modes": {
+      "udh": "En-tête UDH (portable)",
+      "sar": "TLV sar_*",
+      "messagePayload": "message_payload (sans découpage)"
+    },
+    "receipts": {
+      "onAnyOutcome": "À l'issue, succès ou échec (1)",
+      "onFailure": "En cas d'échec seulement (2)",
+      "none": "Aucun (0)"
+    },
+    "ton": {
+      "unknown": "Inconnu (0)",
+      "international": "International, E.164 (1)",
+      "national": "National (2)",
+      "networkSpecific": "Spécifique réseau (3)",
+      "subscriberNumber": "Numéro d'abonné (4)",
+      "alphanumeric": "Alphanumérique (5)",
+      "abbreviated": "Abrégé (6)"
+    },
+    "npi": {
+      "unknown": "Inconnu (0)",
+      "isdn": "ISDN / E.164 (1)",
+      "data": "Données, X.121 (3)",
+      "telex": "Télex, F.69 (4)",
+      "landMobile": "Mobile terrestre, E.212 (6)",
+      "national": "National (8)",
+      "private": "Privé (9)"
+    },
+    "tlv": {
+      "legend": "Paramètres optionnels (TLV)",
+      "empty": "Aucun paramètre optionnel.",
+      "tag": "Tag (hex)",
+      "value": "Valeur (hex)",
+      "add": "Ajouter un TLV",
+      "remove": "Retirer"
+    },
+    "state": {
+      "QUEUED": "En file",
+      "SENT": "Émis",
+      "ACCEPTED": "Accepté",
+      "DELIVERED": "Délivré",
+      "FAILED": "Échec",
+      "EXPIRED": "Expiré"
+    },
+    "outcomes": {
+      "answered": "Répondu",
+      "unanswered": "Sans réponse",
+      "notAttempted": "Non émis"
+    },
+    "result": {
+      "title": "Résultat",
+      "segments": "{{count}} segment(s)",
+      "clientMessageId": "Identifiant local",
+      "smscMessageId": "Identifiant SMSC",
+      "status": "command_status",
+      "noAnswer": "Aucune réponse du SMSC.",
+      "unknownStatus": "Code inconnu",
+      "vendorSpecific": "Ce code appartient à la plage réservée à l'opérateur ; seule sa documentation l'explique.",
+      "retryable": "Le même message peut être réémis.",
+      "segment": "Segment",
+      "outcome": "Issue",
+      "notJournalled": "Le message est bien parti, mais son enregistrement a échoué. Ne le renvoyez pas : il serait émis une seconde fois."
+    },
+    "derived": "Déduit de l'adresse"
   }
 }

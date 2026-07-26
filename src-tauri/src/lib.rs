@@ -31,6 +31,7 @@ mod config;
 mod error;
 mod events;
 mod ipc;
+mod messages;
 mod paths;
 mod sessions;
 mod state;

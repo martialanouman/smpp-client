@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use smpp_core::codec::{Command, Pdu};
 use smpp_core::types::SessionId;
-use smpp_core::values::CommandStatus;
+use smpp_core::values::{CommandStatus, Gsm7BitCharset, Gsm7BitPacking};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -105,6 +105,14 @@ pub struct SessionHandle {
 struct HandleInner {
     session_id: SessionId,
     bind_mode: BindMode,
+    /// How GSM 7-bit septets sit in `short_message` (ADR 0008).
+    ///
+    /// Copied off the profile at spawn time rather than read back from it: the
+    /// profile is moved into the supervisor, and the send orchestrator needs
+    /// this on every message.
+    gsm7_packing: Gsm7BitPacking,
+    /// What those octets mean (ADR 0009).
+    gsm7_charset: Gsm7BitCharset,
     response_timeout: core::time::Duration,
     pending: Arc<Pending>,
     outgoing: mpsc::Sender<Command>,
@@ -175,6 +183,8 @@ pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transpor
     let inner = Arc::new(HandleInner {
         session_id: profile.session_id(),
         bind_mode: profile.bind_mode(),
+        gsm7_packing: profile.gsm7_packing(),
+        gsm7_charset: profile.gsm7_charset(),
         response_timeout: profile.response_timeout(),
         pending: Arc::clone(&pending),
         outgoing: outgoing_tx.clone(),
@@ -294,6 +304,25 @@ impl SessionHandle {
     /// `response_timeout` must report zero.
     pub async fn in_flight(&self) -> usize {
         self.inner.pending.len().await
+    }
+
+    /// How GSM 7-bit septets sit in `short_message` (ADR 0008).
+    ///
+    /// A property of the **message centre**, carried by the profile, applied by
+    /// the encoder two layers up. This accessor is the wire between the two.
+    #[must_use]
+    pub fn gsm7_packing(&self) -> Gsm7BitPacking {
+        self.inner.gsm7_packing
+    }
+
+    /// What the octets of a GSM 7-bit body mean (ADR 0009).
+    ///
+    /// Nothing on the wire distinguishes GSM 03.38 positions from ISO-8859-1
+    /// code points, and the two agree on every ASCII character — so a message
+    /// encoded under the wrong one looks right until the first `é` goes out.
+    #[must_use]
+    pub fn gsm7_charset(&self) -> Gsm7BitCharset {
+        self.inner.gsm7_charset
     }
 
     /// The bind type the profile asked for.

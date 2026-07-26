@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state AS \"state!: String\" FROM messages WHERE client_message_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "state!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "28407209ee5c543d001969832198a7716e3fbc8577c0ad43832ae4133926fac9"
+}

@@ -100,6 +100,29 @@ pub(crate) struct SessionsState {
     pub(crate) sessions: Vec<crate::commands::session::SessionStatusDto>,
 }
 
+/// Payload of `message:update` — one message reached a new state.
+///
+/// Emitted three times on a nominal send: `QUEUED`, `SENT`, `ACCEPTED`. That
+/// is what CA-006-01 asks the interface to show, and a command that only
+/// returned its final report could not: the three states would collapse into
+/// one repaint.
+///
+/// **Unthrottled, deliberately.** A unit send produces three events and the
+/// operator is watching every one of them. The bulk sending of milestone 010
+/// is where a per-message event would saturate the bridge, and that is where
+/// the aggregate `campaign:progress` of spec §15.3 belongs — a throttle here
+/// would drop the last transition of a message nobody would then see finish,
+/// which is the bug `sessions:state` already had.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "message:update")]
+pub(crate) struct MessageUpdate {
+    /// The write-ahead key, so the interface knows which message moved.
+    pub(crate) client_message_id: String,
+    /// `QUEUED`, `SENT`, `ACCEPTED`, `FAILED` — the names of spec §14.3.
+    pub(crate) state: String,
+}
+
 /// Rate limiter for a single event channel.
 ///
 /// The clock is **injected** ([`Throttle::admit`] takes the instant): the
@@ -179,6 +202,16 @@ impl EventEmitter {
 
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit error:notify");
+        }
+    }
+
+    /// Emits `message:update`.
+    ///
+    /// Unconditional: see [`MessageUpdate`] for why this channel has no
+    /// throttle.
+    pub(crate) fn emit_message<R: Runtime>(&self, app: &AppHandle<R>, payload: &MessageUpdate) {
+        if let Err(error) = payload.clone().emit(app) {
+            tracing::warn!(error = %error, "failed to emit message:update");
         }
     }
 

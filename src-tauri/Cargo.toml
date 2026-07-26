@@ -68,6 +68,11 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 persistence = { path = "../crates/persistence" }
 smpp-session = { path = "../crates/smpp-session" }
 
+# The send orchestrator of milestone 006. `src-tauri` holds it and calls it;
+# every rule it applies — validation, segmentation, the write-ahead order —
+# belongs to the crate, not to the command (CLAUDE.md §3).
+messaging = { path = "../crates/messaging" }
+
 # ONLY for `debug::redacted`, the sanctioned way to log a decoded command, and
 # for `types::SessionId`. No PDU is built here.
 smpp-core = { path = "../crates/smpp-core" }

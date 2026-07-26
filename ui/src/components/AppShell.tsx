@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { usePreferences } from "../store/preferences";
 import { PlaceholderView } from "../views/PlaceholderView";
+import { SendView } from "../views/Send/SendView";
 import { SessionsView } from "../views/Sessions/SessionsView";
 import { SettingsView } from "../views/SettingsView";
 import { Navigation } from "./Navigation";
@@ -50,7 +51,8 @@ export function AppShell() {
 
         {screen === "settings" ? <SettingsView /> : null}
         {screen === "sessions" ? <SessionsView /> : null}
-        {screen !== "settings" && screen !== "sessions" ? (
+        {screen === "send" ? <SendView /> : null}
+        {screen !== "settings" && screen !== "sessions" && screen !== "send" ? (
           <PlaceholderView screen={screen} />
         ) : null}
       </main>

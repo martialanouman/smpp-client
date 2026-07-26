@@ -114,11 +114,55 @@ export const commands = {
 	 *  `SESSION_INVALID_ID` if the identifier is malformed.
 	 */
 	sessionStatus: (sessionId: string) => typedError<SessionStatusDto, ErrorDto>(__TAURI_INVOKE("session_status", { sessionId })),
+	/**
+	 *  Sends one message (EF-MSG-01, EF-MSG-05, EF-MSG-06).
+	 * 
+	 *  Returns when the message centre has answered every segment, or refused one.
+	 *  The interface follows the intermediate states through `message:update`.
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `MESSAGE_INVALID_DESTINATION` / `MESSAGE_INVALID_SOURCE` — an address was
+	 *    refused, **before** anything was persisted or sent;
+	 *  * `MESSAGE_INVALID_FIELD` — a field of spec §7.3 does not fit its slot;
+	 *  * `MESSAGE_INVALID_TLV` — a custom TLV is not readable hexadecimal;
+	 *  * `MESSAGE_ENCODING` — the text cannot be written under the chosen
+	 *    encoding, or needs more than 255 segments;
+	 *  * `MESSAGE_SESSION_NOT_BOUND` — no live session carries that identifier;
+	 *  * `MESSAGE_DUPLICATE` — a message already exists under that
+	 *    `client_message_id`, which is the guard that makes a replay idempotent;
+	 *  * `MESSAGE_STORAGE` — the journal refused the **write-ahead insert**, in
+	 *    which case nothing was sent.
+	 * 
+	 *  Two outcomes that are deliberately **not** errors:
+	 * 
+	 *  * a message the centre **rejected** comes back as a result whose `state` is
+	 *    `FAILED`, carrying the raw `command_status` (ENF-UTI-02);
+	 *  * a journal failure *after* the send comes back as a successful result with
+	 *    `journalled: false`. Reporting it as `MESSAGE_STORAGE` would tell the
+	 *    operator nothing was sent, and the message would be sent twice.
+	 */
+	messageSend: (input: MessageSendInput) => typedError<MessageSendResultDto, ErrorDto>(__TAURI_INVOKE("message_send", { input })),
+	/**
+	 *  The live counter of the message editor (CA-006-09).
+	 * 
+	 *  Called on every keystroke, so it does no I/O and touches neither the
+	 *  journal nor the socket: it is the same `preview` the segmenter uses to
+	 *  decide where the cuts fall, which is what makes the counter and the
+	 *  segments agree by construction rather than by coincidence.
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `SESSION_INVALID_ID` — the session identifier is malformed;
+	 *  * `MESSAGE_ENCODING` — a forced encoding cannot write the text.
+	 */
+	messagePreview: (input: MessagePreviewInput) => typedError<MessagePreviewDto, ErrorDto>(__TAURI_INVOKE("message_preview", { input })),
 };
 
 /** Events */
 export const events = {
 	errorNotify: makeEvent<ErrorNotify>("error:notify"),
+	messageUpdate: makeEvent<MessageUpdate>("message:update"),
 	sessionsState: makeEvent<SessionsState>("sessions:state"),
 };
 
@@ -166,6 +210,25 @@ export type ConfigSetInput = {
 };
 
 /**
+ *  The `data_coding` selector, as the operator sees it (spec §7.5).
+ * 
+ *  The DCS is **derived** from this rather than typed directly: an operator who
+ *  picked `data_coding = 8` and a text of pure ASCII would send UCS2 for
+ *  nothing, and one who picked `0` for a text full of emoji would send
+ *  mojibake. Choosing the *alphabet* and letting the encoder settle the octet
+ *  is the only combination that cannot contradict itself.
+ */
+export type EncodingDto = 
+/**  GSM 7-bit when the text allows it, UCS2 otherwise. The default. */
+"automatic" | 
+/**  Force GSM 7-bit; a text it cannot write is refused. */
+"gsm7Bit" | 
+/**  Force ISO-8859-1. */
+"latin1" | 
+/**  Force UCS2. */
+"ucs2";
+
+/**
  *  Stable, machine-readable error identifier.
  * 
  *  Serialised in `SCREAMING_SNAKE_CASE` — `CONFIG_INVALID_LANGUAGE`.
@@ -200,7 +263,41 @@ export type ErrorCode =
 /**  The session is gone, or its tasks ended abnormally. */
 "SESSION_CLOSED" | 
 /**  The database could not be read or written. */
-"SESSION_STORAGE";
+"SESSION_STORAGE" | 
+/**  The recipient is not a number this client can put on the wire. */
+"MESSAGE_INVALID_DESTINATION" | 
+/**  The sender address was refused. */
+"MESSAGE_INVALID_SOURCE" | 
+/**  A field of spec §7.3 does not fit its protocol slot. */
+"MESSAGE_INVALID_FIELD" | 
+/**  A custom TLV is not readable hexadecimal, or is too long. */
+"MESSAGE_INVALID_TLV" | 
+/**
+ *  The text cannot be written under the chosen encoding, or needs more
+ *  than 255 segments.
+ */
+"MESSAGE_ENCODING" | 
+/**  No live session carries the identifier the interface sent. */
+"MESSAGE_SESSION_NOT_BOUND" | 
+/**
+ *  The message journal refused a read or a write.
+ * 
+ *  On the write-ahead insert this means **nothing was sent**: the
+ *  orchestrator does not submit a message it could not persist. A journal
+ *  failure *after* the send is not reported here at all — it comes back on
+ *  the successful result as `journalled: false`, because the two say
+ *  opposite things.
+ */
+"MESSAGE_STORAGE" | 
+/**
+ *  A message already exists under that `client_message_id`.
+ * 
+ *  Its own code rather than [`Self::MessageStorage`]: a replay is the
+ *  guard that makes a resumed send idempotent (spec §10.5), and it is not
+ *  a fault the way a full disk is. The interface tells the operator the
+ *  message is already there, not that the database broke.
+ */
+"MESSAGE_DUPLICATE";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -267,6 +364,188 @@ export type LogLevel =
 /**  Everything, including hexadecimal PDU dumps. */
 "trace";
 
+/**  What the editor's counter shows (CA-006-09). */
+export type MessagePreviewDto = {
+	/**  The encoding that will be used — detected, or the forced one. */
+	encoding: EncodingDto,
+	/**  The `data_coding` octet that will go on the wire. */
+	dataCoding: number,
+	/**  Characters typed, as Unicode scalar values. */
+	characters: number,
+	/**  Encoding units used — septets, UTF-16 code units or octets. */
+	unitsUsed: number,
+	/**  Units still free in the segment being filled. */
+	unitsRemaining: number,
+	/**  Segments the message will be sent as. */
+	segments: number,
+};
+
+/**  Input of [`message_preview`] — what the editor is showing right now. */
+export type MessagePreviewInput = {
+	/**  The text as typed. */
+	text: string,
+	/**  Which alphabet the operator chose. */
+	encoding: EncodingDto,
+	/**  How a long message announces its parts. */
+	segmentationMode: SegmentationModeDto,
+	/**  The session whose GSM conventions apply, or `null` for the defaults. */
+	sessionId: string | null,
+};
+
+/**  Input of [`message_send`] — every field of spec §7.3 the operator controls. */
+export type MessageSendInput = {
+	/**
+	 *  Which live session to send on. Chosen explicitly; automatic routing is
+	 *  milestone 011.
+	 */
+	sessionId: string,
+	/**  The recipient, in any form `Msisdn` accepts. */
+	destination: string,
+	/**  `dest_addr_ton`. */
+	destTon: TonDto,
+	/**  `dest_addr_npi`. */
+	destNpi: NpiDto,
+	/**  The sender, or `null` to let the message centre choose one. */
+	source: string | null,
+	/**  `source_addr_ton`, or `null` to derive it from the address. */
+	sourceTon: TonDto | null,
+	/**  `source_addr_npi`, or `null` to derive it from the address. */
+	sourceNpi: NpiDto | null,
+	/**  The message body. */
+	text: string,
+	/**  Which alphabet to write it in. */
+	encoding: EncodingDto,
+	/**  How a long message announces its parts. */
+	segmentationMode: SegmentationModeDto,
+	/**  `service_type`; empty for the message centre's default. */
+	serviceType: string,
+	/**  `protocol_id`. */
+	protocolId: number,
+	/**  `priority_flag`, `0` to `3`. */
+	priorityFlag: number,
+	/**  `schedule_delivery_time`; empty for immediate delivery. */
+	scheduleDeliveryTime: string,
+	/**  `validity_period`; empty for the message centre's default. */
+	validityPeriod: string,
+	/**  What to ask for in `registered_delivery`. */
+	registeredDelivery: RegisteredDeliveryDto,
+	/**  `replace_if_present_flag`. */
+	replaceIfPresent: boolean,
+	/**  `sm_default_msg_id`. */
+	smDefaultMsgId: number,
+	/**  Custom optional parameters. */
+	tlvs: TlvDto[],
+};
+
+/**
+ *  What one send produced (spec §15.2).
+ * 
+ *  A **value**, not an error, even for a rejected message: ENF-UTI-02 requires
+ *  the operator to read the message centre's own status, and a thrown error
+ *  would replace it with one of ours.
+ */
+export type MessageSendResultDto = {
+	/**  The write-ahead key, which is how the interface follows the message. */
+	clientMessageId: string,
+	/**  The session it went out on. */
+	sessionId: string,
+	/**  `QUEUED`, `SENT`, `ACCEPTED`, `FAILED` — the names of spec §14.3. */
+	state: string,
+	/**  Segments the message was split into. */
+	segments: number,
+	/**  The identifier of the first segment. */
+	smscMessageId: string | null,
+	/**  The raw `command_status`, when the message centre answered. */
+	commandStatus: number | null,
+	/**  Its symbolic name — `ESME_RINVDSTADR`. */
+	statusSymbol: string | null,
+	/**
+	 *  Its label, in the application's default language.
+	 * 
+	 *  Sent from the backend rather than translated in the interface because
+	 *  the table is protocol data indexed by an octet (milestone 003), not a
+	 *  user-interface catalogue: a code the table does not list has no key to
+	 *  look up, and the interface must still show something.
+	 */
+	statusLabel: string | null,
+	/**
+	 *  Whether the status is one the message centre reserves for its own
+	 *  vendor range, which only its documentation explains.
+	 */
+	statusIsVendorSpecific: boolean,
+	/**  Whether sending the same message again could succeed. */
+	retryable: boolean,
+	/**
+	 *  Whether the journal recorded the outcome.
+	 * 
+	 *  `false` means the message **was** submitted and answered, but its
+	 *  transitions could not be written: the row is still `QUEUED`. The
+	 *  interface has to say so, because "sent and unrecorded" is the one
+	 *  state where doing nothing is right and resending is wrong.
+	 */
+	journalled: boolean,
+	/**  One entry per segment. */
+	outcomes: SegmentOutcomeDto[],
+};
+
+/**
+ *  Payload of `message:update` — one message reached a new state.
+ * 
+ *  Emitted three times on a nominal send: `QUEUED`, `SENT`, `ACCEPTED`. That
+ *  is what CA-006-01 asks the interface to show, and a command that only
+ *  returned its final report could not: the three states would collapse into
+ *  one repaint.
+ * 
+ *  **Unthrottled, deliberately.** A unit send produces three events and the
+ *  operator is watching every one of them. The bulk sending of milestone 010
+ *  is where a per-message event would saturate the bridge, and that is where
+ *  the aggregate `campaign:progress` of spec §15.3 belongs — a throttle here
+ *  would drop the last transition of a message nobody would then see finish,
+ *  which is the bug `sessions:state` already had.
+ */
+export type MessageUpdate = {
+	/**  The write-ahead key, so the interface knows which message moved. */
+	clientMessageId: string,
+	/**  `QUEUED`, `SENT`, `ACCEPTED`, `FAILED` — the names of spec §14.3. */
+	state: string,
+};
+
+/**  Numbering plan indicator, as spec §7.4 tabulates it. */
+export type NpiDto = 
+/**  `0` — unknown. */
+"unknown" | 
+/**  `1` — ISDN / E.164. The default, and the safe one. */
+"isdn" | 
+/**  `3` — data (X.121). */
+"data" | 
+/**  `4` — telex (F.69). */
+"telex" | 
+/**  `6` — land mobile (E.212). */
+"landMobile" | 
+/**  `8` — national. */
+"national" | 
+/**  `9` — private. */
+"private";
+
+/**
+ *  What `registered_delivery` asks the message centre for.
+ * 
+ *  The three values an operator has a reason to choose. The rest of the octet
+ *  — SME acknowledgements, intermediate notifications — is refused by most
+ *  message centres with `ESME_RINVREGDLVFLG`, so offering it would be offering
+ *  a rejection.
+ */
+export type RegisteredDeliveryDto = 
+/**  `0` — no delivery receipt. */
+"none" | 
+/**
+ *  `1` — a receipt on the final outcome, success or failure. The default
+ *  of spec §23.3, and the one milestone 008 correlates.
+ */
+"onAnyOutcome" | 
+/**  `2` — a receipt on failure only. */
+"onFailure";
+
 /**
  *  How long, in days, the rolling log files are kept.
  * 
@@ -289,6 +568,29 @@ export type RetentionDays = number;
  *  crossing the bridge and becoming a `Password`.
  */
 export type Secret = string;
+
+/**  What became of one segment, as the interface shows it. */
+export type SegmentOutcomeDto = {
+	/**  This segment's index, from 1. */
+	sequenceNumber: number,
+	/**  `answered`, `unanswered` or `notAttempted`. */
+	outcome: string,
+	/**  The raw `command_status`, when the message centre answered. */
+	commandStatus: number | null,
+	/**  Its symbolic name, `ESME_RTHROTTLED`. */
+	statusSymbol: string | null,
+	/**  The identifier the message centre assigned to this segment. */
+	smscMessageId: string | null,
+};
+
+/**  How the parts of a long message announce that they belong together. */
+export type SegmentationModeDto = 
+/**  Concatenation UDH inside `short_message`. The portable default. */
+"udh" | 
+/**  `sar_*` TLVs, and a body with no header. */
+"sar" | 
+/**  No splitting: the whole body in the `message_payload` TLV. */
+"messagePayload";
 
 /**  Input of [`session_bind`]. */
 export type SessionBindInput = {
@@ -392,6 +694,44 @@ export type Theme =
 "dark" | 
 /**  Follow the operating system preference. */
 "system";
+
+/**  One custom optional parameter the operator typed. */
+export type TlvDto = {
+	/**  The tag, as a 16-bit value. */
+	tag: number,
+	/**
+	 *  The value, hexadecimal, without separators — `DEADBEEF`.
+	 * 
+	 *  Hexadecimal rather than base64 because that is how an operator reads a
+	 *  TLV in their message centre's documentation, and rather than a byte
+	 *  array because JSON turns one into a list of numbers nobody can check by
+	 *  eye.
+	 */
+	valueHex: string,
+};
+
+/**
+ *  Type of number, as spec §7.4 tabulates it.
+ * 
+ *  A closed enum rather than the bare octet CLAUDE.md §4 forbids. The seven
+ *  values are the whole standard table; a message centre that wanted an eighth
+ *  would need a milestone, not a free-form field.
+ */
+export type TonDto = 
+/**  `0` — unknown. */
+"unknown" | 
+/**  `1` — international (E.164). The default, and the safe one. */
+"international" | 
+/**  `2` — national. */
+"national" | 
+/**  `3` — network specific, typically a short code. */
+"networkSpecific" | 
+/**  `4` — subscriber number. */
+"subscriberNumber" | 
+/**  `5` — alphanumeric. Forced on a sender ID. */
+"alphanumeric" | 
+/**  `6` — abbreviated. */
+"abbreviated";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
