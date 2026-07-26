@@ -111,3 +111,34 @@ doc de crate ne prétend plus que les traits appartiennent ailleurs.
 - CLAUDE.md §3 (frontières et inversion par traits)
 - `tasks-todo/step-002.md` L-002-04 et note §6
 - ADR [0002](0002-persistance-sqlite-sqlx.md)
+
+---
+
+## Rectification — 2026-07-26
+
+*Ajoutée en revue du jalon 002. Une ADR est immuable : le texte ci-dessus n'est
+pas corrigé, cette note dit en quoi il est faux.*
+
+Le paragraphe « Contexte », point 1, et le « Point de réexamen » citent les
+mauvais jalons. Les bons sont :
+
+| Ce que dit l'ADR | La réalité |
+|---|---|
+| « `messaging` est le jalon 004 » | `step-004` est *Encodage du texte et segmentation*. La crate `messaging` naît au **step-006** (*Envoi simple de bout en bout*). |
+| « `contacts` [est] le jalon 006 » | `step-006` est l'envoi simple. La crate `contacts` naît au **step-009** (*Import CSV/XLSX, validation E.164 et listes*). |
+
+Le raisonnement et la décision ne changent pas : les deux crates consommatrices
+sont bien des coquilles au jalon 002, seuls les numéros de jalon étaient faux.
+
+Le point de réexamen se lit donc :
+
+- **step-006** pour `MessageRepository`. La dette y était déjà bornée avant
+  cette ADR : `tasks-todo/step-006.md` §6 porte la note « Le port
+  `MessageRepository` est défini côté `messaging` et implémenté côté
+  `persistence` ».
+- **step-009** pour `ContactRepository`. Cette dette-là n'était bornée nulle
+  part ; **CA-009-13** a été ajouté à `tasks-todo/step-009.md` pour la porter.
+- `CampaignRepository`, `SessionProfileRepository` et `PduLogRepository`
+  restent sans échéance : leurs consommateurs (`messaging` pour les campagnes,
+  `smpp-session` pour les profils) arrivent plus tard, et l'échéance sera posée
+  quand le jalon correspondant sera écrit.

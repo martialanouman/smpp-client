@@ -87,6 +87,38 @@ majeur.
   livrées sont aussi épinglées dans un test — `sqlx` ne détecte une migration
   éditée que sur une base déjà migrée, jamais sur un clone neuf.
 
+### Corrigé — revue du jalon 002
+
+- **Les index de `messages` étaient inatteignables.** Écrite
+  `(? IS NULL OR colonne = ?)` pour tenir en un seul littéral vérifié à la
+  compilation, la clause interdisait à SQLite d'utiliser un index :
+  `count_messages` scannait la table entière et la pagination par curseur
+  reparcourait depuis le curseur à chaque page — le coût linéaire qu'elle
+  existe pour supprimer. Les colonnes indexées sont maintenant discriminées
+  côté Rust vers des requêtes littérales distinctes. Un test compare
+  désormais les **plans**, pas seulement les résultats, en lisant les requêtes
+  depuis `.sqlx/` pour qu'il ne puisse pas dériver.
+- **Une transition rejouée comptait une tentative de trop.** `attempts` était
+  incrémenté ; un lot committé puis réappliqué après une coupure amputait en
+  silence le budget de rejeu. Devient `MAX(attempts, ?)` avec un numéro de
+  tentative explicite. Le test de rejeu passait à côté : il empruntait le seul
+  constructeur qui ne touche aucun compteur.
+- **`smsc_message_id` ne pouvait plus être corrigé une fois écrit.** Sur un
+  réenvoi après timeout le SMSC attribue un nouvel identifiant ; la fusion
+  refusait de l'écrire par-dessus l'ancien, et le DLR du second envoi
+  n'aurait jamais corrélé. Le champ devient un `Keep`/`Set` explicite.
+- **La mesure mémoire de CA-002-05 ne pouvait pas échouer** : elle lisait des
+  compteurs cumulés après coup, donc mesurait « le résultat s'échappe-t-il »
+  et non « est-il matérialisé ». Prise flux vivant désormais, et vérifiée par
+  mutation.
+- **CA-002-06 est compté, plus seulement déduit** : l'atomicité ne réfute pas
+  une implémentation qui committe ligne par ligne après validation. Le volume
+  écrit dans le journal WAL, lui, compte les commits. `PRAGMA data_version` a
+  été essayé et écarté : SQLite ne promet qu'une différence, pas un compte.
+- **L'étape 8 de la CI n'avait jamais tourné sous Windows** : `mktemp -d`
+  renvoie un chemin MSYS que Git-bash ne traduit pas à l'intérieur d'une URL.
+- **`sqlx` émettait un `WARN` portant le SQL entier** à chaque parcours long.
+
 ### Modifié
 
 - **MSRV portée de 1.93 à 1.94** : `sqlx` 0.9 la déclare et 1.93 refuse la
