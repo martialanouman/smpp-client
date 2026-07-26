@@ -6,8 +6,8 @@ use crate::db::Database;
 use crate::ports::SessionProfileRepository;
 use crate::records::{BindType, SessionProfile};
 use crate::repositories::convert::{
-    read_interface_version, read_session_id, read_timestamp, read_u16, read_u32,
-    store_interface_version, store_u16, store_u32,
+    read_gsm7_charset, read_gsm7_packing, read_interface_version, read_session_id, read_timestamp,
+    read_u16, read_u32, store_interface_version, store_u16, store_u32,
 };
 use crate::PersistenceError;
 
@@ -44,6 +44,8 @@ struct SessionProfileRow {
     enquire_link_s: i64,
     response_timeout_s: i64,
     reconnect_config: Option<String>,
+    gsm7_packing: String,
+    gsm7_charset: String,
     bind_count: i64,
     created_at: String,
     updated_at: String,
@@ -68,6 +70,8 @@ impl SessionProfileRow {
             enquire_link_s: read_u32(self.enquire_link_s, TABLE, "enquire_link_s")?,
             response_timeout_s: read_u32(self.response_timeout_s, TABLE, "response_timeout_s")?,
             reconnect_config: self.reconnect_config,
+            gsm7_packing: read_gsm7_packing(&self.gsm7_packing)?,
+            gsm7_charset: read_gsm7_charset(&self.gsm7_charset)?,
             bind_count: read_u32(self.bind_count, TABLE, "bind_count")?,
             created_at: read_timestamp(&self.created_at, TABLE, "created_at")?,
             updated_at: read_timestamp(&self.updated_at, TABLE, "updated_at")?,
@@ -89,6 +93,8 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
         let enquire_link_s = store_u32(profile.enquire_link_s);
         let response_timeout_s = store_u32(profile.response_timeout_s);
         let bind_count = store_u32(profile.bind_count);
+        let gsm7_packing = profile.gsm7_packing.code();
+        let gsm7_charset = profile.gsm7_charset.code();
         let created_at = profile.created_at.to_storage();
         let updated_at = profile.updated_at.to_storage();
 
@@ -101,8 +107,9 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
                    session_id, name, host, port, bind_type, interface_version,
                    system_id, password_enc, system_type, tls_config,
                    window_size, throughput_tps, enquire_link_s, response_timeout_s,
-                   reconnect_config, bind_count, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   reconnect_config, gsm7_packing, gsm7_charset,
+                   bind_count, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (session_id) DO UPDATE SET
                    name = excluded.name,
                    host = excluded.host,
@@ -118,6 +125,8 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
                    enquire_link_s = excluded.enquire_link_s,
                    response_timeout_s = excluded.response_timeout_s,
                    reconnect_config = excluded.reconnect_config,
+                   gsm7_packing = excluded.gsm7_packing,
+                   gsm7_charset = excluded.gsm7_charset,
                    bind_count = excluded.bind_count,
                    updated_at = excluded.updated_at"#,
             session_id,
@@ -135,6 +144,8 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             enquire_link_s,
             response_timeout_s,
             profile.reconnect_config,
+            gsm7_packing,
+            gsm7_charset,
             bind_count,
             created_at,
             updated_at
@@ -156,7 +167,8 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
                       window_size, throughput_tps, enquire_link_s, response_timeout_s,
-                      reconnect_config, bind_count, created_at, updated_at
+                      reconnect_config, gsm7_packing, gsm7_charset,
+                      bind_count, created_at, updated_at
                FROM session_profiles
                WHERE session_id = ?"#,
             identifier
@@ -173,7 +185,8 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
                       window_size, throughput_tps, enquire_link_s, response_timeout_s,
-                      reconnect_config, bind_count, created_at, updated_at
+                      reconnect_config, gsm7_packing, gsm7_charset,
+                      bind_count, created_at, updated_at
                FROM session_profiles
                ORDER BY rowid"#
         )

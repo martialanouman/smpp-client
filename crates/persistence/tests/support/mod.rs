@@ -20,7 +20,7 @@ use persistence::{
     DatabaseConfig, ListId, Message, MessageState, SessionProfile, Timestamp,
 };
 use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
-use smpp_core::values::SmppVersion;
+use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 use tempfile::TempDir;
 
 /// An open database in a directory that disappears with it.
@@ -101,6 +101,8 @@ pub(crate) fn a_session_profile(session_id: SessionId, name: &str) -> SessionPro
         enquire_link_s: 30,
         response_timeout_s: 10,
         reconnect_config: None,
+        gsm7_packing: Gsm7BitPacking::Unpacked,
+        gsm7_charset: Gsm7BitCharset::Gsm0338,
         bind_count: 1,
         created_at: instant("2026-07-26T10:00:00Z"),
         updated_at: instant("2026-07-26T10:00:00Z"),

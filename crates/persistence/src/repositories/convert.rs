@@ -8,7 +8,9 @@
 //! plausible-looking small number.
 
 use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
-use smpp_core::values::{CommandStatus, DataCoding, Npi, SmppVersion, Ton};
+use smpp_core::values::{
+    CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
+};
 
 use crate::records::{CampaignId, ContactId, ListId};
 use crate::{PersistenceError, Timestamp};
@@ -232,11 +234,32 @@ pub(crate) fn read_interface_version(raw: &str) -> Result<SmppVersion, Persisten
     }
 }
 
+/// Reads the GSM 7-bit packing column (ADR 0008, ADR 0009).
+pub(crate) fn read_gsm7_packing(raw: &str) -> Result<Gsm7BitPacking, PersistenceError> {
+    Gsm7BitPacking::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "session_profiles",
+        column: "gsm7_packing",
+        expected: "unpacked or packed",
+    })
+}
+
+/// Reads the GSM 7-bit charset column (ADR 0009).
+pub(crate) fn read_gsm7_charset(raw: &str) -> Result<Gsm7BitCharset, PersistenceError> {
+    Gsm7BitCharset::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "session_profiles",
+        column: "gsm7_charset",
+        expected: "gsm0338 or latin1",
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use smpp_core::values::SmppVersion;
+    use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 
-    use super::{read_interface_version, read_u16, read_u32, store_interface_version};
+    use super::{
+        read_gsm7_charset, read_gsm7_packing, read_interface_version, read_u16, read_u32,
+        store_interface_version,
+    };
 
     #[test]
     fn a_negative_count_is_rejected_rather_than_wrapped() {
@@ -260,5 +283,25 @@ mod tests {
                 version
             );
         }
+    }
+
+    #[test]
+    fn the_gsm7_layout_columns_round_trip_through_their_stored_text() {
+        for packing in [Gsm7BitPacking::Unpacked, Gsm7BitPacking::Packed] {
+            assert_eq!(
+                read_gsm7_packing(packing.code()).expect("own output"),
+                packing
+            );
+        }
+
+        for charset in [Gsm7BitCharset::Gsm0338, Gsm7BitCharset::Latin1] {
+            assert_eq!(
+                read_gsm7_charset(charset.code()).expect("own output"),
+                charset
+            );
+        }
+
+        assert!(read_gsm7_packing("PACKED").is_err());
+        assert!(read_gsm7_charset("iso-8859-1").is_err());
     }
 }
