@@ -415,7 +415,7 @@ async fn the_lifecycle_transitions_accumulate_rather_than_overwrite() {
     repository
         .update_state(
             &MessageStateUpdate::new(identifier, MessageState::Sent)
-                .sent_at(instant("2026-07-26T10:00:01Z")),
+                .sent_at(instant("2026-07-26T10:00:01Z"), 1),
         )
         .await
         .unwrap();
@@ -452,8 +452,18 @@ async fn the_lifecycle_transitions_accumulate_rather_than_overwrite() {
 }
 
 /// Replaying a transition must be harmless (CLAUDE.md §4).
+///
+/// # Non-regression
+///
+/// The first version of this test used `.responded_at(…)` — the one builder
+/// that touches no counter — and passed while `update_state` incremented
+/// `attempts` on every application. It now goes through `.sent_at(…)`, the
+/// transition that actually carries a counter, which is the only shape where
+/// idempotence is not free. `attempts` is asserted explicitly rather than only
+/// through the whole-record comparison, so a future change that reintroduces
+/// an increment fails on the line that names it.
 #[tokio::test]
-async fn replaying_the_same_transition_leaves_the_row_unchanged() {
+async fn replaying_a_send_transition_leaves_the_row_unchanged() {
     let harness = temp_database().await;
     let repository = SqliteMessageRepository::new(harness.database().clone());
 
@@ -461,17 +471,164 @@ async fn replaying_the_same_transition_leaves_the_row_unchanged() {
     let identifier = message.client_message_id;
     repository.insert_message(&message).await.unwrap();
 
-    let transition = MessageStateUpdate::new(identifier, MessageState::Accepted)
-        .with_smsc_message_id("SMSC-1")
-        .responded_at(instant("2026-07-26T10:00:02Z"));
+    let transition = MessageStateUpdate::new(identifier, MessageState::Sent)
+        .sent_at(instant("2026-07-26T10:00:01Z"), 1);
 
     repository.update_state(&transition).await.unwrap();
     let once = repository.find_message(identifier).await.unwrap().unwrap();
 
     repository.update_state(&transition).await.unwrap();
-    let twice = repository.find_message(identifier).await.unwrap().unwrap();
+    repository.update_state(&transition).await.unwrap();
+    let thrice = repository.find_message(identifier).await.unwrap().unwrap();
 
-    assert_eq!(once, twice);
+    assert_eq!(once.attempts, 1);
+    assert_eq!(thrice.attempts, 1, "the attempt counter was incremented");
+    assert_eq!(once, thrice);
+}
+
+/// The same, one level up: a whole batch replayed after a crash.
+///
+/// This is the shape the failure actually takes (spec §10.5) — `update_states`
+/// commits, the process dies before the in-memory window is cleared, and the
+/// resumed run reapplies the batch.
+#[tokio::test]
+async fn replaying_a_committed_batch_does_not_inflate_the_attempt_counters() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let messages: Vec<_> = (0..5)
+        .map(|index| a_queued_message(ClientMessageId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_messages(&messages).await.unwrap();
+
+    let batch: Vec<MessageStateUpdate> = messages
+        .iter()
+        .map(|message| {
+            MessageStateUpdate::new(message.client_message_id, MessageState::Sent)
+                .sent_at(instant("2026-07-26T10:00:01Z"), 1)
+        })
+        .collect();
+
+    repository.update_states(&batch).await.unwrap();
+    repository.update_states(&batch).await.unwrap();
+
+    for message in &messages {
+        let read_back = repository
+            .find_message(message.client_message_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(read_back.attempts, 1);
+    }
+}
+
+/// A genuine second attempt does move the counter — the point is idempotence,
+/// not immobility.
+#[tokio::test]
+async fn a_second_attempt_advances_the_counter() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    let identifier = message.client_message_id;
+    repository.insert_message(&message).await.unwrap();
+
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Sent)
+                .sent_at(instant("2026-07-26T10:00:01Z"), 1),
+        )
+        .await
+        .unwrap();
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Sent)
+                .sent_at(instant("2026-07-26T10:00:31Z"), 2),
+        )
+        .await
+        .unwrap();
+
+    let read_back = repository.find_message(identifier).await.unwrap().unwrap();
+
+    assert_eq!(read_back.attempts, 2);
+}
+
+/// A retried send gets a **new** SMSC identifier, and it must win.
+///
+/// Spec §10.7: the first `submit_sm` times out and is retried; the SMSC
+/// assigns a fresh identifier to the retry. If the late response to the first
+/// attempt lands first, the retry's response has to overwrite it — otherwise
+/// the retry's delivery receipt never correlates (spec §7.8) and the message
+/// sits in `ACCEPTED` for ever.
+#[tokio::test]
+async fn a_later_smsc_identifier_replaces_an_earlier_one() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    let identifier = message.client_message_id;
+    repository.insert_message(&message).await.unwrap();
+
+    // The late response to attempt 1.
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Accepted)
+                .with_smsc_message_id("SMSC-first"),
+        )
+        .await
+        .unwrap();
+
+    // The response to attempt 2, carrying the identifier the SMSC really used.
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Accepted)
+                .with_smsc_message_id("SMSC-second"),
+        )
+        .await
+        .unwrap();
+
+    let read_back = repository.find_message(identifier).await.unwrap().unwrap();
+    assert_eq!(read_back.smsc_message_id.as_deref(), Some("SMSC-second"));
+
+    // And the delivery receipt correlates against the current identifier.
+    let correlated = repository
+        .find_message_by_smsc_id("SMSC-second")
+        .await
+        .unwrap()
+        .expect("the receipt must find its message");
+    assert_eq!(correlated.client_message_id, identifier);
+}
+
+/// A transition that carries no identifier leaves the one already stored.
+#[tokio::test]
+async fn a_transition_without_an_identifier_keeps_the_stored_one() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    let identifier = message.client_message_id;
+    repository.insert_message(&message).await.unwrap();
+
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Accepted)
+                .with_smsc_message_id("SMSC-1"),
+        )
+        .await
+        .unwrap();
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Delivered)
+                .with_delivery_receipt("DELIVRD", None),
+        )
+        .await
+        .unwrap();
+
+    let read_back = repository.find_message(identifier).await.unwrap().unwrap();
+
+    assert_eq!(read_back.smsc_message_id.as_deref(), Some("SMSC-1"));
+    assert_eq!(read_back.state, MessageState::Delivered);
 }
 
 #[tokio::test]
