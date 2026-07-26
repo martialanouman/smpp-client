@@ -32,10 +32,13 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::session::session_bind,
             crate::commands::session::session_unbind,
             crate::commands::session::session_status,
+            crate::commands::message::message_send,
+            crate::commands::message::message_preview,
         ])
         .events(collect_events![
             crate::events::ErrorNotify,
-            crate::events::SessionsState
+            crate::events::SessionsState,
+            crate::events::MessageUpdate
         ])
         // A command that fails must produce a *value* on the TypeScript side,
         // not a thrown exception: `Result<T, ErrorDto>` forces the caller to

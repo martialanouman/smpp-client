@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
 use crate::events::EventEmitter;
+use crate::messages::MessageServices;
 use crate::sessions::SessionServices;
 
 /// What the IPC commands are allowed to reach.
@@ -25,6 +26,8 @@ pub(crate) struct AppState {
     events: Arc<EventEmitter>,
     /// The session repository, registry and event forwarding (milestone 005).
     sessions: SessionServices,
+    /// The send orchestrator and its journal (milestone 006).
+    messages: MessageServices,
 }
 
 impl AppState {
@@ -40,7 +43,8 @@ impl AppState {
         Self {
             store: Arc::new(store),
             settings: RwLock::new(settings),
-            sessions: SessionServices::new(database, Arc::clone(&events)),
+            sessions: SessionServices::new(database.clone(), Arc::clone(&events)),
+            messages: MessageServices::new(database, Arc::clone(&events)),
             events,
         }
     }
@@ -100,6 +104,11 @@ impl AppState {
     /// The session services (milestone 005).
     pub(crate) const fn sessions(&self) -> &SessionServices {
         &self.sessions
+    }
+
+    /// The send services (milestone 006).
+    pub(crate) const fn messages(&self) -> &MessageServices {
+        &self.messages
     }
 }
 

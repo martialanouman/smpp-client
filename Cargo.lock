@@ -3403,6 +3403,7 @@ name = "shinobismpp"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "messaging",
  "persistence",
  "serde",
  "serde_json",

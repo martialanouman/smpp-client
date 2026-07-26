@@ -202,6 +202,27 @@ impl SendReport {
     }
 }
 
+/// Watches a message walk its lifecycle, while it walks it.
+///
+/// CA-006-01 asks for the interface to show `QUEUED → SENT → ACCEPTED`, and a
+/// command that only returns its final report cannot: the three states would
+/// collapse into one repaint. So the orchestrator announces each transition as
+/// it applies it, and `src-tauri` turns each announcement into a
+/// `message:update` event.
+///
+/// Deliberately **not** `async` and expected not to block: it is called on the
+/// send path, between two `.await`s, and an implementation that did I/O here
+/// would pace the sending from the interface.
+pub trait SendObserver: Send + Sync {
+    /// The message has reached `state`.
+    fn state_changed(&self, client_message_id: ClientMessageId, state: MessageState);
+}
+
+/// The observer that watches nothing, for a caller with no interface.
+impl SendObserver for () {
+    fn state_changed(&self, _client_message_id: ClientMessageId, _state: MessageState) {}
+}
+
 /// The send orchestrator.
 ///
 /// Generic over its two ports and over the clock, which is what lets a test
@@ -261,6 +282,19 @@ where
     ///
     /// A message the centre rejected is **not** an error: it comes back as a
     /// [`SendReport`] in state [`MessageState::Failed`].
+    pub async fn send<S: SmscSession>(
+        &self,
+        session: &S,
+        request: &SendRequest,
+    ) -> Result<SendReport, MessagingError> {
+        self.send_observed(session, request, &()).await
+    }
+
+    /// The same send, announcing each transition to `observer` as it happens.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::send`].
     #[tracing::instrument(
         skip_all,
         fields(
@@ -269,10 +303,11 @@ where
             attempt = request.attempt,
         )
     )]
-    pub async fn send<S: SmscSession>(
+    pub async fn send_observed<S: SmscSession, O: SendObserver + ?Sized>(
         &self,
         session: &S,
         request: &SendRequest,
+        observer: &O,
     ) -> Result<SendReport, MessagingError> {
         // --- 1. Encode and split, under the session's own conventions -------
         //
@@ -310,8 +345,18 @@ where
 
         tracing::debug!(segments = total, "message persisted before submission");
 
+        observer.state_changed(request.client_message_id, MessageState::Queued);
+
         // --- 4. Submit, correlating each response with its own request ------
         let sent_at = self.clock.now();
+
+        // Announced before the first PDU leaves, and recorded only after the
+        // last response: the interface follows the message, the journal
+        // records what actually happened. Conflating the two would mean
+        // writing `SENT` before the socket, which is the trade the module
+        // header rules out.
+        observer.state_changed(request.client_message_id, MessageState::Sent);
+
         let outcomes = submit_all(session, pdus).await;
         let responded_at = self.clock.now();
 
@@ -328,6 +373,8 @@ where
         // single message, and a reader must never see `SENT` for a message
         // whose response has already been read.
         self.repository.update_states(&transitions).await?;
+
+        observer.state_changed(request.client_message_id, report.state);
 
         tracing::info!(
             state = %report.state,

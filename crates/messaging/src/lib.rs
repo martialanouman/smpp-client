@@ -60,7 +60,7 @@ pub mod submit;
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
-pub use sender::{SegmentOutcome, SendReport, SendRequest, Sender};
+pub use sender::{SegmentOutcome, SendObserver, SendReport, SendRequest, Sender};
 
 /// Crate version, as declared in its manifest.
 ///
