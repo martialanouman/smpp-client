@@ -8,6 +8,13 @@ authors.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# REQUIRED since `gen_ipc` exists as a second binary: without it `cargo run`
+# refuses to choose, and `tauri dev` — which shells out to `cargo run` — fails
+# with "could not determine which binary to run". Nothing else catches this:
+# `cargo build`, the tests and `just lint` all pass, because they build every
+# binary rather than running one. Only starting the app does.
+default-run = "shinobismpp"
+
 [lib]
 # The `_lib` suffix avoids a collision between the library name and the binary
 # name on Windows (rust-lang/cargo#8519).
