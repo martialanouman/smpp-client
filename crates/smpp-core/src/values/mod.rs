@@ -22,7 +22,10 @@ mod version;
 pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 
 pub use rusmpp::{
-    values::{DataCoding, EsmClass, InterfaceVersion, Npi, PriorityFlag, RegisteredDelivery, Ton},
+    values::{
+        DataCoding, EsmClass, InterfaceVersion, Npi, PriorityFlag, RegisteredDelivery, Ton,
+        UserMessageReference,
+    },
     CommandId, CommandStatus,
 };
 
