@@ -40,6 +40,21 @@
 //! `smpp-session`, a layer below `messaging`. A value the profile carries and
 //! the encoder applies has to sit under both, and that is here. `messaging`
 //! re-exports them, so its milestone-004 API is unchanged.
+//!
+//! # Milestone 006 additions
+//!
+//! Spec §7.3 lists sixteen mandatory fields on a `submit_sm` and CA-006-06
+//! requires **every one** of them to be settable from the interface and to
+//! reach the PDU. Five of their types were not on the curated list, which made
+//! four of those fields unreachable from outside this crate:
+//!
+//! * [`ServiceType`] — the `service_type` field;
+//! * [`ReplaceIfPresentFlag`] — the `replace_if_present_flag` field;
+//! * [`MCDeliveryReceipt`], [`SmeOriginatedAcknowledgement`] and
+//!   [`IntermediateNotification`] — the three sub-fields of
+//!   [`RegisteredDelivery`], which was re-exported without them, so the only
+//!   values constructible were `default()` and `request_all()`. Spec §23.3
+//!   asks for `registered_delivery = 1`, which is neither.
 
 mod gsm7;
 mod version;
@@ -49,9 +64,10 @@ pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 
 pub use rusmpp::{
     values::{
-        Ansi41Specific, DataCoding, EsmClass, GsmFeatures, InterfaceVersion, MessagePayload,
-        MessageType, MessagingMode, Npi, PriorityFlag, RegisteredDelivery, Ton,
-        UserMessageReference,
+        Ansi41Specific, DataCoding, EsmClass, GsmFeatures, InterfaceVersion,
+        IntermediateNotification, MCDeliveryReceipt, MessagePayload, MessageType, MessagingMode,
+        Npi, PriorityFlag, RegisteredDelivery, ReplaceIfPresentFlag, ServiceType,
+        SmeOriginatedAcknowledgement, Ton, UserMessageReference,
     },
     CommandId, CommandStatus,
 };

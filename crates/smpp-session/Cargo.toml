@@ -23,6 +23,12 @@ rate-control = { path = "../rate-control" }
 # so there is no cycle.
 persistence = { path = "../persistence" }
 
+# The send port only. `messaging` declares `SmscSession`, this crate
+# implements it for `SessionHandle` (ADR 0010) — the inversion of guide §8.1,
+# whose cost is exactly this upward edge. `messaging` depends on `smpp-core`
+# and on nothing else of ours, so the graph stays acyclic.
+messaging = { path = "../messaging" }
+
 # `net` for the TcpStream, `io-util` for the DuplexStream the tests run on,
 # `time` for the back-off and the response timeouts, `sync` for the channels
 # the actors talk over, `rt` + `macros` to spawn and select.

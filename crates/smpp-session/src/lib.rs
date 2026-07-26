@@ -15,10 +15,16 @@
 //! | [`state`] | the state machine of spec §7.9 and its legal edges |
 //! | [`reconnect`] | back-off, jitter, and the fatal/recoverable decision |
 //!
+//! Plus one file with no public items of its own: `messaging` implements
+//! `messaging::ports::SmscSession` for [`SessionHandle`], which is how the
+//! send orchestrator of milestone 006 reaches a session without depending on
+//! this crate (ADR 0010).
+//!
 //! Not here: the send orchestration (milestone 006), windowing and rate
 //! control (milestone 007), TLS (milestone 015).
 
 mod error;
+mod messaging;
 mod pending;
 
 pub mod actors;

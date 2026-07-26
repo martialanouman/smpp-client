@@ -3470,6 +3470,7 @@ name = "smpp-session"
 version = "0.0.1"
 dependencies = [
  "futures-util",
+ "messaging",
  "persistence",
  "rand 0.9.5",
  "rate-control",

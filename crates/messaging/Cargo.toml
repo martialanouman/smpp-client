@@ -26,7 +26,11 @@ thiserror.workspace = true
 # the loop `messaging -> smpp-session -> persistence -> messaging`.
 smpp-core = { path = "../smpp-core" }
 
-tracing.workspace = true
+# `attributes` for `#[tracing::instrument]`: CLAUDE.md §4 asks for a span per
+# `session_id` and per `campaign_id`, and the attribute is the only way to open
+# one that covers a whole `async fn` without hand-rolled guards across every
+# `.await`.
+tracing = { workspace = true, features = ["attributes"] }
 
 # Only for the random seed of the concatenation reference counter: a
 # deterministic start would hand a restarting session a reference that may

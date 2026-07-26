@@ -48,15 +48,19 @@
 //! # Ok::<(), messaging::encoding::EncodingError>(())
 //! ```
 
+pub mod addressing;
 pub mod encoding;
 mod error;
 pub mod message;
 pub mod ports;
 pub mod segmentation;
+pub mod sender;
+pub mod submit;
 
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
+pub use sender::{SegmentOutcome, SendReport, SendRequest, Sender};
 
 /// Crate version, as declared in its manifest.
 ///
