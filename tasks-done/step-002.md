@@ -1,6 +1,6 @@
 # Jalon 002 — Persistance SQLite : schéma, migrations et repositories
 
-> **Statut :** À faire · **Dépend de :** step-001 · **Réf. spec :** §14 · **Réf. guide :** §11
+> **Statut :** Terminé (2026-07-26) — 10 critères sur 10 vérifiés · **Dépend de :** step-001 · **Réf. spec :** §14 · **Réf. guide :** §11
 
 ## 1. Objectif
 
@@ -42,16 +42,16 @@ La persistance conditionne la garantie « aucune perte de message » (ENF-FIA-01
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-002-01** — `just migrate` sur une base neuve crée l'intégralité du schéma ; `PRAGMA journal_mode` retourne `wal`.
-- [ ] **CA-002-02** — Toutes les tables et tous les index de la spec §14.2 existent, vérifiés par un test qui interroge `sqlite_master`.
-- [ ] **CA-002-03** — Aucun SQL hors de `crates/persistence` : `rg -i "SELECT |INSERT INTO|UPDATE .* SET" crates src-tauri --glob '!crates/persistence/**'` ne retourne rien.
-- [ ] **CA-002-04** — Les requêtes sont vérifiées à la compilation (`sqlx::query!` / `query_as!`) partout où c'est possible ; les exceptions sont commentées et justifiées.
-- [ ] **CA-002-05** — `stream_messages` sur 100 000 lignes ne charge pas l'ensemble en mémoire : test mesurant que la consommation reste bornée et que le premier élément arrive avant la fin du parcours.
-- [ ] **CA-002-06** — Une mise à jour d'état par lot de N messages produit **une** transaction, pas N (vérifié par test).
-- [ ] **CA-002-07** — Chaque test d'intégration utilise sa propre base temporaire ; l'exécution en parallèle via `cargo nextest run` est stable sur 10 exécutions consécutives.
-- [ ] **CA-002-08** — Aucune migration livrée n'est modifiée : un test/contrôle CI compare l'empreinte des migrations existantes.
-- [ ] **CA-002-09** — `PersistenceError` est exhaustive, sans `Box<dyn Error>` dans l'API publique ; aucune valeur de secret n'apparaît dans un message d'erreur.
-- [ ] **CA-002-10** — L'étape 8 de la CI est active et bloquante.
+- [x] **CA-002-01** — `just migrate` sur une base neuve crée l'intégralité du schéma ; `PRAGMA journal_mode` retourne `wal`.
+- [x] **CA-002-02** — Toutes les tables et tous les index de la spec §14.2 existent, vérifiés par un test qui interroge `sqlite_master`.
+- [x] **CA-002-03** — Aucun SQL hors de `crates/persistence` : `rg -i "SELECT |INSERT INTO|UPDATE .* SET" crates src-tauri --glob '!crates/persistence/**'` ne retourne rien.
+- [x] **CA-002-04** — Les requêtes sont vérifiées à la compilation (`sqlx::query!` / `query_as!`) partout où c'est possible ; les exceptions sont commentées et justifiées.
+- [x] **CA-002-05** — `stream_messages` sur 100 000 lignes ne charge pas l'ensemble en mémoire : test mesurant que la consommation reste bornée et que le premier élément arrive avant la fin du parcours.
+- [x] **CA-002-06** — Une mise à jour d'état par lot de N messages produit **une** transaction, pas N (vérifié par test).
+- [x] **CA-002-07** — Chaque test d'intégration utilise sa propre base temporaire ; l'exécution en parallèle via `cargo nextest run` est stable sur 10 exécutions consécutives.
+- [x] **CA-002-08** — Aucune migration livrée n'est modifiée : un test/contrôle CI compare l'empreinte des migrations existantes.
+- [x] **CA-002-09** — `PersistenceError` est exhaustive, sans `Box<dyn Error>` dans l'API publique ; aucune valeur de secret n'apparaît dans un message d'erreur.
+- [x] **CA-002-10** — L'étape 8 de la CI est active et bloquante.
 
 ## 5. Tests attendus
 
