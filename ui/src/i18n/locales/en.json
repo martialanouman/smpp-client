@@ -47,6 +47,7 @@
     "CONFIG_MALFORMED": "The preferences file could not be parsed.",
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
+    "MESSAGE_DUPLICATE": "A message already exists under this identifier; it was not sent again.",
     "MESSAGE_ENCODING": "The text cannot be written in the chosen encoding.",
     "MESSAGE_INVALID_DESTINATION": "Invalid recipient. Enter a number in international format.",
     "MESSAGE_INVALID_FIELD": "A submit_sm field does not fit its protocol slot.",
@@ -225,7 +226,9 @@
       "vendorSpecific": "This code is in the operator's reserved range; only their documentation explains it.",
       "retryable": "The same message may be sent again.",
       "segment": "Segment",
-      "outcome": "Outcome"
-    }
+      "outcome": "Outcome",
+      "notJournalled": "The message was sent, but recording it failed. Do not send it again: it would go out a second time."
+    },
+    "derived": "Derived from the address"
   }
 }

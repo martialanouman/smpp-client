@@ -47,6 +47,7 @@
     "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
+    "MESSAGE_DUPLICATE": "Un message existe déjà sous cet identifiant ; il n'a pas été réémis.",
     "MESSAGE_ENCODING": "Le texte ne peut pas être écrit dans l'encodage choisi.",
     "MESSAGE_INVALID_DESTINATION": "Destinataire invalide. Saisissez un numéro au format international.",
     "MESSAGE_INVALID_FIELD": "Un champ du submit_sm ne tient pas dans son emplacement protocolaire.",
@@ -225,7 +226,9 @@
       "vendorSpecific": "Ce code appartient à la plage réservée à l'opérateur ; seule sa documentation l'explique.",
       "retryable": "Le même message peut être réémis.",
       "segment": "Segment",
-      "outcome": "Issue"
-    }
+      "outcome": "Issue",
+      "notJournalled": "Le message est bien parti, mais son enregistrement a échoué. Ne le renvoyez pas : il serait émis une seconde fois."
+    },
+    "derived": "Déduit de l'adresse"
   }
 }

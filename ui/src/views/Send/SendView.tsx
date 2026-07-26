@@ -25,6 +25,14 @@ import { SimpleForm } from "./Simple/SimpleForm";
  *   ACCEPTED` is what the backend reported rather than what the interface
  *   guessed.
  */
+/**
+ * How long to wait after the last keystroke before recomputing the counter.
+ *
+ * Below the ~100 ms at which a delay stops feeling instantaneous, and well
+ * above the interval between two keystrokes of a fast typist.
+ */
+const PREVIEW_DEBOUNCE_MS = 60;
+
 export function SendView() {
   const { t } = useTranslation();
 
@@ -47,8 +55,19 @@ export function SendView() {
   // Only the three inputs the counter depends on. Listing the whole form would
   // recompute it on every keystroke in `validity_period`, which changes
   // nothing it shows.
+  //
+  // Debounced, because the counter is a backend round trip and a typist
+  // produces keystrokes faster than the bridge answers. The store drops
+  // out-of-order answers on its own; this only stops the flood that makes them
+  // likely. Short enough that the counter still feels immediate.
   useEffect(() => {
-    void refreshPreview();
+    const pending = setTimeout(() => {
+      void refreshPreview();
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(pending);
+    };
   }, [refreshPreview, form.text, form.encoding, form.segmentationMode]);
 
   useEffect(() => {

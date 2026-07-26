@@ -169,14 +169,14 @@ export function SimpleForm({
           values={TON_VALUES}
           namespace="send.ton"
           value={form.destTon}
-          onChange={(destTon) => onChange({ ...form, destTon })}
+          onChange={(destTon) => onChange({ ...form, destTon: destTon ?? "international" })}
         />
         <AddressTypeSelect
           label={t("send.destNpi")}
           values={NPI_VALUES}
           namespace="send.npi"
           value={form.destNpi}
-          onChange={(destNpi) => onChange({ ...form, destNpi })}
+          onChange={(destNpi) => onChange({ ...form, destNpi: destNpi ?? "isdn" })}
         />
       </div>
 
@@ -188,19 +188,28 @@ export function SimpleForm({
           value={source}
           onChange={(value) => onChange({ ...form, source: value === "" ? null : value })}
         />
+        {/*
+          Both selectors carry a `derived` entry, and it is the default. That
+          is what makes the two fields honest: the backend derives the type
+          from the address unless the operator chooses one, and a select
+          showing "International" while sending `null` was claiming a choice
+          nobody had made — the very thing CA-006-06 is about. Each is
+          honoured on its own, so choosing one does not require the other.
+        */}
         <AddressTypeSelect
           label={t("send.sourceTon")}
           values={TON_VALUES}
           namespace="send.ton"
-          value={form.sourceTon ?? "international"}
+          derivedLabel={t("send.derived")}
+          value={form.sourceTon}
           onChange={(sourceTon) => onChange({ ...form, sourceTon })}
-          disabled={form.sourceNpi === null}
         />
         <AddressTypeSelect
           label={t("send.sourceNpi")}
           values={NPI_VALUES}
           namespace="send.npi"
-          value={form.sourceNpi ?? "isdn"}
+          derivedLabel={t("send.derived")}
+          value={form.sourceNpi}
           onChange={(sourceNpi) => onChange({ ...form, sourceNpi })}
         />
       </div>

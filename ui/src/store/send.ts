@@ -64,6 +64,20 @@ interface SendState {
   readonly progress: string | null;
   /** Whether a send is in flight. */
   readonly sending: boolean;
+  /**
+   * How many previews have been requested.
+   *
+   * `message_preview` is an async call issued on every keystroke, so its
+   * answers can arrive out of order — type `abc` quickly and the reply for
+   * `ab` may land after the reply for `abc`, freezing a counter that does not
+   * describe the text on screen. That is precisely what CA-006-09 forbids.
+   *
+   * Each request takes the next number and only the **latest** is adopted.
+   * A counter rather than a comparison against the current text: two
+   * keystrokes can produce the same text (type a character, delete it, type it
+   * again) and the text alone cannot tell those requests apart.
+   */
+  readonly previewGeneration: number;
   /** Chooses the session. */
   readonly chooseSession: (sessionId: string) => void;
   /** Replaces the form. */
@@ -99,6 +113,7 @@ export const useSend = create<SendState>((set, get) => ({
   result: null,
   progress: null,
   sending: false,
+  previewGeneration: 0,
 
   chooseSession: (sessionId) => {
     set({ sessionId });
@@ -112,7 +127,10 @@ export const useSend = create<SendState>((set, get) => ({
   },
 
   refreshPreview: async () => {
-    const { form, sessionId } = get();
+    const { form, sessionId, previewGeneration } = get();
+    const generation = previewGeneration + 1;
+
+    set({ previewGeneration: generation });
 
     const outcome = await messagePreview({
       text: form.text,
@@ -120,6 +138,14 @@ export const useSend = create<SendState>((set, get) => ({
       segmentationMode: form.segmentationMode,
       sessionId: sessionId === "" ? null : sessionId,
     });
+
+    // A newer request has been issued since this one left, so this answer
+    // describes a text the operator has already moved past. Dropping it is the
+    // whole point: adopting it would show a count for something no longer on
+    // screen, and it would stay there until the next keystroke.
+    if (get().previewGeneration !== generation) {
+      return;
+    }
 
     if (outcome.ok) {
       set({ preview: outcome.value });

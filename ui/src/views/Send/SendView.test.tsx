@@ -86,6 +86,7 @@ function anAcceptedResult(): MessageSendResultDto {
     statusLabel: "Succès",
     statusIsVendorSpecific: false,
     retryable: false,
+    journalled: true,
     outcomes: [
       {
         sequenceNumber: 1,
@@ -278,6 +279,71 @@ describe("Send › Simple", () => {
     await waitFor(() => {
       expect(screen.getByText(fr.send.state.QUEUED)).toBeTruthy();
     });
+  });
+
+  /// The one state where doing nothing is right and resending is wrong: the
+  /// message went out, only its record is missing. If the interface stayed
+  /// silent the operator would see an ordinary success and never know.
+  it("warns when the message was sent but could not be recorded", async () => {
+    messageSend.mockResolvedValue({
+      ok: true,
+      value: { ...anAcceptedResult(), journalled: false },
+    });
+
+    render(<SendView />);
+
+    await userEvent.selectOptions(screen.getByLabelText(fr.send.session), SESSION);
+    await userEvent.type(screen.getByLabelText(fr.send.destination), "+2250102030405");
+    await userEvent.click(screen.getByRole("button", { name: fr.send.submit }));
+
+    await waitFor(() => {
+      expect(screen.getByText(fr.send.result.notJournalled)).toBeTruthy();
+    });
+  });
+
+  it("says nothing about the journal when the record went through", async () => {
+    messageSend.mockResolvedValue({ ok: true, value: anAcceptedResult() });
+
+    render(<SendView />);
+
+    await userEvent.selectOptions(screen.getByLabelText(fr.send.session), SESSION);
+    await userEvent.type(screen.getByLabelText(fr.send.destination), "+2250102030405");
+    await userEvent.click(screen.getByRole("button", { name: fr.send.submit }));
+
+    await waitFor(() => {
+      expect(screen.getByText("MSG-42")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(fr.send.result.notJournalled)).toBeNull();
+  });
+
+  // CA-006-06: what the screen shows is what travels. The sender's type and
+  // plan default to "derived", and choosing **one** must not discard it — the
+  // field used to grey itself out until its neighbour was set too.
+  it("sends each chosen sender type independently of the other", async () => {
+    messageSend.mockResolvedValue({ ok: true, value: anAcceptedResult() });
+
+    render(<SendView />);
+
+    await userEvent.selectOptions(screen.getByLabelText(fr.send.session), SESSION);
+    await userEvent.type(screen.getByLabelText(fr.send.destination), "+2250102030405");
+    await userEvent.type(screen.getByLabelText(fr.send.source), "ShinobiSMS");
+
+    // The default says "derived", and that is what is sent.
+    expect((screen.getByLabelText(fr.send.sourceTon) as HTMLSelectElement).value).toBe("");
+
+    // Choosing only the numbering plan leaves the type derived.
+    await userEvent.selectOptions(screen.getByLabelText(fr.send.sourceNpi), "isdn");
+    await userEvent.click(screen.getByRole("button", { name: fr.send.submit }));
+
+    await waitFor(() => {
+      expect(messageSend).toHaveBeenCalled();
+    });
+
+    const sent = messageSend.mock.calls[0]?.[0] as MessageSendInput;
+
+    expect(sent.sourceNpi).toBe("isdn");
+    expect(sent.sourceTon).toBeNull();
   });
 
   it("adds and removes a custom optional parameter", async () => {

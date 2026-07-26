@@ -106,6 +106,16 @@ export function SendResult({ result, progress }: Props) {
         <p className="text-xs opacity-70">{t("send.result.vendorSpecific")}</p>
       ) : null}
 
+      {result !== null && !result.journalled ? (
+        // The one state where doing nothing is right and resending is wrong:
+        // the message went out, only the record is missing. Prominent rather
+        // than a grey footnote, because the operator's instinct on seeing an
+        // anomaly is to send again.
+        <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+          {t("send.result.notJournalled")}
+        </p>
+      ) : null}
+
       {result?.retryable ? (
         <p className="text-xs opacity-70">{t("send.result.retryable")}</p>
       ) : null}
