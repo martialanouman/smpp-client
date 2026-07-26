@@ -22,7 +22,7 @@
 //!
 //! # Defaults
 //!
-//! [`SubmitOptions::default`] is the safe configuration of spec §23.3:
+//! [`SubmitOptions::to`] is the safe configuration of spec §23.3:
 //! `registered_delivery = 1` (a receipt on final outcome, which is what
 //! milestone 008 correlates), `International`/`E.164` on the destination,
 //! everything else the protocol's own default. An operator who changes nothing

@@ -25,7 +25,7 @@
 //! # Volumetry
 //!
 //! Guide §11.3 forbids loading a large set into memory. Two shapes are
-//! offered and no third: [`ports::MessageRepository::stream_messages`] for a
+//! offered and no third: [`ports::MessageJournal::stream_messages`] for a
 //! traversal, and cursor pagination — never `OFFSET`, which re-walks the rows
 //! it skips and degrades linearly with the page number — for a screen.
 //!

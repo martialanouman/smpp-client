@@ -2,8 +2,8 @@
 //!
 //! The business entry point for sending: picks the DCS, segments long
 //! messages (UDH or `sar_*` TLVs), persists before sending, then hands PDUs
-//! to [`smpp_session`]. Also orchestrates bulk campaigns — resume after
-//! interruption, progress tracking, volume caps.
+//! to a live session through [`ports::SmscSession`]. Also orchestrates bulk
+//! campaigns — resume after interruption, progress tracking, volume caps.
 //!
 //! Declares the *ports* the layers below implement ([`ports`]): the traits
 //! belong to this layer, their SQLx and socket implementations to the lower

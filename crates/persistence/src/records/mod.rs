@@ -189,7 +189,7 @@ pub struct Campaign {
 ///
 /// Every field is a conjunction: `None` means "do not restrict on this
 /// column". An all-`None` filter selects the whole table, which is exactly
-/// what [`crate::ports::MessageRepository::stream_messages`] is for.
+/// what [`crate::ports::MessageJournal::stream_messages`] is for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MessageFilter {
     /// Restrict to one campaign.
