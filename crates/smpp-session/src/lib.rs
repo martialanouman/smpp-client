@@ -21,10 +21,13 @@
 mod error;
 mod pending;
 
+pub mod actors;
 pub mod profile;
 pub mod reconnect;
 pub mod state;
 
+pub use actors::transport::{TcpTransport, Transport};
+pub use actors::{spawn, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS};
 pub use error::{ProfileRejection, SessionError};
 
 /// Crate version, as declared in its manifest.
