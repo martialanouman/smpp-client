@@ -134,6 +134,13 @@ time = { version = "0.3", default-features = false, features = [
 tempfile = "3.24"
 sha2 = "0.10"
 
+# CA-002-05 asks for a test proving the memory a traversal holds stays
+# bounded. Measuring that needs a counting global allocator, and writing one
+# means `unsafe impl GlobalAlloc` — which `unsafe_code = "forbid"` rules out,
+# with no local escape hatch. `stats_alloc` holds that `unsafe` inside its own
+# crate, so the test only declares a `static`. Test-only, MIT, ~300 lines.
+stats_alloc = "0.1"
+
 # ---------------------------------------------------------------------------
 # Machine-enforced coding rules
 # ---------------------------------------------------------------------------
