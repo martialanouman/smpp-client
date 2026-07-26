@@ -40,11 +40,16 @@ function badgeClass(state: string): string {
 export function SendResult({ result, progress }: Props) {
   const { t } = useTranslation();
 
-  if (result === null) {
+  // The panel appears as soon as the **first** transition arrives, before the
+  // command has returned. Waiting for the result would collapse
+  // `QUEUED → SENT → ACCEPTED` into a single repaint at the end, which is
+  // exactly what CA-006-01 asks the operator to be able to watch, and what the
+  // `message:update` event exists for.
+  if (result === null && progress === null) {
     return null;
   }
 
-  const state = progress ?? result.state;
+  const state = progress ?? result?.state ?? "QUEUED";
 
   return (
     <section
@@ -58,23 +63,25 @@ export function SendResult({ result, progress }: Props) {
           {t(`send.state.${state}`)}
         </span>
 
-        <span className="text-sm opacity-70">
-          {t("send.result.segments", { count: result.segments })}
-        </span>
+        {result === null ? null : (
+          <span className="text-sm opacity-70">
+            {t("send.result.segments", { count: result.segments })}
+          </span>
+        )}
       </div>
 
       <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="opacity-70">{t("send.result.clientMessageId")}</dt>
-        <dd className="font-mono text-xs">{result.clientMessageId}</dd>
+        <dd className="font-mono text-xs">{result?.clientMessageId ?? "—"}</dd>
 
-        {result.smscMessageId === null ? null : (
+        {result?.smscMessageId == null ? null : (
           <>
             <dt className="opacity-70">{t("send.result.smscMessageId")}</dt>
             <dd className="font-mono text-xs">{result.smscMessageId}</dd>
           </>
         )}
 
-        {result.commandStatus === null ? (
+        {result === null ? null : result.commandStatus === null ? (
           <>
             <dt className="opacity-70">{t("send.result.status")}</dt>
             <dd>{t("send.result.noAnswer")}</dd>
@@ -95,13 +102,15 @@ export function SendResult({ result, progress }: Props) {
         )}
       </dl>
 
-      {result.statusIsVendorSpecific ? (
+      {result?.statusIsVendorSpecific ? (
         <p className="text-xs opacity-70">{t("send.result.vendorSpecific")}</p>
       ) : null}
 
-      {result.retryable ? <p className="text-xs opacity-70">{t("send.result.retryable")}</p> : null}
+      {result?.retryable ? (
+        <p className="text-xs opacity-70">{t("send.result.retryable")}</p>
+      ) : null}
 
-      {result.segments > 1 ? (
+      {result !== null && result.segments > 1 ? (
         <div className="overflow-x-auto">
           <table className="mt-2 w-full text-left text-xs">
             <thead className="opacity-70">

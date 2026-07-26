@@ -265,6 +265,21 @@ describe("Send › Simple", () => {
     expect(screen.getByText(fr.send.state.ACCEPTED)).toBeTruthy();
   });
 
+  /// CA-006-01: the operator watches the message move. The panel therefore
+  /// has to appear on the **first** transition, before the command returns —
+  /// waiting for the result would collapse the three states into one repaint.
+  it("shows the lifecycle badge before the command has returned", async () => {
+    render(<SendView />);
+
+    expect(screen.queryByText(fr.send.result.title)).toBeNull();
+
+    useSend.getState().adopt("22222222-2222-4222-8222-222222222222", "QUEUED");
+
+    await waitFor(() => {
+      expect(screen.getByText(fr.send.state.QUEUED)).toBeTruthy();
+    });
+  });
+
   it("adds and removes a custom optional parameter", async () => {
     render(<SendView />);
 
