@@ -56,47 +56,16 @@ pub enum Encoding {
     Ucs2,
 }
 
-/// How GSM 7-bit septets are laid out in the octets of `short_message`.
+/// The two GSM 7-bit layout characteristics, re-exported from
+/// [`smpp_core::values`].
 ///
-/// # Why this is a choice at all
-///
-/// GSM 03.38 §6.1.2.1.1 describes the **over-the-air** format, where eight
-/// septets are squeezed into seven octets. That format applies between the
-/// message centre and the handset — *not* to the `short_message` field of a
-/// `submit_sm`. On the SMPP link the near-universal convention is the opposite
-/// one: **one septet per octet**, high bit clear, and the message centre packs
-/// before the radio interface. Kannel, Jasmin, CloudHopper and the large
-/// commercial aggregators all expect that. Packing on the SMPP link exists —
-/// some ZTE and legacy operator equipment — but it is the documented exception.
-///
-/// Getting it wrong is silent in both directions: the message centre answers
-/// `ESME_ROK`, the delivery receipt says `DELIVRD`, and the handset shows
-/// gibberish. Nothing ever comes back. Hence the default, and hence the fact
-/// that this is configured per session rather than guessed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Gsm7BitPacking {
-    /// One septet per octet, high bit clear. The default and the common case.
-    ///
-    /// `sm_length` counts one octet per septet, so a full single segment is
-    /// 160 octets — well within the 254 the field allows. The message centre
-    /// packs before the radio interface.
-    #[default]
-    Unpacked,
-    /// Eight septets in seven octets, as GSM 03.38 §6.1.2.1.1 packs them.
-    ///
-    /// For the message centres that require it. Two consequences worth knowing
-    /// before turning it on:
-    ///
-    /// * `sm_length` is in octets, so the receiver has to *recompute* the
-    ///   septet count from it. The segmenter therefore refuses to close a
-    ///   non-final segment on a count that would not come back exactly.
-    /// * on the **last** segment the recomputation can still yield one septet
-    ///   too many, which the padding makes a carriage return. That case is
-    ///   unavoidable — there is no later segment to push a character into —
-    ///   and it is the one TS 23.038 §6.1.2.3.1 covers by prescribing `CR` as
-    ///   the pad value precisely so it stays harmless.
-    Packed,
-}
+/// [`Gsm7BitPacking`] was defined here at milestone 004. It moved down to
+/// `smpp-core` at milestone 005, when [`Gsm7BitCharset`] joined it: both are
+/// decided by the **message centre**, so both are fields of the session
+/// profile — and the profile lives in `smpp-session`, a layer *below* this
+/// one. A value the profile carries and this crate applies has to sit under
+/// both. The re-export keeps the milestone-004 paths working.
+pub use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking};
 
 impl Encoding {
     /// The `data_coding` value of spec §7.5 for this encoding.

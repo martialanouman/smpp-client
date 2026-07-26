@@ -31,8 +31,20 @@
 //! default one, or to assert on the UDHI bit — which milestone 004 has to do
 //! on every concatenated segment.
 
+//! # Milestone 005 additions
+//!
+//! [`Gsm7BitPacking`] moved here from `messaging::encoding`, and
+//! [`Gsm7BitCharset`] joined it. Both describe how the octets of a GSM 7-bit
+//! body are to be read, both are decided by the **message centre**, and both
+//! are therefore fields of the session profile — which lives in
+//! `smpp-session`, a layer below `messaging`. A value the profile carries and
+//! the encoder applies has to sit under both, and that is here. `messaging`
+//! re-exports them, so its milestone-004 API is unchanged.
+
+mod gsm7;
 mod version;
 
+pub use gsm7::{Gsm7BitCharset, Gsm7BitPacking};
 pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 
 pub use rusmpp::{

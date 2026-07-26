@@ -16,5 +16,49 @@ thiserror.workspace = true
 smpp-core = { path = "../smpp-core" }
 rate-control = { path = "../rate-control" }
 
+# Session profiles are rows of `session_profiles` (spec §14.2). The domain
+# type lives here — it is this crate that binds with it — and the mapping to
+# and from the stored record lives next to it, in `profile`. The edge points
+# downwards: `persistence` depends on `smpp-core` and on nothing else of ours,
+# so there is no cycle.
+persistence = { path = "../persistence" }
+
+# `net` for the TcpStream, `io-util` for the DuplexStream the tests run on,
+# `time` for the back-off and the response timeouts, `sync` for the channels
+# the actors talk over, `rt` + `macros` to spawn and select.
+tokio = { workspace = true, features = [
+  "rt",
+  "net",
+  "sync",
+  "time",
+  "io-util",
+  "macros",
+] }
+
+# `codec` mounts `smpp_core::codec::CommandCodec` on the socket; `rt` brings
+# `CancellationToken`, the single shutdown signal of CLAUDE.md §4.
+tokio-util = { workspace = true, features = ["codec", "rt"] }
+
+# `SinkExt` and `StreamExt`, which is how a `Framed` is written to and read
+# from.
+futures-util.workspace = true
+
+tracing.workspace = true
+
+# Jitter on the reconnection back-off — see the workspace manifest.
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "test-util",
+  "io-util",
+  "time",
+  "sync",
+] }
+tokio-util = { workspace = true, features = ["codec", "rt"] }
+tracing-subscriber.workspace = true
+
 [lints]
 workspace = true
