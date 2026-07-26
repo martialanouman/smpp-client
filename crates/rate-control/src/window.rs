@@ -74,6 +74,20 @@ impl SendWindow {
         })
     }
 
+    /// A window of exactly one slot.
+    ///
+    /// Infallible, which is why it exists: a caller that cannot fail — a
+    /// session being spawned — needs somewhere to fall back to that still
+    /// sends, and one PDU at a time is the safest thing a misconfigured
+    /// session can do.
+    #[must_use]
+    pub fn single() -> Self {
+        Self {
+            size: 1,
+            slots: Arc::new(Semaphore::new(1)),
+        }
+    }
+
     /// Waits for a free slot and takes it.
     ///
     /// **Waits — it does not refuse.** A full window means the message centre

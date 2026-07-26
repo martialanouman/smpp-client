@@ -28,6 +28,7 @@ mod messaging;
 mod pending;
 
 pub mod actors;
+pub mod metrics;
 pub mod profile;
 pub mod reconnect;
 pub mod registry;

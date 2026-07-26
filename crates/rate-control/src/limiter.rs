@@ -278,6 +278,32 @@ impl RateLimiter {
         Self::new(ThroughputConfig::at(target_tps))
     }
 
+    /// A limiter that never delays anything.
+    ///
+    /// Infallible, which is why it exists: a caller that cannot fail — a
+    /// session being spawned — needs a fallback, and "send unpaced" is the
+    /// only one that keeps the session usable. An unlimited target has no
+    /// band to be empty, so [`Self::new`] cannot refuse it.
+    #[must_use]
+    pub fn unlimited() -> Self {
+        let clock = TokioClock::starting_now();
+
+        Self {
+            config: ThroughputConfig {
+                target_tps: 0,
+                min_tps: 0,
+                throttle_cooldown: DEFAULT_THROTTLE_COOLDOWN,
+            },
+            inner: Mutex::new(Inner {
+                gcra: None,
+                effective_tps: 0,
+                factor: AdaptiveFactor::NEUTRAL,
+            }),
+            clock,
+            not_before_nanos: AtomicU64::new(0),
+        }
+    }
+
     /// Waits until one PDU may be sent, then accounts for it.
     ///
     /// Returns as soon as the quota allows, which for an unlimited limiter is
