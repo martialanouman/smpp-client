@@ -131,6 +131,31 @@ describe("persisting a preference", () => {
     expect(usePreferences.getState().theme).toBe("light");
   });
 
+  it("does not notify twice when the backend already emitted the event", async () => {
+    // `config_set` signals a failure twice by design: returned to the caller
+    // and pushed on `error:notify`. Notifying on both produced two identical
+    // toasts for one failure, each to be dismissed separately.
+    //
+    // Simulated here the way it happens for real: the event lands first, then
+    // the call resolves with the same error.
+    configSet.mockImplementation(() => {
+      usePreferences.getState().notify({ code: "CONFIG_UNWRITABLE", message: "could not write" });
+
+      return Promise.resolve({
+        ok: false,
+        failure: {
+          kind: "backend",
+          error: { code: "CONFIG_UNWRITABLE", message: "could not write", details: null },
+        },
+      });
+    });
+    const { persistPreference } = await import("./bridge");
+
+    await persistPreference({ theme: "dark" });
+
+    expect(usePreferences.getState().notifications).toHaveLength(1);
+  });
+
   it("surfaces a rejected value and leaves the store untouched", async () => {
     configSet.mockResolvedValue({
       ok: false,
@@ -147,7 +172,8 @@ describe("persisting a preference", () => {
     // to store — that would survive on screen until the next restart and then
     // silently revert. The store keeps what `adoptConfig` last confirmed.
     expect(usePreferences.getState().language).toBe(CONFIG.language);
-    expect(usePreferences.getState().notifications[0]?.code).toBe("CONFIG_INVALID_LANGUAGE");
+    // The notification comes from `error:notify`, not from here — see the test
+    // above. What this one guards is that the store is left alone.
   });
 
   it("reports a transport failure without a fabricated code", async () => {

@@ -119,7 +119,17 @@ export async function persistPreference(patch: PreferencePatch): Promise<void> {
 
   if (outcome.ok) {
     adopt(outcome.value);
-  } else {
+    return;
+  }
+
+  // A `backend` failure has ALREADY been pushed on `error:notify` by the
+  // command itself, so notifying here showed the same toast twice, each to be
+  // dismissed separately. The event owns the notification; the return owns
+  // marking the form — which is what a later milestone will do with it.
+  //
+  // A `transport` failure has no event, because Rust never ran: this is the
+  // only path that must report.
+  if (outcome.failure.kind === "transport") {
     report(outcome.failure);
   }
 }
