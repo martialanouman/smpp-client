@@ -1,4 +1,4 @@
-# ADR 0007 — Segmenter au caractère, avec un budget unique par encodage
+# ADR 0008 — Segmenter au caractère, en septets non packés par défaut
 
 > **Statut :** Accepté
 > **Date :** 2026-07-26 · **Jalon :** step-004 · **Décideur :** Martial Anouman

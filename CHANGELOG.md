@@ -110,7 +110,7 @@ majeur.
 
 ### Décisions
 
-- [ADR 0007](docs/adr/0007-strategie-de-segmentation.md) : découpage au
+- [ADR 0008](docs/adr/0008-strategie-de-segmentation.md) : découpage au
   caractère avec un remplisseur glouton unique, budget de la spec §7.5
   appliqué quel que soit le mode — le mode `sar_*` renonce à 7 septets par
   segment parce que de nombreux SMSC retraduisent les TLV en UDH sur la
