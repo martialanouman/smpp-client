@@ -16,6 +16,20 @@
 //! and an ESME that refused to decode it could not even read the response
 //! status. The unknown value is preserved and re-encoded verbatim — verified by
 //! the round-trip tests over the whole byte range at the bottom of this file.
+//!
+//! # Milestone 004 additions
+//!
+//! [`MessagePayload`] carries the message body when it does not fit
+//! `short_message` (spec §7.5). It was reachable neither here nor through
+//! [`crate::octets`]: `rusmpp` places it under `values::owned`, a path the
+//! curated list did not cover, which left the 64 KiB alternative
+//! unimplementable from outside this crate.
+//!
+//! [`GsmFeatures`], [`MessagingMode`], [`MessageType`] and [`Ansi41Specific`]
+//! are the four fields of [`EsmClass`]. Re-exporting the struct without its
+//! field types made it impossible to build an `esm_class` other than the
+//! default one, or to assert on the UDHI bit — which milestone 004 has to do
+//! on every concatenated segment.
 
 mod version;
 
@@ -23,7 +37,8 @@ pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 
 pub use rusmpp::{
     values::{
-        DataCoding, EsmClass, InterfaceVersion, Npi, PriorityFlag, RegisteredDelivery, Ton,
+        Ansi41Specific, DataCoding, EsmClass, GsmFeatures, InterfaceVersion, MessagePayload,
+        MessageType, MessagingMode, Npi, PriorityFlag, RegisteredDelivery, Ton,
         UserMessageReference,
     },
     CommandId, CommandStatus,

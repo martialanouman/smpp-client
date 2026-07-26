@@ -60,6 +60,16 @@ pub use rusmpp::tlvs;
 /// newtypes, which are what most callers actually want.
 pub use rusmpp::types as octets;
 
+/// User Data Headers, and the concatenation UDH of spec §7.5 in particular.
+///
+/// A UDH is not a PDU field: it lives *inside* `short_message`, ahead of the
+/// user data. Milestone 004 builds one per segment, which is why the module
+/// surfaces here rather than staying an implementation detail of `rusmpp`.
+/// [`udhs::concatenation::ConcatenatedShortMessage8Bit`] validates the
+/// invariants the spec leaves implicit — a part number of zero, or one greater
+/// than the total — so the segmenter does not have to restate them.
+pub use rusmpp::udhs;
+
 /// Crate version, as declared in its manifest.
 ///
 /// ```
