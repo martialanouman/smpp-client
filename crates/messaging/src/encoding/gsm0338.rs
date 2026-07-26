@@ -205,23 +205,23 @@ pub(crate) fn is_representable(text: &str) -> bool {
         .all(|character| sequence_of(character).is_some())
 }
 
-/// Turns `text` into its septet sequence, one octet per septet.
+/// Appends the septet sequence of `text` to `septets`, one octet per septet.
 ///
 /// This is *not* the wire form: [`pack`] compresses it afterwards. Keeping the
 /// two apart is what lets the segmenter slice on septet boundaries — which is
 /// where the segment budget is expressed — before packing each slice with the
 /// fill bits its own header dictates.
 ///
+/// It appends rather than returning a fresh vector because the planner already
+/// counted the septets, so the segmenter can size the buffer exactly once
+/// (CA-004-10).
+///
 /// # Errors
 ///
 /// [`EncodingError::UnrepresentableCharacter`] on the first character outside
-/// the alphabet, with its position in characters.
-pub(crate) fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
-    // The common case is one septet per character; the escaped ones grow the
-    // buffer, and they are rare enough that reserving for them would waste
-    // more than it saves.
-    let mut septets = Vec::with_capacity(text.chars().count());
-
+/// the alphabet, with its position in characters. `septets` is left in an
+/// unspecified state.
+pub(crate) fn encode_into(text: &str, septets: &mut Vec<u8>) -> Result<(), EncodingError> {
     for (index, character) in text.chars().enumerate() {
         match sequence_of(character) {
             Some(Sequence::Base(code)) => septets.push(code),
@@ -239,15 +239,15 @@ pub(crate) fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
         }
     }
 
-    Ok(septets)
+    Ok(())
 }
 
-/// Reads back a septet sequence produced by [`encode`].
+/// Reads back a septet sequence produced by [`encode_into`].
 ///
 /// Lenient where TS 23.038 asks for leniency: an escape followed by a code the
 /// extension table does not list falls back to the base-table character, and a
 /// trailing escape with nothing after it is dropped. Neither can come out of
-/// [`encode`]; both can come off the wire.
+/// [`encode_into`]; both can come off the wire.
 pub(crate) fn decode(septets: &[u8]) -> String {
     let mut text = String::with_capacity(septets.len());
     let mut septets = septets.iter().copied();
@@ -385,6 +385,15 @@ pub(crate) fn unpack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`encode_into`] into a fresh vector, for readability in the assertions.
+    fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
+        let mut septets = Vec::new();
+
+        encode_into(text, &mut septets)?;
+
+        Ok(septets)
+    }
 
     /// Fiche §5: every character of the base table, checked both ways.
     #[test]

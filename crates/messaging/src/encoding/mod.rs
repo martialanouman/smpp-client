@@ -8,9 +8,9 @@
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`gsm0338`] | the GSM 03.38 tables, the extension escape, septet packing |
-//! | [`latin1`] | ISO-8859-1, one octet per character |
-//! | [`ucs2`] | UTF-16BE, one or two code units per character |
+//! | `gsm0338` | the GSM 03.38 tables, the extension escape, septet packing |
+//! | `latin1` | ISO-8859-1, one octet per character |
+//! | `ucs2` | UTF-16BE, one or two code units per character |
 //! | [`preview`] | the live counter the message editor reads |
 //! | [`error`] | [`EncodingError`] |
 //!

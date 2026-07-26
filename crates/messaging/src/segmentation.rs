@@ -327,7 +327,7 @@ pub fn segment(
     let cuts = cut_offsets(text, encoding, layout.budget, layout.segments);
     let concatenated = layout.segments > 1;
 
-    let units = EncodedUnits::encode(text, encoding)?;
+    let units = EncodedUnits::encode(text, encoding, layout.total_units)?;
     let mut segments = Vec::with_capacity(layout.segments);
 
     for index in 0..layout.segments {
@@ -550,12 +550,30 @@ enum EncodedUnits {
 }
 
 impl EncodedUnits {
-    /// Encodes `text` whole.
-    fn encode(text: &str, encoding: Encoding) -> Result<Self, EncodingError> {
+    /// Encodes `text` whole into a buffer of exactly `units` entries.
+    ///
+    /// The planner already counted the units, so the buffer is allocated once
+    /// at its final size and never grows (CA-004-10).
+    fn encode(text: &str, encoding: Encoding, units: usize) -> Result<Self, EncodingError> {
         Ok(match encoding {
-            Encoding::Gsm7Bit => Self::Septets(gsm0338::encode(text)?),
-            Encoding::Latin1 => Self::Octets(latin1::encode(text)?),
-            Encoding::Ucs2 => Self::CodeUnits(ucs2::encode(text)),
+            Encoding::Gsm7Bit => {
+                let mut septets = Vec::with_capacity(units);
+                gsm0338::encode_into(text, &mut septets)?;
+
+                Self::Septets(septets)
+            }
+            Encoding::Latin1 => {
+                let mut octets = Vec::with_capacity(units);
+                latin1::encode_into(text, &mut octets)?;
+
+                Self::Octets(octets)
+            }
+            Encoding::Ucs2 => {
+                let mut code_units = Vec::with_capacity(units);
+                ucs2::encode_into(text, &mut code_units);
+
+                Self::CodeUnits(code_units)
+            }
         })
     }
 

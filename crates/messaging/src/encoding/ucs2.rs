@@ -19,9 +19,11 @@ pub(crate) const fn code_unit_cost(character: char) -> usize {
     character.len_utf16()
 }
 
-/// Turns `text` into UTF-16 code units. Cannot fail: UCS2 covers Unicode.
-pub(crate) fn encode(text: &str) -> Vec<u16> {
-    text.encode_utf16().collect()
+/// Appends the UTF-16 code units of `text` to `code_units`.
+///
+/// Cannot fail: UCS2 covers the whole of Unicode.
+pub(crate) fn encode_into(text: &str, code_units: &mut Vec<u16>) {
+    code_units.extend(text.encode_utf16());
 }
 
 /// Writes code units as big-endian octet pairs, appending to `out`.
@@ -71,6 +73,15 @@ pub(crate) fn decode(code_units: &[u16], sequence_number: u8) -> Result<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`encode_into`] into a fresh vector, for readability in the assertions.
+    fn encode(text: &str) -> Vec<u16> {
+        let mut code_units = Vec::new();
+
+        encode_into(text, &mut code_units);
+
+        code_units
+    }
 
     #[test]
     fn a_basic_plane_character_costs_one_code_unit() {

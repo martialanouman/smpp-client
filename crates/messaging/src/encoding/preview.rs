@@ -8,10 +8,10 @@
 //!
 //! CA-004-09 asks that the preview and the real segmentation always agree. Two
 //! implementations of the same greedy fill would agree until the day one of
-//! them was fixed. So there is one: [`plan`] decides how many segments a text
+//! them was fixed. So there is one: `plan` decides how many segments a text
 //! needs and where they end, [`preview`] formats its answer for the interface,
 //! and [`segment`](crate::segmentation::segment) replays the same
-//! [`SegmentFiller`] to place the cuts. The property test only has to confirm
+//! `SegmentFiller` to place the cuts. The property test only has to confirm
 //! a structural fact.
 
 use crate::{

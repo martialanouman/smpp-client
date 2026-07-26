@@ -26,15 +26,14 @@ pub(crate) fn is_representable(text: &str) -> bool {
         .all(|character| u32::from(character) <= MAX_CODE_POINT)
 }
 
-/// Turns `text` into Latin-1 octets.
+/// Appends the Latin-1 octets of `text` to `octets`.
 ///
 /// # Errors
 ///
 /// [`EncodingError::UnrepresentableCharacter`] on the first character above
-/// `U+00FF`, with its position in characters.
-pub(crate) fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
-    let mut octets = Vec::with_capacity(text.chars().count());
-
+/// `U+00FF`, with its position in characters. `octets` is left in an
+/// unspecified state.
+pub(crate) fn encode_into(text: &str, octets: &mut Vec<u8>) -> Result<(), EncodingError> {
     for (index, character) in text.chars().enumerate() {
         let octet = u8::try_from(u32::from(character)).map_err(|_| {
             EncodingError::UnrepresentableCharacter {
@@ -47,7 +46,7 @@ pub(crate) fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
         octets.push(octet);
     }
 
-    Ok(octets)
+    Ok(())
 }
 
 /// Reads Latin-1 octets back. Cannot fail: every octet is a code point.
@@ -58,6 +57,15 @@ pub(crate) fn decode(octets: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`encode_into`] into a fresh vector, for readability in the assertions.
+    fn encode(text: &str) -> Result<Vec<u8>, EncodingError> {
+        let mut octets = Vec::new();
+
+        encode_into(text, &mut octets)?;
+
+        Ok(octets)
+    }
 
     #[test]
     fn every_octet_round_trips() {
