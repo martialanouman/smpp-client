@@ -16,7 +16,7 @@ numéros valides par pays, journalise et exporte.
 
 | Outil | Version | Rôle |
 |---|---|---|
-| Rust (via `rustup`) | ≥ 1.78 | Backend et crates métier |
+| Rust (via `rustup`) | ≥ 1.85 | Backend et crates métier |
 | Node.js | 24 (voir [`.nvmrc`](.nvmrc)) | Build du frontend |
 | pnpm | ≥ 11 | Dépendances frontend |
 | `just` | — | Recettes de tâches |
@@ -93,11 +93,12 @@ métier ne dépend de `tauri`. Ces frontières sont inscrites dans les
 
 Toute décision structurante est consignée dans une ADR immuable.
 
-- [ADR 0001 — Adopter rusmpp/rusmppc comme pile SMPP](docs/adr/0001-choix-de-la-pile-smpp.md)
+- [ADR 0001 — Adopter rusmpp comme pile SMPP, au niveau codec](docs/adr/0001-choix-de-la-pile-smpp.md)
 - [ADR 0002 — Persister avec SQLite via SQLx](docs/adr/0002-persistance-sqlite-sqlx.md)
 - [ADR 0003 — Générer les types IPC avec tauri-specta](docs/adr/0003-generation-des-types-ipc.md)
 - [ADR 0004 — Utiliser pnpm et placer le `package.json` à la racine](docs/adr/0004-gestionnaire-de-paquets-frontend.md)
 - [ADR 0005 — Fixer les versions de la chaîne frontend](docs/adr/0005-versions-de-la-chaine-frontend.md)
+- [ADR 0006 — Relever la version minimale de Rust à 1.85](docs/adr/0006-version-minimale-de-rust.md)
 - [Modèle d'ADR](docs/adr/0000-template.md)
 
 ## Documentation
