@@ -2,11 +2,7 @@
 
 // See the note in `schema.rs`: `tests/` is compiled without `cfg(test)`, so
 // the test relaxations of `clippy.toml` do not apply here.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::disallowed_methods
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
 mod support;
 
@@ -101,9 +97,7 @@ fn every_migration_on_disk_is_pinned() {
 
     for name in files.keys() {
         assert!(
-            SHIPPED_MIGRATIONS
-                .iter()
-                .any(|(pinned, _)| pinned == name),
+            SHIPPED_MIGRATIONS.iter().any(|(pinned, _)| pinned == name),
             "migration `{name}` is not pinned in SHIPPED_MIGRATIONS"
         );
     }

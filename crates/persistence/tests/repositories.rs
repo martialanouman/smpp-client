@@ -1,0 +1,644 @@
+//! What each repository does with one row, and what it refuses.
+
+// See the note in `schema.rs`: `tests/` is compiled without `cfg(test)`, so
+// the test relaxations of `clippy.toml` do not apply here.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
+
+mod support;
+
+use futures_util::StreamExt;
+use persistence::ports::{
+    CampaignRepository, ContactRepository, MessageRepository, PduLogRepository,
+    SessionProfileRepository,
+};
+use persistence::{
+    CampaignId, CampaignStatus, ContactId, Cursor, ListId, MessageFilter, MessageState,
+    MessageStateUpdate, PduDirection, PduLogEntry, PersistenceError, SqliteCampaignRepository,
+    SqliteContactRepository, SqliteMessageRepository, SqlitePduLogRepository,
+    SqliteSessionProfileRepository,
+};
+use smpp_core::types::{ClientMessageId, SessionId};
+use smpp_core::values::CommandStatus;
+
+use support::{
+    a_campaign, a_contact, a_contact_list, a_queued_message, a_session_profile, instant,
+    numbered_msisdn, temp_database,
+};
+
+// --- Session profiles -------------------------------------------------------
+
+#[tokio::test]
+async fn a_session_profile_survives_a_round_trip() {
+    let harness = temp_database().await;
+    let repository = SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let profile = a_session_profile(SessionId::new(), "staging");
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    let read_back = repository
+        .find_session_profile(profile.session_id)
+        .await
+        .unwrap()
+        .expect("the profile was just written");
+
+    assert_eq!(read_back, profile);
+}
+
+#[tokio::test]
+async fn upserting_a_session_profile_twice_updates_it_in_place() {
+    let harness = temp_database().await;
+    let repository = SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let mut profile = a_session_profile(SessionId::new(), "staging");
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    profile.name = String::from("production");
+    profile.throughput_tps = 500;
+    profile.updated_at = instant("2026-07-27T09:00:00Z");
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    assert_eq!(repository.list_session_profiles().await.unwrap().len(), 1);
+    assert_eq!(
+        repository
+            .find_session_profile(profile.session_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        profile
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_session_profile_reports_whether_it_existed() {
+    let harness = temp_database().await;
+    let repository = SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let profile = a_session_profile(SessionId::new(), "staging");
+    repository.upsert_session_profile(&profile).await.unwrap();
+
+    assert!(repository
+        .delete_session_profile(profile.session_id)
+        .await
+        .unwrap());
+    assert!(!repository
+        .delete_session_profile(profile.session_id)
+        .await
+        .unwrap());
+}
+
+/// The audit trail outlives the profile: spec §17.6 wants the record of what
+/// was sent, and `ON DELETE SET NULL` is what keeps it.
+#[tokio::test]
+async fn deleting_a_session_profile_detaches_its_messages_without_erasing_them() {
+    let harness = temp_database().await;
+    let profiles = SqliteSessionProfileRepository::new(harness.database().clone());
+    let messages = SqliteMessageRepository::new(harness.database().clone());
+
+    let profile = a_session_profile(SessionId::new(), "staging");
+    profiles.upsert_session_profile(&profile).await.unwrap();
+
+    let mut message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    message.session_id = Some(profile.session_id);
+    messages.insert_message(&message).await.unwrap();
+
+    profiles
+        .delete_session_profile(profile.session_id)
+        .await
+        .unwrap();
+
+    let read_back = messages
+        .find_message(message.client_message_id)
+        .await
+        .unwrap()
+        .expect("the message must survive its session profile");
+
+    assert!(read_back.session_id.is_none());
+    assert_eq!(read_back.text, message.text);
+}
+
+// --- Contacts ---------------------------------------------------------------
+
+#[tokio::test]
+async fn a_contact_survives_a_round_trip() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let contact = a_contact(ContactId::new(), "+2250102030405");
+    repository.insert_contact(&contact).await.unwrap();
+
+    assert_eq!(
+        repository
+            .find_contact(contact.contact_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        contact
+    );
+}
+
+#[tokio::test]
+async fn inserting_the_same_contact_identifier_twice_is_a_conflict() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let contact = a_contact(ContactId::new(), "+2250102030405");
+    repository.insert_contact(&contact).await.unwrap();
+
+    let rejection = repository.insert_contact(&contact).await.unwrap_err();
+
+    assert!(
+        matches!(rejection, PersistenceError::Conflict { entity, .. } if entity == "contacts"),
+        "expected a conflict, got {rejection:?}"
+    );
+}
+
+/// One transaction for the batch means all-or-nothing: the two valid contacts
+/// before the duplicate must not be there afterwards.
+#[tokio::test]
+async fn a_batch_of_contacts_that_fails_leaves_nothing_behind() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let duplicate = a_contact(ContactId::new(), numbered_msisdn(3).as_str());
+    let batch = vec![
+        a_contact(ContactId::new(), numbered_msisdn(1).as_str()),
+        a_contact(ContactId::new(), numbered_msisdn(2).as_str()),
+        duplicate.clone(),
+        duplicate,
+    ];
+
+    repository.insert_contacts(&batch).await.unwrap_err();
+
+    let page = repository
+        .page_contacts(Cursor::start(), 100)
+        .await
+        .unwrap();
+    assert!(page.is_empty(), "the batch must have rolled back whole");
+}
+
+#[tokio::test]
+async fn contacts_are_paginated_by_cursor_without_gaps_or_repeats() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let batch: Vec<_> = (0..25)
+        .map(|index| a_contact(ContactId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_contacts(&batch).await.unwrap();
+
+    let mut seen = Vec::new();
+    let mut cursor = Cursor::start();
+    loop {
+        let page = repository.page_contacts(cursor, 10).await.unwrap();
+        seen.extend(page.items.iter().map(|contact| contact.contact_id));
+
+        match page.next {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+
+    let expected: Vec<_> = batch.iter().map(|contact| contact.contact_id).collect();
+    assert_eq!(seen, expected);
+}
+
+#[tokio::test]
+async fn a_contact_list_holds_only_the_contacts_added_to_it() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let inside = a_contact(ContactId::new(), numbered_msisdn(1).as_str());
+    let outside = a_contact(ContactId::new(), numbered_msisdn(2).as_str());
+    repository
+        .insert_contacts(&[inside.clone(), outside])
+        .await
+        .unwrap();
+
+    let list = a_contact_list(ListId::new(), "juillet");
+    repository.insert_contact_list(&list).await.unwrap();
+    let added = repository
+        .add_contacts_to_list(list.list_id, &[inside.contact_id])
+        .await
+        .unwrap();
+
+    assert_eq!(added, 1);
+
+    let members: Vec<_> = repository
+        .stream_contacts(Some(list.list_id))
+        .map(|contact| contact.unwrap().contact_id)
+        .collect()
+        .await;
+
+    assert_eq!(members, vec![inside.contact_id]);
+}
+
+#[tokio::test]
+async fn adding_a_contact_to_a_list_twice_creates_one_membership() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let contact = a_contact(ContactId::new(), numbered_msisdn(1).as_str());
+    repository.insert_contact(&contact).await.unwrap();
+    let list = a_contact_list(ListId::new(), "juillet");
+    repository.insert_contact_list(&list).await.unwrap();
+
+    let first = repository
+        .add_contacts_to_list(list.list_id, &[contact.contact_id])
+        .await
+        .unwrap();
+    let second = repository
+        .add_contacts_to_list(list.list_id, &[contact.contact_id])
+        .await
+        .unwrap();
+
+    assert_eq!((first, second), (1, 0));
+}
+
+/// The foreign keys are enforced, not decorative: a membership pointing at a
+/// contact that does not exist is refused.
+#[tokio::test]
+async fn a_membership_referencing_an_unknown_contact_is_refused() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let list = a_contact_list(ListId::new(), "juillet");
+    repository.insert_contact_list(&list).await.unwrap();
+
+    let rejection = repository
+        .add_contacts_to_list(list.list_id, &[ContactId::new()])
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(rejection, PersistenceError::Database { .. }),
+        "expected the foreign key to fire, got {rejection:?}"
+    );
+}
+
+#[tokio::test]
+async fn streaming_without_a_list_yields_every_contact() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let batch: Vec<_> = (0..5)
+        .map(|index| a_contact(ContactId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_contacts(&batch).await.unwrap();
+
+    let streamed: Vec<_> = repository
+        .stream_contacts(None)
+        .map(|contact| contact.unwrap().contact_id)
+        .collect()
+        .await;
+
+    assert_eq!(streamed.len(), batch.len());
+}
+
+// --- Campaigns --------------------------------------------------------------
+
+#[tokio::test]
+async fn a_campaign_survives_a_round_trip() {
+    let harness = temp_database().await;
+    let repository = SqliteCampaignRepository::new(harness.database().clone());
+
+    let campaign = a_campaign(CampaignId::new(), "juillet");
+    repository.upsert_campaign(&campaign).await.unwrap();
+
+    assert_eq!(
+        repository
+            .find_campaign(campaign.campaign_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        campaign
+    );
+}
+
+#[tokio::test]
+async fn a_campaign_status_change_is_persisted() {
+    let harness = temp_database().await;
+    let repository = SqliteCampaignRepository::new(harness.database().clone());
+
+    let mut campaign = a_campaign(CampaignId::new(), "juillet");
+    repository.upsert_campaign(&campaign).await.unwrap();
+
+    campaign.status = CampaignStatus::Running;
+    campaign.started_at = Some(instant("2026-07-26T11:00:00Z"));
+    campaign.total_count = 1_000;
+    repository.upsert_campaign(&campaign).await.unwrap();
+
+    let read_back = repository
+        .find_campaign(campaign.campaign_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(read_back.status, CampaignStatus::Running);
+    assert_eq!(read_back.started_at, campaign.started_at);
+    assert_eq!(read_back.total_count, 1_000);
+}
+
+#[tokio::test]
+async fn deleting_a_campaign_detaches_its_messages_without_erasing_them() {
+    let harness = temp_database().await;
+    let campaigns = SqliteCampaignRepository::new(harness.database().clone());
+    let messages = SqliteMessageRepository::new(harness.database().clone());
+
+    let campaign = a_campaign(CampaignId::new(), "juillet");
+    campaigns.upsert_campaign(&campaign).await.unwrap();
+
+    let mut message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    message.campaign_id = Some(campaign.campaign_id);
+    messages.insert_message(&message).await.unwrap();
+
+    assert!(campaigns
+        .delete_campaign(campaign.campaign_id)
+        .await
+        .unwrap());
+
+    let read_back = messages
+        .find_message(message.client_message_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(read_back.campaign_id.is_none());
+}
+
+// --- Messages ---------------------------------------------------------------
+
+#[tokio::test]
+async fn a_message_survives_a_round_trip() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    repository.insert_message(&message).await.unwrap();
+
+    assert_eq!(
+        repository
+            .find_message(message.client_message_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        message
+    );
+}
+
+#[tokio::test]
+async fn inserting_the_same_client_message_identifier_twice_is_a_conflict() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    repository.insert_message(&message).await.unwrap();
+
+    let rejection = repository.insert_message(&message).await.unwrap_err();
+
+    assert!(
+        matches!(rejection, PersistenceError::Conflict { entity, .. } if entity == "messages"),
+        "expected a conflict, got {rejection:?}"
+    );
+}
+
+/// The whole lifecycle of spec §14.3, one transition at a time, checking that
+/// each one keeps what the previous one wrote.
+#[tokio::test]
+async fn the_lifecycle_transitions_accumulate_rather_than_overwrite() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    let identifier = message.client_message_id;
+    repository.insert_message(&message).await.unwrap();
+
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Sent)
+                .sent_at(instant("2026-07-26T10:00:01Z")),
+        )
+        .await
+        .unwrap();
+
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Accepted)
+                .with_smsc_message_id("SMSC-1")
+                .with_command_status(CommandStatus::EsmeRok)
+                .responded_at(instant("2026-07-26T10:00:02Z")),
+        )
+        .await
+        .unwrap();
+
+    repository
+        .update_state(
+            &MessageStateUpdate::new(identifier, MessageState::Delivered)
+                .with_delivery_receipt("DELIVRD", None)
+                .receipt_at(instant("2026-07-26T10:00:30Z")),
+        )
+        .await
+        .unwrap();
+
+    let read_back = repository.find_message(identifier).await.unwrap().unwrap();
+
+    assert_eq!(read_back.state, MessageState::Delivered);
+    assert_eq!(read_back.smsc_message_id.as_deref(), Some("SMSC-1"));
+    assert_eq!(read_back.command_status, Some(CommandStatus::EsmeRok));
+    assert_eq!(read_back.dlr_stat.as_deref(), Some("DELIVRD"));
+    assert_eq!(read_back.sent_at, Some(instant("2026-07-26T10:00:01Z")));
+    assert_eq!(read_back.resp_at, Some(instant("2026-07-26T10:00:02Z")));
+    assert_eq!(read_back.dlr_at, Some(instant("2026-07-26T10:00:30Z")));
+    assert_eq!(read_back.attempts, 1, "only the send counts as an attempt");
+}
+
+/// Replaying a transition must be harmless (CLAUDE.md §4).
+#[tokio::test]
+async fn replaying_the_same_transition_leaves_the_row_unchanged() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    let identifier = message.client_message_id;
+    repository.insert_message(&message).await.unwrap();
+
+    let transition = MessageStateUpdate::new(identifier, MessageState::Accepted)
+        .with_smsc_message_id("SMSC-1")
+        .responded_at(instant("2026-07-26T10:00:02Z"));
+
+    repository.update_state(&transition).await.unwrap();
+    let once = repository.find_message(identifier).await.unwrap().unwrap();
+
+    repository.update_state(&transition).await.unwrap();
+    let twice = repository.find_message(identifier).await.unwrap().unwrap();
+
+    assert_eq!(once, twice);
+}
+
+#[tokio::test]
+async fn a_transition_on_an_unknown_message_is_not_found() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let rejection = repository
+        .update_state(&MessageStateUpdate::new(
+            ClientMessageId::new(),
+            MessageState::Sent,
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(rejection, PersistenceError::NotFound { entity, .. } if entity == "messages"),
+        "expected a not-found, got {rejection:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_message_is_found_by_the_identifier_the_smsc_assigned() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    repository.insert_message(&message).await.unwrap();
+    repository
+        .update_state(
+            &MessageStateUpdate::new(message.client_message_id, MessageState::Accepted)
+                .with_smsc_message_id("SMSC-42"),
+        )
+        .await
+        .unwrap();
+
+    let found = repository
+        .find_message_by_smsc_id("SMSC-42")
+        .await
+        .unwrap()
+        .expect("the delivery receipt must find its message");
+
+    assert_eq!(found.client_message_id, message.client_message_id);
+    assert!(repository
+        .find_message_by_smsc_id("SMSC-unknown")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn messages_are_filtered_by_campaign_and_by_state() {
+    let harness = temp_database().await;
+    let campaigns = SqliteCampaignRepository::new(harness.database().clone());
+    let messages = SqliteMessageRepository::new(harness.database().clone());
+
+    let campaign = a_campaign(CampaignId::new(), "juillet");
+    campaigns.upsert_campaign(&campaign).await.unwrap();
+
+    let mut inside = a_queued_message(ClientMessageId::new(), numbered_msisdn(1).as_str());
+    inside.campaign_id = Some(campaign.campaign_id);
+    let outside = a_queued_message(ClientMessageId::new(), numbered_msisdn(2).as_str());
+    messages
+        .insert_messages(&[inside.clone(), outside])
+        .await
+        .unwrap();
+
+    messages
+        .update_state(&MessageStateUpdate::new(
+            inside.client_message_id,
+            MessageState::Sent,
+        ))
+        .await
+        .unwrap();
+
+    let by_campaign = MessageFilter::all().for_campaign(campaign.campaign_id);
+    assert_eq!(messages.count_messages(&by_campaign).await.unwrap(), 1);
+
+    let queued = MessageFilter::all().in_state(MessageState::Queued);
+    assert_eq!(messages.count_messages(&queued).await.unwrap(), 1);
+
+    let sent_in_campaign = MessageFilter::all()
+        .for_campaign(campaign.campaign_id)
+        .in_state(MessageState::Sent);
+    let page = messages
+        .page_messages(&sent_in_campaign, Cursor::start(), 10)
+        .await
+        .unwrap();
+
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.items[0].client_message_id, inside.client_message_id);
+}
+
+#[tokio::test]
+async fn an_empty_filter_counts_every_message() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let batch: Vec<_> = (0..7)
+        .map(|index| a_queued_message(ClientMessageId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_messages(&batch).await.unwrap();
+
+    assert_eq!(
+        repository
+            .count_messages(&MessageFilter::all())
+            .await
+            .unwrap(),
+        7
+    );
+}
+
+// --- PDU log ----------------------------------------------------------------
+
+#[tokio::test]
+async fn a_pdu_log_entry_survives_a_round_trip() {
+    let harness = temp_database().await;
+    let repository = SqlitePduLogRepository::new(harness.database().clone());
+
+    let entry = PduLogEntry {
+        session_id: Some(SessionId::new()),
+        direction: PduDirection::Outbound,
+        command_id: Some(0x0000_0004),
+        command_status: Some(0),
+        sequence_number: Some(1),
+        raw_hex: Some(String::from("0000001F")),
+        decoded: Some(String::from("submit_sm")),
+        ts: instant("2026-07-26T10:00:00Z"),
+    };
+
+    assert!(repository.insert_entry(&entry).await.unwrap() > 0);
+
+    let page = repository
+        .page_entries(None, Cursor::start(), 10)
+        .await
+        .unwrap();
+
+    assert_eq!(page.items, vec![entry]);
+}
+
+#[tokio::test]
+async fn pdu_log_entries_are_filtered_by_session() {
+    let harness = temp_database().await;
+    let repository = SqlitePduLogRepository::new(harness.database().clone());
+
+    let wanted = SessionId::new();
+    for session_id in [Some(wanted), Some(SessionId::new()), None] {
+        repository
+            .insert_entry(&PduLogEntry {
+                session_id,
+                direction: PduDirection::Inbound,
+                command_id: None,
+                command_status: None,
+                sequence_number: None,
+                raw_hex: None,
+                decoded: None,
+                ts: instant("2026-07-26T10:00:00Z"),
+            })
+            .await
+            .unwrap();
+    }
+
+    let page = repository
+        .page_entries(Some(wanted), Cursor::start(), 10)
+        .await
+        .unwrap();
+
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.items[0].session_id, Some(wanted));
+}

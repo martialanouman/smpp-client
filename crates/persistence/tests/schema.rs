@@ -8,11 +8,7 @@
 //   · `disallowed_methods`: `#[tokio::test]` expands to
 //     `Runtime::block_on`, and `clippy.toml` reserves that call for "the
 //     binary entry point". A test harness is one.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::disallowed_methods
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
 mod support;
 
