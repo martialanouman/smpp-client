@@ -107,18 +107,23 @@ describe("AppShell", () => {
     const user = userEvent.setup();
     render(<AppShell />);
 
-    usePreferences
-      .getState()
-      .notify({ code: "CONFIG_INVALID_LANGUAGE", message: "langue inconnue" });
+    // The backend's own sentence is English and fixed — error.rs states it
+    // must never reach the user raw.
+    const RAW = "unsupported language";
+    usePreferences.getState().notify({ code: "CONFIG_INVALID_LANGUAGE", message: RAW });
 
     const region = await screen.findByRole("region", { name: fr.notification.region });
-    expect(within(region).getByText("langue inconnue")).toBeInTheDocument();
-    // The stable code is what the interface can act on; showing it makes a bug
+
+    // What the user reads is the translation of the stable code.
+    expect(within(region).getByText(fr.error.CONFIG_INVALID_LANGUAGE)).toBeInTheDocument();
+    expect(within(region).queryByText(RAW)).not.toBeInTheDocument();
+
+    // The code stays visible as the technical line: that is what makes a bug
     // report actionable.
     expect(within(region).getByText(/CONFIG_INVALID_LANGUAGE/)).toBeInTheDocument();
 
     await user.click(within(region).getByRole("button", { name: fr.notification.dismiss }));
-    expect(screen.queryByText("langue inconnue")).not.toBeInTheDocument();
+    expect(screen.queryByText(fr.error.CONFIG_INVALID_LANGUAGE)).not.toBeInTheDocument();
   });
 
   it("renders no raw translation key", () => {

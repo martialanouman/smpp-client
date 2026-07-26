@@ -38,5 +38,15 @@
   "notification": {
     "region": "Notifications",
     "dismiss": "Fermer la notification"
+  },
+  "error": {
+    "CONFIG_INVALID_LANGUAGE": "Langue non prise en charge.",
+    "CONFIG_INVALID_THEME": "Thème non pris en charge.",
+    "CONFIG_INVALID_LOG_LEVEL": "Niveau de journalisation inconnu.",
+    "CONFIG_INVALID_RETENTION": "Durée de rétention hors des bornes autorisées.",
+    "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
+    "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
+    "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
+    "unknown": "Une erreur est survenue."
   }
 }

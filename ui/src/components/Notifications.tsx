@@ -35,7 +35,14 @@ export function Notifications() {
           className="rounded-md border border-[var(--shinobi-border)] bg-[var(--shinobi-surface)] p-3 shadow-lg"
         >
           <div className="flex items-start justify-between gap-2">
-            <p className="text-sm">{message}</p>
+            {/* `message` is the backend's fixed English sentence, meant for
+                logs and bug reports — src-tauri/src/error.rs states it must
+                never be shown raw. The user reads the translation of `code`;
+                a transport failure has none, so it falls back to a generic
+                sentence rather than leaking a technical string. */}
+            <p className="text-sm">
+              {code === null ? t("error.unknown") : t(`error.${code}`, { defaultValue: message })}
+            </p>
             <button
               type="button"
               aria-label={t("notification.dismiss")}
@@ -45,9 +52,10 @@ export function Notifications() {
               ×
             </button>
           </div>
-          {/* No code on a transport failure: showing an empty line would be
-              worse than showing nothing. */}
-          {code !== null && <p className="mt-1 font-mono text-xs opacity-60">{code}</p>}
+          {/* The code and the raw message stay visible as the technical line:
+              that is what makes a bug report actionable, and it is the only
+              place the English sentence belongs. */}
+          <p className="mt-1 font-mono text-xs opacity-60">{code ?? message}</p>
         </div>
       ))}
     </div>
