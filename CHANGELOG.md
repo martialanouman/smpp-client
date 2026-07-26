@@ -140,6 +140,71 @@ majeur.
 - [ADR 0006](docs/adr/0006-version-minimale-de-rust.md) : MSRV portée à
   **1.88**, calculée depuis le graphe et vérifiée en CI.
 
+### Ajouté — jalon 005, session SMPP unique
+
+- **Machine à états de la spec §7.9** dont les arêtes sont un `Result` : une
+  transition que le diagramme ne dessine pas ne compile pas en silence, elle
+  échoue. `ERROR → CONNECTING` n'existe pas — la garantie de CA-005-03 est
+  structurelle et non confiée au superviseur.
+- **Acteurs Tokio** : le superviseur possède la moitié écriture du socket et
+  fait aussi writer, keep-alive et faucheur ; le lecteur, seule tâche qui
+  bloque vraiment, est la seule tâche engendrée par connexion. Toutes les
+  files sont **bornées**, aucune tâche n'est détachée, et `shutdown()` joint
+  ce qu'il a lancé.
+- **Bind TX / RX / TRX** avec choix explicite de `interface_version`
+  (0x34 / 0x50). Émettre sur une session RX est refusé **avant** l'émission,
+  par un type, et non par un `ESME_RINVBNDSTS` du SMSC.
+- **Corrélation `sequence_number` → réponse** : un numéro en vol n'est jamais
+  réattribué, et une entrée quitte la table à son échéance que quelqu'un
+  écoute encore ou non. Pas de `Drop` — un `Drop` ne peut pas `await` le
+  verrou dont il aurait besoin.
+- **Keep-alive `enquire_link`** à période configurable, et détection *effective*
+  de la session morte : deux réponses manquantes consécutives font transiter
+  vers `RECONNECT` alors que le socket TCP reste parfaitement ouvert.
+- **Reconnexion** à back-off exponentiel plafonné avec *equal jitter*
+  (`[base/2, base]`). Le full jitter disperse mieux mais détruit la
+  croissance. Un statut classé `Fatal` au jalon 003 — `ESME_RINVPASWD`,
+  `ESME_RINVSYSID` — n'ouvre **aucune** boucle : la classification produite
+  alors est ici réellement utilisée.
+- **Codec de session** propre à `smpp-session` plutôt que `CommandCodec` monté
+  tel quel : la frontière de trame est décidée depuis `command_length` et les
+  octets sont passés à `smpp_core::codec::decode`. Un PDU malformé devient un
+  *élément* `Err` et non une erreur de flux — `generic_nack`, journal, et le
+  PDU suivant se lit sur un tampon toujours aligné.
+- **Arrêt propre** : `unbind`, attente bornée de `unbind_resp`, fermeture ; à
+  la sortie de l'application aussi, sur `ExitRequested`.
+- **Sept commandes IPC** (`session_create`, `session_update`, `session_delete`,
+  `session_list`, `session_bind`, `session_unbind`, `session_status`) et
+  l'événement `sessions:state`. **Le DTO de profil n'a pas de champ mot de
+  passe** : le mot de passe n'arrive qu'avec `session_bind` et ne repart ni
+  vers la base ni vers le pont.
+- **Écran Sessions** : création et édition de profil, bind, unbind, état en
+  direct, et le motif d'un abandon définitif traduit depuis un code stable.
+- **Double de test** : un SMSC en mémoire sur `tokio::io::duplex`, avec son
+  propre codec, et sept scénarios de panne. Toute la recette tourne sur
+  l'horloge virtuelle de Tokio.
+
+### Ajouté — jalon 005, l'alt-charset (ADR 0009)
+
+- **`Gsm7BitCharset` tranche la dette laissée ouverte par l'ADR 0008** :
+  l'interprétation des octets GSM non packés. Défaut `Gsm0338` (`@` = 0x00) ;
+  `Latin1` (`@` = 0x40) pour les SMSC configurés à la Kannel. C'est un réglage
+  de session, persisté, exposé par l'IPC et réglable dans l'écran Sessions.
+- Sous `Latin1` l'alphabet est l'**intersection** GSM 03.38 ∩ ISO-8859-1 : la
+  table d'extension en sort, parce que le SMSC la développe en deux septets
+  alors qu'elle n'occupe qu'un octet ici, et le budget de segment se compte en
+  septets. Les capitales grecques en sortent faute de point de code.
+- `Latin1` + `Packed` est refusé à la construction du profil : `é` vaut 0xE9
+  et le packing jette le bit de poids fort.
+- Les tests sont écrits sur `@ £ $ € é` et les accents. Un test nommé épingle
+  le fait qu'un texte ASCII traverse les deux lectures à l'identique — c'est
+  le piège, et il devait rester visible dans la suite.
+- `Gsm7BitPacking` descend de `messaging` vers `smpp-core` pour y rejoindre
+  `Gsm7BitCharset` : le profil de session les porte et il vit sous
+  `messaging`. Ni l'un ni l'autre n'est `#[non_exhaustive]` — une troisième
+  convention de disposition doit casser la compilation partout où des octets
+  sont écrits.
+
 ### Ajouté — jalon 004, encodage et segmentation
 
 - **Alphabet GSM 03.38**, table de base et table d'extension, avec détection

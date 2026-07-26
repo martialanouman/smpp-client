@@ -19,17 +19,34 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { commands, events } from "./generated/bindings";
-import type { AppConfig, ConfigSetInput, ErrorDto, ErrorNotify } from "./generated/bindings";
+import type {
+  AppConfig,
+  ConfigSetInput,
+  ErrorDto,
+  ErrorNotify,
+  SessionBindInput,
+  SessionProfileDto,
+  SessionStatusDto,
+  SessionsState,
+} from "./generated/bindings";
 
 export type {
   AppConfig,
+  BindTypeDto,
   ConfigSetInput,
   ErrorCode,
   ErrorDto,
   ErrorNotify,
+  Gsm7CharsetDto,
+  Gsm7PackingDto,
+  InterfaceVersionDto,
   Language,
   LogLevel,
   RetentionDays,
+  SessionBindInput,
+  SessionProfileDto,
+  SessionStatusDto,
+  SessionsState,
   Theme,
 } from "./generated/bindings";
 
@@ -127,4 +144,55 @@ export function configSet(input: ConfigSetInput): Promise<IpcOutcome<AppConfig>>
  */
 export function onErrorNotify(handler: (payload: ErrorNotify) => void): Promise<UnlistenFn> {
   return events.errorNotify.listen((event) => handler(event.payload));
+}
+
+/** Lists every connection profile, oldest first. */
+export function sessionList(): Promise<IpcOutcome<SessionProfileDto[]>> {
+  return call(() => commands.sessionList());
+}
+
+/** Creates a connection profile. */
+export function sessionCreate(input: SessionProfileDto): Promise<IpcOutcome<SessionProfileDto>> {
+  return call(() => commands.sessionCreate(input));
+}
+
+/** Updates a connection profile. */
+export function sessionUpdate(input: SessionProfileDto): Promise<IpcOutcome<SessionProfileDto>> {
+  return call(() => commands.sessionUpdate(input));
+}
+
+/** Deletes a connection profile, closing its session first. */
+export function sessionDelete(sessionId: string): Promise<IpcOutcome<boolean>> {
+  return call(() => commands.sessionDelete(sessionId));
+}
+
+/**
+ * Opens a session.
+ *
+ * The password travels on this call and on no other. It is not held in the
+ * store, not written to the profile, and never comes back: the backend turns
+ * it into an opaque value the moment it arrives.
+ */
+export function sessionBind(input: SessionBindInput): Promise<IpcOutcome<SessionStatusDto>> {
+  return call(() => commands.sessionBind(input));
+}
+
+/** Closes a session cleanly. */
+export function sessionUnbind(sessionId: string): Promise<IpcOutcome<boolean>> {
+  return call(() => commands.sessionUnbind(sessionId));
+}
+
+/** Reads the live state of one session. */
+export function sessionStatus(sessionId: string): Promise<IpcOutcome<SessionStatusDto>> {
+  return call(() => commands.sessionStatus(sessionId));
+}
+
+/**
+ * Subscribes to `sessions:state`.
+ *
+ * Returns the unsubscribe function; a component that forgets to call it on
+ * unmount leaks a listener that keeps firing on a dead reducer.
+ */
+export function onSessionsState(handler: (payload: SessionsState) => void): Promise<UnlistenFn> {
+  return events.sessionsState.listen((event) => handler(event.payload));
 }
