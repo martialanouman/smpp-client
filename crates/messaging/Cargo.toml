@@ -65,5 +65,12 @@ tokio = { workspace = true, features = [
 name = "segmentation"
 harness = false
 
+# CA-006-10 asks for the enqueue latency to stay under 1 ms at p99. The bench
+# measures the CPU half of that path — validate, segment, build the PDUs — and
+# says in its header what it deliberately leaves out.
+[[bench]]
+name = "enqueue"
+harness = false
+
 [lints]
 workspace = true

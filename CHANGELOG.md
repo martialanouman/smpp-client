@@ -9,6 +9,92 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 006, envoi simple de bout en bout (M1)
+
+- **Orchestrateur d'envoi unitaire** (`messaging::sender`) : valide → encode →
+  segmente → construit → **persiste** → émet → corrèle → enregistre. L'ordre
+  est porteur dans les deux sens : tout ce qui peut être refusé l'est **avant**
+  l'insertion, donc rien n'est persisté qui ne pouvait pas partir ; et rien ne
+  quitte la socket avant que l'insertion soit validée, ce qui rend un arrêt
+  brutal reprenable au jalon 010 sans duplication.
+- **Validation et normalisation des adresses** (`messaging::addressing`) :
+  destinataire E.164, expéditeur numérique ou alphanumérique ≤ 11 caractères
+  imposant `source_addr_ton = 5`, signalé dans l'interface plutôt que découvert
+  dans un rejet.
+- **Construction complète du `submit_sm`** (`messaging::submit`) : les seize
+  champs de la spec §7.3, tous réglables depuis l'interface, plus les TLV
+  personnalisés. `registered_delivery = 1` par défaut (spec §23.3).
+- **Machine d'états du message** (`messaging::message`) : `QUEUED → SENT →
+  ACCEPTED | FAILED`, rejeu d'une transition autorisé, retour en arrière et
+  sortie d'un état terminal refusés.
+- **Commandes IPC `message_send` et `message_preview`**, événement
+  `message:update`. Le compteur de l'éditeur passe par le backend et appelle la
+  **même** fonction que le segmenteur : compteur et segmentation coïncident par
+  construction, pas par coïncidence.
+- **Écran Envoi › Simple** : sélecteurs TON/NPI/DCS documentés (l'octet est
+  affiché à côté du libellé), compteur en direct, éditeur de TLV, et le
+  `command_status` du SMSC affiché tel quel — valeur, symbole et libellé
+  (ENF-UTI-02).
+- **Micro-benchmark d'enfilement** (`cargo bench -p messaging --bench
+  enqueue`) : 0,8 µs pour un segment, 10,5 µs pour sept segments avec TLV, très
+  au-dessous du plafond d'une milliseconde d'ENF-PERF-02. Ce que la mesure
+  exclut est écrit dans son en-tête.
+
+#### Sémantique d'un message segmenté en échec partiel
+
+Deux segments acceptés et un rejeté font un message **`FAILED`**, et les
+segments suivants ne sont **pas** émis.
+
+Le motif est ce que voit le destinataire : un combiné ne réassemble un message
+concaténé qu'une fois toutes ses parties reçues, et n'affiche rien tant qu'il en
+manque une. Le message écrit par l'opérateur n'a donc pas été délivré, et le
+compter comme accepté gonflerait toutes les statistiques du jalon 014. Émettre
+la suite d'un message dont le milieu a été refusé produit des parties que le
+combiné ne pourra jamais assembler, et consomme du quota pour cela.
+
+Un état `PARTIAL` a été envisagé et écarté : `messages.state` porte une
+contrainte `CHECK` listant les six états de la spec §14.3, un septième serait
+une migration et une modification de tout écran qui groupe par état — pour une
+distinction que l'opérateur lit déjà, segment par segment, dans le résultat.
+
+### Corrigé — jalon 006
+
+- **`esm_class` valait `0x08` sur tout message ordinaire.**
+  `EsmClass::default()` de rusmpp n'est pas nul : son champ `ansi41_specific` a
+  pour défaut « short message contains delivery acknowledgement ». Chaque
+  `submit_sm` s'annonçait donc comme un accusé ANSI-41 plutôt que comme un
+  message. Le défaut a traversé le jalon 004 parce que ses tests s'écrivaient
+  « le bit UDHI est posé, donc l'octet n'est pas nul » — vrai, mais pour la
+  mauvaise raison, l'octet n'étant jamais nul. Le mode `sar`, où il doit valoir
+  exactement zéro, l'a fait sortir. Trois tests assertent désormais l'octet
+  exact.
+
+### Modifié — jalon 006
+
+- **Le port `MessageRepository` est rapatrié dans `messaging`**, échéance que
+  l'ADR 0007 s'était fixée. `persistence` l'implémente ; la moitié
+  pagination/streaming devient `persistence::ports::MessageJournal` et attend
+  son consommateur au jalon 013.
+- **`messaging` ne dépend plus que de `smpp-core`.** Le déplacement fermait la
+  boucle `messaging → smpp-session → persistence → messaging` ; l'arête vers
+  `smpp-session` est remplacée par le port `SmscSession`, que `smpp-session`
+  implémente. L'orchestrateur se teste sans base et sans socket.
+- `Timestamp` et `CampaignId` descendent dans `smpp-core` — les deux crates les
+  utilisent maintenant. `persistence` les ré-exporte, aucun site d'appel n'a
+  changé.
+- Le double de SMSC en mémoire du jalon 005 passe de `tests/support/` à
+  `smpp_session::testing`, derrière la feature `test-support`, et gagne le
+  scénario des réponses `submit_sm`. `messaging` s'en sert au lieu d'en écrire
+  un second.
+
+### Décisions — jalon 006
+
+- [ADR 0010](docs/adr/0010-inversion-des-ports-du-chemin-d-envoi.md) : inverser
+  **les deux** ports du chemin d'envoi plutôt qu'un seul. L'arête remontante
+  n'est pas un coût que l'inversion fait payer par accident, c'est ce qu'est
+  l'inversion ; et n'en inverser qu'un fermait un cycle. L'ADR porte aussi le
+  tableau des trois ports restants avec leur échéance.
+
 ### Ajouté — jalon 001, socle applicatif
 
 - **Contrat IPC typé** : DTO définis une seule fois en Rust, TypeScript généré
