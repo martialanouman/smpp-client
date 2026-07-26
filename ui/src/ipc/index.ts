@@ -24,6 +24,11 @@ import type {
   ConfigSetInput,
   ErrorDto,
   ErrorNotify,
+  MessagePreviewDto,
+  MessagePreviewInput,
+  MessageSendInput,
+  MessageSendResultDto,
+  MessageUpdate,
   SessionBindInput,
   SessionProfileDto,
   SessionStatusDto,
@@ -34,6 +39,7 @@ export type {
   AppConfig,
   BindTypeDto,
   ConfigSetInput,
+  EncodingDto,
   ErrorCode,
   ErrorDto,
   ErrorNotify,
@@ -42,12 +48,23 @@ export type {
   InterfaceVersionDto,
   Language,
   LogLevel,
+  MessagePreviewDto,
+  MessagePreviewInput,
+  MessageSendInput,
+  MessageSendResultDto,
+  MessageUpdate,
+  NpiDto,
+  RegisteredDeliveryDto,
   RetentionDays,
+  SegmentOutcomeDto,
+  SegmentationModeDto,
   SessionBindInput,
   SessionProfileDto,
   SessionStatusDto,
   SessionsState,
   Theme,
+  TlvDto,
+  TonDto,
 } from "./generated/bindings";
 
 /** Why a call produced no value. */
@@ -195,4 +212,39 @@ export function sessionStatus(sessionId: string): Promise<IpcOutcome<SessionStat
  */
 export function onSessionsState(handler: (payload: SessionsState) => void): Promise<UnlistenFn> {
   return events.sessionsState.listen((event) => handler(event.payload));
+}
+
+/**
+ * Sends one message (EF-MSG-01).
+ *
+ * A message the message centre **rejected** comes back as a successful
+ * outcome whose `state` is `FAILED`, carrying the raw `command_status` and its
+ * label: ENF-UTI-02 requires the operator to read the centre's own answer, and
+ * turning it into an `IpcFailure` would replace it with one of ours.
+ */
+export function messageSend(input: MessageSendInput): Promise<IpcOutcome<MessageSendResultDto>> {
+  return call(() => commands.messageSend(input));
+}
+
+/**
+ * Recomputes the editor's counter.
+ *
+ * Called on every keystroke, and deliberately a backend call: the encoding
+ * table, the escape characters and the segment budget are protocol rules, and
+ * CLAUDE.md §3 keeps every one of them out of the WebView. A copy here would
+ * be a second implementation that could disagree with the segments actually
+ * sent — which is precisely what CA-006-09 forbids.
+ */
+export function messagePreview(input: MessagePreviewInput): Promise<IpcOutcome<MessagePreviewDto>> {
+  return call(() => commands.messagePreview(input));
+}
+
+/**
+ * Subscribes to `message:update`.
+ *
+ * Returns the unsubscribe function; a component that forgets to call it on
+ * unmount leaks a listener that keeps firing on a dead reducer.
+ */
+export function onMessageUpdate(handler: (payload: MessageUpdate) => void): Promise<UnlistenFn> {
+  return events.messageUpdate.listen((event) => handler(event.payload));
 }

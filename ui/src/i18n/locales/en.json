@@ -47,6 +47,13 @@
     "CONFIG_MALFORMED": "The preferences file could not be parsed.",
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
+    "MESSAGE_ENCODING": "The text cannot be written in the chosen encoding.",
+    "MESSAGE_INVALID_DESTINATION": "Invalid recipient. Enter a number in international format.",
+    "MESSAGE_INVALID_FIELD": "A submit_sm field does not fit its protocol slot.",
+    "MESSAGE_INVALID_SOURCE": "Invalid sender address.",
+    "MESSAGE_INVALID_TLV": "An optional parameter is not valid hexadecimal.",
+    "MESSAGE_SESSION_NOT_BOUND": "No open session carries that identifier.",
+    "MESSAGE_STORAGE": "The message journal refused the operation; nothing was sent.",
     "SESSION_BIND_REJECTED": "The message centre refused the bind.",
     "SESSION_BUSY": "Another session is already open. Close it before opening a second one.",
     "SESSION_CLOSED": "The session is not available.",
@@ -112,6 +119,113 @@
       "maxBackoffS": "Max back-off (s)",
       "reconnectEnabled": "Automatic reconnection",
       "jitter": "Jitter on the back-off"
+    }
+  },
+  "send": {
+    "intro": "Send one message to a message centre and read its answer. The advanced fields follow the SMPP §7.3 table.",
+    "session": "Session",
+    "sessionPlaceholder": "Choose an open session",
+    "noBoundSession": "No session is open. Connect one from the Sessions screen.",
+    "destination": "Recipient",
+    "destinationHint": "International format, country code included.",
+    "destTon": "Type of number (recipient)",
+    "destNpi": "Numbering plan (recipient)",
+    "source": "Sender",
+    "sourceHint": "Leave empty to let the message centre choose.",
+    "sourceTon": "Type of number (sender)",
+    "sourceNpi": "Numbering plan (sender)",
+    "alphanumericWarning": "An alphanumeric sender forces source_addr_ton = 5 and is not accepted by every operator.",
+    "text": "Message",
+    "encodingLabel": "Encoding (DCS)",
+    "mode": "Concatenation",
+    "registeredDelivery": "Delivery receipt",
+    "advanced": "Advanced fields (spec §7.3)",
+    "serviceType": "service_type",
+    "serviceTypeHint": "Five characters at most; empty for the centre's default.",
+    "protocolId": "protocol_id",
+    "priorityFlag": "priority_flag",
+    "priorityFlagHint": "0 to 3.",
+    "scheduleDeliveryTime": "schedule_delivery_time",
+    "validityPeriod": "validity_period",
+    "timeHint": "Empty, or exactly sixteen characters.",
+    "smDefaultMsgId": "sm_default_msg_id",
+    "replaceIfPresent": "Replace an existing message (replace_if_present_flag)",
+    "submit": "Send",
+    "sending": "Sending…",
+    "counter": {
+      "pending": "Counter being computed…",
+      "encoding": "Encoding:",
+      "characters": "{{count}} character(s)",
+      "units": "{{used}} unit(s) used, {{remaining}} left in the segment",
+      "segments": "{{count}} segment(s)"
+    },
+    "encoding": {
+      "automatic": "Automatic",
+      "gsm7Bit": "GSM 7-bit",
+      "latin1": "ISO-8859-1",
+      "ucs2": "UCS2"
+    },
+    "modes": {
+      "udh": "UDH header (portable)",
+      "sar": "sar_* TLVs",
+      "messagePayload": "message_payload (no splitting)"
+    },
+    "receipts": {
+      "onAnyOutcome": "On final outcome, success or failure (1)",
+      "onFailure": "On failure only (2)",
+      "none": "None (0)"
+    },
+    "ton": {
+      "unknown": "Unknown (0)",
+      "international": "International, E.164 (1)",
+      "national": "National (2)",
+      "networkSpecific": "Network specific (3)",
+      "subscriberNumber": "Subscriber number (4)",
+      "alphanumeric": "Alphanumeric (5)",
+      "abbreviated": "Abbreviated (6)"
+    },
+    "npi": {
+      "unknown": "Unknown (0)",
+      "isdn": "ISDN / E.164 (1)",
+      "data": "Data, X.121 (3)",
+      "telex": "Telex, F.69 (4)",
+      "landMobile": "Land mobile, E.212 (6)",
+      "national": "National (8)",
+      "private": "Private (9)"
+    },
+    "tlv": {
+      "legend": "Optional parameters (TLV)",
+      "empty": "No optional parameter.",
+      "tag": "Tag (hex)",
+      "value": "Value (hex)",
+      "add": "Add a TLV",
+      "remove": "Remove"
+    },
+    "state": {
+      "QUEUED": "Queued",
+      "SENT": "Sent",
+      "ACCEPTED": "Accepted",
+      "DELIVERED": "Delivered",
+      "FAILED": "Failed",
+      "EXPIRED": "Expired"
+    },
+    "outcomes": {
+      "answered": "Answered",
+      "unanswered": "No answer",
+      "notAttempted": "Not sent"
+    },
+    "result": {
+      "title": "Result",
+      "segments": "{{count}} segment(s)",
+      "clientMessageId": "Local identifier",
+      "smscMessageId": "Message centre identifier",
+      "status": "command_status",
+      "noAnswer": "No answer from the message centre.",
+      "unknownStatus": "Unknown code",
+      "vendorSpecific": "This code is in the operator's reserved range; only their documentation explains it.",
+      "retryable": "The same message may be sent again.",
+      "segment": "Segment",
+      "outcome": "Outcome"
     }
   }
 }
