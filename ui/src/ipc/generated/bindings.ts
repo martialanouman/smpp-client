@@ -36,11 +36,90 @@ export const commands = {
 	 *  - `CONFIG_UNWRITABLE` if the preferences file cannot be written.
 	 */
 	configSet: (input: ConfigSetInput) => typedError<AppConfig, ErrorDto>(__TAURI_INVOKE("config_set", { input })),
+	/**
+	 *  Creates or replaces a connection profile (EF-CNX-01).
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `SESSION_INVALID_PROFILE` if a field fails validation;
+	 *  * `SESSION_STORAGE` if the profile cannot be written.
+	 */
+	sessionCreate: (input: SessionProfileDto) => typedError<SessionProfileDto, ErrorDto>(__TAURI_INVOKE("session_create", { input })),
+	/**
+	 *  Updates a connection profile.
+	 * 
+	 *  The same upsert as [`session_create`]: the caller is a form, it always
+	 *  holds the whole profile, and the distinction between "new" and "edited" is
+	 *  one the interface has already made. Two commands rather than one because
+	 *  spec §15.2 names two, and because the interface's intent is worth recording
+	 *  in the log.
+	 * 
+	 *  # Errors
+	 * 
+	 *  Same as [`session_create`], plus `SESSION_INVALID_ID` when the identifier
+	 *  is missing — an update must say what it is updating.
+	 */
+	sessionUpdate: (input: SessionProfileDto) => typedError<SessionProfileDto, ErrorDto>(__TAURI_INVOKE("session_update", { input })),
+	/**
+	 *  Deletes a connection profile, closing its session first.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `SESSION_STORAGE` if the delete fails.
+	 */
+	sessionDelete: (sessionId: string) => typedError<boolean, ErrorDto>(__TAURI_INVOKE("session_delete", { sessionId })),
+	/**
+	 *  Lists every connection profile, oldest first.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `SESSION_STORAGE` if the read fails, `SESSION_INVALID_PROFILE` if a stored
+	 *  row no longer validates.
+	 */
+	sessionList: () => typedError<SessionProfileDto[], ErrorDto>(__TAURI_INVOKE("session_list")),
+	/**
+	 *  Opens a session: connect, then bind (EF-CNX-01, EF-CNX-02, EF-CNX-04).
+	 * 
+	 *  Returns as soon as the session's tasks are running, with the state at that
+	 *  instant — usually `CONNECTING`. The interface follows the rest through
+	 *  `sessions:state`, which is what CA-005-01 measures.
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `SESSION_INVALID_ID` if the identifier is malformed;
+	 *  * `SESSION_NOT_FOUND` if no profile carries it;
+	 *  * `SESSION_INVALID_PROFILE` if the password does not fit its protocol
+	 *    field;
+	 *  * `SESSION_BUSY` if another session is already live (milestone 011);
+	 *  * `SESSION_STORAGE` if the profile cannot be read.
+	 */
+	sessionBind: (input: SessionBindInput) => typedError<SessionStatusDto, ErrorDto>(__TAURI_INVOKE("session_bind", { input })),
+	/**
+	 *  Closes a session cleanly: `unbind`, then the socket (CA-005-08).
+	 * 
+	 *  # Errors
+	 * 
+	 *  `SESSION_INVALID_ID`, or `SESSION_CLOSED` if the session's tasks ended
+	 *  abnormally.
+	 */
+	sessionUnbind: (sessionId: string) => typedError<boolean, ErrorDto>(__TAURI_INVOKE("session_unbind", { sessionId })),
+	/**
+	 *  The live state of one session.
+	 * 
+	 *  A profile that is not live answers `CLOSED` rather than an error: "not
+	 *  bound" is a state, not a failure.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `SESSION_INVALID_ID` if the identifier is malformed.
+	 */
+	sessionStatus: (sessionId: string) => typedError<SessionStatusDto, ErrorDto>(__TAURI_INVOKE("session_status", { sessionId })),
 };
 
 /** Events */
 export const events = {
 	errorNotify: makeEvent<ErrorNotify>("error:notify"),
+	sessionsState: makeEvent<SessionsState>("sessions:state"),
 };
 
 /* Types */
@@ -60,6 +139,15 @@ export type AppConfig = {
 	/**  Retention of the rolling log files, in days. */
 	retentionDays: RetentionDays,
 };
+
+/**  Which bind operation opens a session (EF-CNX-02). */
+export type BindTypeDto = 
+/**  Sends only. */
+"transmitter" | 
+/**  Receives only. */
+"receiver" | 
+/**  Both, on one connection. */
+"transceiver";
 
 /**
  *  Untrusted input of the `config_set` command.
@@ -96,7 +184,23 @@ export type ErrorCode =
 /**  The preferences file could not be written. */
 "CONFIG_UNWRITABLE" | 
 /**  The preferences file is not valid JSON. */
-"CONFIG_MALFORMED";
+"CONFIG_MALFORMED" | 
+/**  A session profile field failed validation. */
+"SESSION_INVALID_PROFILE" | 
+/**  The `session_id` is not a well-formed identifier. */
+"SESSION_INVALID_ID" | 
+/**  No profile carries that identifier. */
+"SESSION_NOT_FOUND" | 
+/**  Another session is already live (milestone 011 lifts this). */
+"SESSION_BUSY" | 
+/**  The message centre refused the bind. */
+"SESSION_BIND_REJECTED" | 
+/**  The socket failed. */
+"SESSION_TRANSPORT" | 
+/**  The session is gone, or its tasks ended abnormally. */
+"SESSION_CLOSED" | 
+/**  The database could not be read or written. */
+"SESSION_STORAGE";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -121,6 +225,27 @@ export type ErrorNotify = {
 	/**  Short English sentence, for the logs. */
 	message: string,
 };
+
+/**  What those octets mean (ADR 0009). */
+export type Gsm7CharsetDto = 
+/**  GSM 03.38 alphabet positions. The default. */
+"gsm0338" | 
+/**  ISO-8859-1 code points; the message centre transcodes. */
+"latin1";
+
+/**  How GSM 7-bit septets sit in `short_message` (ADR 0008). */
+export type Gsm7PackingDto = 
+/**  One septet per octet. The default and the common case. */
+"unpacked" | 
+/**  Eight septets in seven octets. */
+"packed";
+
+/**  The protocol version announced at bind time (EF-CNX-04). */
+export type InterfaceVersionDto = 
+/**  SMPP v3.4, `interface_version` `0x34`. */
+"v3.4" | 
+/**  SMPP v5.0, `interface_version` `0x50`. */
+"v5.0";
 
 /**  Interface language. */
 export type Language = 
@@ -149,6 +274,100 @@ export type LogLevel =
  *  not a check every caller has to remember.
  */
 export type RetentionDays = number;
+
+/**  Input of [`session_bind`]. */
+export type SessionBindInput = {
+	/**  Which profile to bind. */
+	sessionId: string,
+	/**
+	 *  The SMSC password.
+	 * 
+	 *  Travels once, on this call, and is turned into a
+	 *  `smpp_session::profile::Password` immediately. It is not persisted and
+	 *  never comes back across the bridge.
+	 */
+	password: string,
+};
+
+/**
+ *  A connection profile as the interface sees it (spec §8.2).
+ * 
+ *  **No password.** See the module header.
+ */
+export type SessionProfileDto = {
+	/**  Primary key. Absent when the interface is creating a profile. */
+	sessionId: string | null,
+	/**  Name shown in the interface. */
+	name: string,
+	/**  SMSC hostname or address. */
+	host: string,
+	/**  SMSC port. */
+	port: number,
+	/**  Which bind operation opens the session. */
+	bindType: BindTypeDto,
+	/**  Protocol version requested at bind time. */
+	interfaceVersion: InterfaceVersionDto,
+	/**  ESME identity presented to the SMSC. */
+	systemId: string,
+	/**  `system_type` of the bind PDU; empty when unused. */
+	systemType: string,
+	/**  Unacknowledged PDUs allowed in flight (spec §9.2). */
+	windowSize: number,
+	/**  Target throughput, in messages per second (spec §9.5). */
+	throughputTps: number,
+	/**  `enquire_link` period, in seconds. Zero disables the keep-alive. */
+	enquireLinkS: number,
+	/**  How long a response may take before its request is abandoned. */
+	responseTimeoutS: number,
+	/**  Whether the session reconnects on its own. */
+	reconnectEnabled: boolean,
+	/**  Shortest back-off, in seconds. */
+	minBackoffS: number,
+	/**  Longest back-off, in seconds. */
+	maxBackoffS: number,
+	/**  Whether the back-off is spread out. */
+	jitter: boolean,
+	/**  How GSM 7-bit septets sit in `short_message`. */
+	gsm7Packing: Gsm7PackingDto,
+	/**  What those octets mean. */
+	gsm7Charset: Gsm7CharsetDto,
+	/**  Parallel binds for this logical session (spec §8.5, milestone 011). */
+	bindCount: number,
+};
+
+/**  The live state of one session (spec §7.9), for the banner and the screen. */
+export type SessionStatusDto = {
+	/**  Which profile this is about. */
+	sessionId: string,
+	/**
+	 *  `CLOSED`, `CONNECTING`, `BINDING`, `BOUND`, `UNBOUND`, `RECONNECT`,
+	 *  `ERROR` — the names of spec §7.9, which the interface translates.
+	 */
+	state: string,
+	/**  The bind type in force, when the session is bound. */
+	bindType: BindTypeDto | null,
+	/**  The last failure, rendered. Never carries a credential. */
+	lastError: string | null,
+	/**
+	 *  Why the session stopped for good: `FATAL_STATUS`,
+	 *  `RECONNECT_DISABLED`. A code, so the interface translates it.
+	 */
+	giveUp: string | null,
+	/**  Requests waiting for a response (spec §18.1). */
+	inFlight: number,
+};
+
+/**
+ *  Payload of `sessions:state` — every live session and where it stands.
+ * 
+ *  The whole list rather than one session's delta, which is what makes the
+ *  throttle above harmless: an interface that missed an emission is not out of
+ *  sync, it is one emission behind.
+ */
+export type SessionsState = {
+	/**  One entry per live session (spec §15.3). */
+	sessions: SessionStatusDto[],
+};
 
 /**  Interface colour scheme. */
 export type Theme = 

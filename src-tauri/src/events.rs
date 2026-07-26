@@ -61,6 +61,31 @@ impl From<&ErrorDto> for ErrorNotify {
     }
 }
 
+/// Minimum interval between two `sessions:state` emissions.
+///
+/// A session that flaps — connect, fail, back off, connect — publishes a state
+/// change every few hundred milliseconds, and a reconnection storm across
+/// several sessions (milestone 011) multiplies that. Ten per second is well
+/// past what a banner needs and well under what the bridge minds.
+///
+/// The throttle drops *intermediate* states, never the latest: the payload
+/// carries the whole picture rather than a delta, so a suppressed emission
+/// costs nothing but a frame of animation.
+const SESSIONS_STATE_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Payload of `sessions:state` — every live session and where it stands.
+///
+/// The whole list rather than one session's delta, which is what makes the
+/// throttle above harmless: an interface that missed an emission is not out of
+/// sync, it is one emission behind.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "sessions:state")]
+pub(crate) struct SessionsState {
+    /// One entry per live session (spec §15.3).
+    pub(crate) sessions: Vec<crate::commands::session::SessionStatusDto>,
+}
+
 /// Rate limiter for a single event channel.
 ///
 /// The clock is **injected** ([`Throttle::admit`] takes the instant): the
@@ -112,12 +137,15 @@ impl Throttle {
 pub(crate) struct EventEmitter {
     /// Rate limit of the `error:notify` channel.
     error_notify: Throttle,
+    /// Rate limit of the `sessions:state` channel.
+    sessions_state: Throttle,
 }
 
 impl Default for EventEmitter {
     fn default() -> Self {
         Self {
             error_notify: Throttle::new(ERROR_NOTIFY_INTERVAL),
+            sessions_state: Throttle::new(SESSIONS_STATE_INTERVAL),
         }
     }
 }
@@ -135,6 +163,27 @@ impl EventEmitter {
 
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit error:notify");
+        }
+    }
+
+    /// Emits `sessions:state`, unless the channel is saturated.
+    ///
+    /// `force` bypasses the throttle. Used for the emission that follows a
+    /// command — the interface has just asked for something and must see the
+    /// answer, even if a reconnection storm has been filling the channel.
+    pub(crate) async fn emit_sessions<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        payload: &SessionsState,
+        force: bool,
+    ) {
+        if !force && !self.sessions_state.admit(Instant::now()).await {
+            tracing::trace!("sessions:state suppressed by the throttle");
+            return;
+        }
+
+        if let Err(error) = payload.clone().emit(app) {
+            tracing::warn!(error = %error, "failed to emit sessions:state");
         }
     }
 }
