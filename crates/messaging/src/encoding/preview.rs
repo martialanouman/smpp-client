@@ -251,6 +251,17 @@ pub(crate) fn plan(
     text: &str,
     options: &SegmentationOptions,
 ) -> Result<SegmentPlan, EncodingError> {
+    // ADR 0009 §7, checked at the one point both `segment` and `preview` go
+    // through. Leaving it to the session profile alone left a hole: nothing
+    // stops a `SegmentationOptions` being built by hand, and `pack` would
+    // then quietly mask the high bit off every accented character.
+    if !options.gsm_charset.is_compatible_with(options.gsm_packing) {
+        return Err(EncodingError::IncompatibleGsm7Layout {
+            charset: options.gsm_charset.code(),
+            packing: options.gsm_packing.code(),
+        });
+    }
+
     let encoding = super::resolve_in(options.encoding, text, options.gsm_charset)?;
     let mode = options.mode;
     let (single, concatenated) = capacities(encoding, options);

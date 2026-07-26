@@ -81,7 +81,8 @@
     },
     "giveUp": {
       "FATAL_STATUS": "Le SMSC a refusé le bind définitivement. Vérifiez les identifiants : aucune nouvelle tentative ne sera faite.",
-      "RECONNECT_DISABLED": "La reconnexion automatique est désactivée sur ce profil."
+      "RECONNECT_DISABLED": "La reconnexion automatique est désactivée sur ce profil.",
+      "SESSION_ENDED": "La session s'est terminée et ne redémarrera pas d'elle-même."
     },
     "bindType": {
       "transmitter": "Émission (TX)",

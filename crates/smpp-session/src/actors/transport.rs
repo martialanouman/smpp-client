@@ -29,6 +29,20 @@ pub trait Transport: Send + Sync + 'static {
     fn connect(&self, address: &str) -> impl Future<Output = std::io::Result<Self::Stream>> + Send;
 }
 
+/// How long a TCP connection may take to establish.
+///
+/// The operating system's own timeout is 75 to 130 seconds depending on the
+/// platform, and it only applies when the SYN goes unanswered — a host behind
+/// a firewall that drops packets rather than refusing them. Two minutes with
+/// the interface stuck on `CONNECTING`, the back-off never engaging and the
+/// reconnection policy never consulted, is not a failure mode worth inheriting
+/// from the kernel.
+///
+/// Ten seconds is long for a TCP handshake to a message centre one is expected
+/// to hold a session with, and short enough that the operator sees the
+/// reconnection start.
+pub const CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
+
 /// A plain TCP connection.
 ///
 /// No TLS: milestone 015 owns that, and step-005 §2 puts it out of scope. The
@@ -41,7 +55,14 @@ impl Transport for TcpTransport {
     type Stream = TcpStream;
 
     async fn connect(&self, address: &str) -> std::io::Result<TcpStream> {
-        let stream = TcpStream::connect(address).await?;
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the message centre did not answer the TCP handshake",
+                )
+            })??;
 
         // Nagle batches small writes, which is exactly wrong here: an SMPP PDU
         // is small and latency-sensitive, and the round-trip time of a

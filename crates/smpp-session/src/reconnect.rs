@@ -51,10 +51,21 @@ pub enum ReconnectDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GiveUpReason {
-    /// The SMSC refused in a way that repeating cannot fix.
+    /// The SMSC refused in a way that repeating cannot fix — a wrong password,
+    /// an unknown `system_id`.
+    ///
+    /// The interface tells the operator to check the credentials, so this must
+    /// mean *the message centre said no* and nothing else.
     FatalStatus,
     /// The profile has reconnection disabled.
     Disabled,
+    /// The session ended for a reason that is not a refusal by the SMSC.
+    ///
+    /// A closed handle, a cancelled request, an outgoing queue that went away.
+    /// These are not retryable either, but they are ours, not the message
+    /// centre's — reporting them as [`Self::FatalStatus`] told the operator to
+    /// go and check credentials that were never in question.
+    SessionEnded,
 }
 
 impl GiveUpReason {
@@ -64,6 +75,7 @@ impl GiveUpReason {
         match self {
             Self::FatalStatus => "FATAL_STATUS",
             Self::Disabled => "RECONNECT_DISABLED",
+            Self::SessionEnded => "SESSION_ENDED",
         }
     }
 }
@@ -229,7 +241,18 @@ impl ReconnectPolicy {
         rng: &mut R,
     ) -> ReconnectDecision {
         if !error.is_retryable() {
-            return ReconnectDecision::GiveUp(GiveUpReason::FatalStatus);
+            // Two different things end a session for good, and telling the
+            // operator them apart is the whole value of the code: "the message
+            // centre refused your credentials" and "the session object is
+            // gone" call for very different reactions, and the interface used
+            // to print the first for both.
+            let reason = if matches!(error, SessionError::BindRejected { .. }) {
+                GiveUpReason::FatalStatus
+            } else {
+                GiveUpReason::SessionEnded
+            };
+
+            return ReconnectDecision::GiveUp(reason);
         }
 
         if !self.enabled {
@@ -453,6 +476,37 @@ mod tests {
     fn the_give_up_reasons_carry_a_stable_code() {
         assert_eq!(GiveUpReason::FatalStatus.code(), "FATAL_STATUS");
         assert_eq!(GiveUpReason::Disabled.code(), "RECONNECT_DISABLED");
+        assert_eq!(GiveUpReason::SessionEnded.code(), "SESSION_ENDED");
+    }
+
+    /// A session that ended on our side is not a message centre saying no.
+    ///
+    /// Both are unretryable, and both used to report `FATAL_STATUS` — so the
+    /// interface told the operator to check credentials that had never been
+    /// questioned.
+    #[test]
+    fn a_session_that_simply_ended_is_not_reported_as_a_refused_bind() {
+        let policy = ReconnectPolicy::default();
+        let mut rng = seeded();
+
+        for error in [
+            SessionError::Closed,
+            SessionError::Cancelled,
+            SessionError::NotBound { state: "CLOSED" },
+            SessionError::SequenceSpaceExhausted { in_flight: 7 },
+        ] {
+            assert_eq!(
+                policy.decide(&error, 1, &mut rng),
+                ReconnectDecision::GiveUp(GiveUpReason::SessionEnded),
+                "{error} is not a refusal by the message centre"
+            );
+        }
+
+        // And a real refusal still reports itself as one.
+        assert_eq!(
+            policy.decide(&fatal_bind(), 1, &mut rng),
+            ReconnectDecision::GiveUp(GiveUpReason::FatalStatus)
+        );
     }
 
     #[test]

@@ -81,7 +81,8 @@
     },
     "giveUp": {
       "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
-      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile."
+      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
+      "SESSION_ENDED": "The session ended and will not restart on its own."
     },
     "bindType": {
       "transmitter": "Transmit only (TX)",

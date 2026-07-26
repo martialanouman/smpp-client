@@ -325,6 +325,37 @@ impl SessionStatusDto {
     }
 }
 
+/// A string that must never be formatted.
+///
+/// Transparent on the wire — the generated TypeScript still sees a plain
+/// `string` — and opaque in Rust: its `Debug` shows nothing, so a future
+/// `tracing::debug!(?input)` on [`SessionBindInput`] cannot put an SMSC
+/// password in a log file. A bare `String` field would have, and nothing in
+/// the type system would have objected.
+///
+/// The same reasoning as `smpp_session::profile::Password`, applied one layer
+/// up: this is the shape the credential has for the few microseconds between
+/// crossing the bridge and becoming a `Password`.
+#[derive(Clone, Serialize, Deserialize, Type)]
+#[serde(transparent)]
+pub(crate) struct Secret(String);
+
+impl Secret {
+    /// The credential in clear.
+    ///
+    /// One call site, in [`session_bind`], where it becomes a `Password`.
+    fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for Secret {
+    /// Shows nothing — not the value, and not its length, which is a hint.
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
 /// Input of [`session_bind`].
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -336,7 +367,7 @@ pub(crate) struct SessionBindInput {
     /// Travels once, on this call, and is turned into a
     /// `smpp_session::profile::Password` immediately. It is not persisted and
     /// never comes back across the bridge.
-    pub(crate) password: String,
+    pub(crate) password: Secret,
 }
 
 /// Creates or replaces a connection profile (EF-CNX-01).
@@ -484,7 +515,8 @@ pub(crate) async fn session_bind(
         .ok_or_else(ErrorDto::session_not_found)?;
 
     let profile = SessionProfile::from_record(&record).map_err(|error| ErrorDto::from(&error))?;
-    let password = Password::parse(&input.password).map_err(|error| ErrorDto::from(&error))?;
+    let password =
+        Password::parse(input.password.expose()).map_err(|error| ErrorDto::from(&error))?;
 
     let handle = state.sessions().bind(&app, profile, password).await?;
     let status = SessionStatusDto::of(session_id, &handle).await;
@@ -611,6 +643,36 @@ mod tests {
             },
             a_dto()
         );
+    }
+
+    /// CLAUDE.md §8 — the one DTO that does carry a credential cannot print
+    /// it. A bare `String` field would have, and a single
+    /// `tracing::debug!(?input)` added later is all it would have taken.
+    #[test]
+    fn the_bind_input_never_renders_its_password() {
+        let input = SessionBindInput {
+            session_id: SessionId::new().to_string(),
+            password: Secret("n0tr34l".to_owned()),
+        };
+
+        let rendered = format!("{input:?}");
+
+        assert!(!rendered.contains("n0tr34l"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+
+        // The secret on its own shows nothing at all — not the value, and not
+        // its length, which narrows a brute force. Asserted on the field
+        // rather than on the whole struct, whose `session_id` is a UUID full
+        // of digits.
+        assert_eq!(format!("{:?}", input.password), "<redacted>");
+
+        // And it still deserialises from, and serialises to, a plain string:
+        // the wire contract is unchanged.
+        assert_eq!(
+            serde_json::to_value(&input.password).expect("a secret serialises"),
+            serde_json::Value::String("n0tr34l".to_owned())
+        );
+        assert_eq!(input.password.expose(), "n0tr34l");
     }
 
     /// CLAUDE.md §8 — the profile that crosses the bridge has no credential

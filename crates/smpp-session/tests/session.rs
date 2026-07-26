@@ -672,6 +672,33 @@ async fn ca_005_08_a_message_centre_that_ignores_the_unbind_does_not_hold_the_se
     assert_state(&session.handle, SessionState::Unbound);
 }
 
+/// Dropping the last handle stops the session.
+///
+/// Without this the supervisor and the reader ran on with nobody able to reach
+/// them: the outgoing queue never closes — the supervisor holds a `Sender` on
+/// it for the reader's responses — so neither task ever noticed. Two tasks, a
+/// socket and a live bind on the message centre, leaked for the life of the
+/// process.
+///
+/// The queue of unsolicited PDUs is the observable: its sender lives in the
+/// supervisor, so it closes exactly when the supervisor returns.
+#[tokio::test(start_paused = true)]
+async fn ca_005_08_dropping_the_last_handle_stops_every_task() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let session = start(a_profile(), smsc);
+
+    wait_until_bound(&session.handle).await;
+
+    let mut deliveries = session.deliveries;
+    drop(session.handle);
+
+    let closed = tokio::time::timeout(QUIET_PERIOD, deliveries.recv())
+        .await
+        .expect("an abandoned session must stop rather than run on unreachable");
+
+    assert!(closed.is_none(), "the queue closes with the supervisor");
+}
+
 /// A session that was never bound still shuts down cleanly, without waiting out
 /// its back-off.
 #[tokio::test(start_paused = true)]

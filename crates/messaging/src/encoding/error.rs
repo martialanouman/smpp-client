@@ -35,6 +35,27 @@ pub enum EncodingError {
         encoding: Encoding,
     },
 
+    /// The GSM 7-bit layout asks for two settings that cannot both hold.
+    ///
+    /// ADR 0009 §7: [`Gsm7BitCharset::Latin1`](smpp_core::values::Gsm7BitCharset::Latin1)
+    /// octets use all eight bits — `é` is `0xE9` — and
+    /// [`Gsm7BitPacking::Packed`](smpp_core::values::Gsm7BitPacking::Packed)
+    /// masks the top bit off every one of them. The result is not slightly
+    /// wrong, it is unrecoverable, and it is silent: the message centre
+    /// answers `ESME_ROK` and the handset shows something else.
+    ///
+    /// The session profile refuses the pair too. This exists because a
+    /// `SegmentationOptions` can be built without one, and an invariant that
+    /// only one of its two entry points enforces is an invariant with a hole
+    /// in it.
+    #[error("GSM 7-bit charset {charset} cannot be combined with {packing} packing")]
+    IncompatibleGsm7Layout {
+        /// The charset that was asked for.
+        charset: &'static str,
+        /// The packing that was asked for.
+        packing: &'static str,
+    },
+
     /// The text needs more segments than a concatenation can address.
     ///
     /// Both the UDH part number and `sar_total_segments` are a single octet,

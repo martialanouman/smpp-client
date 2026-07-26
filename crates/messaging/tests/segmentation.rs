@@ -876,6 +876,48 @@ fn a_forced_gsm_encoding_is_refused_when_the_alt_charset_cannot_write_the_text()
     );
 }
 
+/// ADR 0009 §7, enforced where the octets are actually written and not only
+/// on the session profile.
+///
+/// Latin-1 octets use all eight bits — `é` is `0xE9` — and packing masks the
+/// top one off every single one of them. The profile refused the pair; a
+/// `SegmentationOptions` built by hand did not, and the corruption is silent
+/// all the way to the handset.
+#[test]
+fn the_alt_charset_cannot_be_combined_with_septet_packing() {
+    let impossible = options(SegmentationMode::Udh)
+        .with_gsm_charset(Gsm7BitCharset::Latin1)
+        .with_gsm_packing(Gsm7BitPacking::Packed);
+
+    assert_eq!(
+        segment("Café", &impossible, REFERENCE),
+        Err(EncodingError::IncompatibleGsm7Layout {
+            charset: "latin1",
+            packing: "packed",
+        })
+    );
+
+    // The live counter goes through the same check, so the editor cannot show
+    // a length for a message that will never be sent.
+    assert!(preview("Café", &impossible).is_err());
+
+    // The three combinations that do hold are untouched.
+    for (charset, packing) in [
+        (Gsm7BitCharset::Latin1, Gsm7BitPacking::Unpacked),
+        (Gsm7BitCharset::Gsm0338, Gsm7BitPacking::Packed),
+        (Gsm7BitCharset::Gsm0338, Gsm7BitPacking::Unpacked),
+    ] {
+        let allowed = options(SegmentationMode::Udh)
+            .with_gsm_charset(charset)
+            .with_gsm_packing(packing);
+
+        assert!(
+            segment("Cafe", &allowed, REFERENCE).is_ok(),
+            "{charset:?} with {packing:?} is legitimate"
+        );
+    }
+}
+
 /// The segment budget is stated in septets and does not move: the alt-charset
 /// changes what the octets mean, not how much fits.
 #[test]

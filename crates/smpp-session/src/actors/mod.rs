@@ -113,6 +113,24 @@ struct HandleInner {
     supervisor: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl Drop for HandleInner {
+    /// Stops the session when the last handle goes.
+    ///
+    /// Without this, dropping every handle left the supervisor and the reader
+    /// running with nobody able to reach them: the outgoing queue would never
+    /// close — the supervisor holds a `Sender` on it for the reader's
+    /// responses — so neither task would ever notice. Two tasks, one socket
+    /// and one bind on the message centre, leaked for the life of the process.
+    ///
+    /// The registry keeps a handle for every live session, so this is a
+    /// backstop rather than the normal path. It is what turns "the registry
+    /// must not lose a handle" from a convention into something the type
+    /// system enforces.
+    fn drop(&mut self) {
+        self.token.cancel();
+    }
+}
+
 impl core::fmt::Debug for SessionHandle {
     /// Names the session and its state. Never the profile, which would drag
     /// the `system_id` into every log line that formats a handle.

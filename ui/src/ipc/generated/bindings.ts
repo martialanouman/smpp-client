@@ -275,6 +275,21 @@ export type LogLevel =
  */
 export type RetentionDays = number;
 
+/**
+ *  A string that must never be formatted.
+ * 
+ *  Transparent on the wire — the generated TypeScript still sees a plain
+ *  `string` — and opaque in Rust: its `Debug` shows nothing, so a future
+ *  `tracing::debug!(?input)` on [`SessionBindInput`] cannot put an SMSC
+ *  password in a log file. A bare `String` field would have, and nothing in
+ *  the type system would have objected.
+ * 
+ *  The same reasoning as `smpp_session::profile::Password`, applied one layer
+ *  up: this is the shape the credential has for the few microseconds between
+ *  crossing the bridge and becoming a `Password`.
+ */
+export type Secret = string;
+
 /**  Input of [`session_bind`]. */
 export type SessionBindInput = {
 	/**  Which profile to bind. */
@@ -286,7 +301,7 @@ export type SessionBindInput = {
 	 *  `smpp_session::profile::Password` immediately. It is not persisted and
 	 *  never comes back across the bridge.
 	 */
-	password: string,
+	password: Secret,
 };
 
 /**
