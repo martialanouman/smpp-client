@@ -11,5 +11,37 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
+# The GCRA limiter of spec §6.1 and §9.2.
+#
+# `default-features = false` then `std` alone, and each omission is deliberate:
+#
+#   · `quanta` — the default clock, reading the platform monotonic counter.
+#     Unusable here: `tokio::time::pause()` cannot move it, so every pacing
+#     test would have to sleep in real time (CLAUDE.md §7). `limiter::
+#     TokioClock` replaces it.
+#   · `dashmap` — the sharded map behind *keyed* limiters. There is one rate
+#     per session and the session owns its limiter, so there is no key.
+#   · `jitter` — spreads waits to avoid a thundering herd across processes.
+#     The pacing here is already serialised by one lock, and jitter on a
+#     single-sender quota only blurs the assertion CA-007-01 makes.
+governor = { version = "0.10", default-features = false, features = ["std"] }
+
+# The window is a semaphore and the pacing is a sleep: `sync` and `time`, and
+# `rt`/`macros` only for the tests, which spawn.
+tokio = { workspace = true, features = ["sync", "time"] }
+
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "macros",
+  "test-util",
+  "time",
+  "sync",
+] }
+proptest.workspace = true
+
 [lints]
 workspace = true
