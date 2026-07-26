@@ -1,6 +1,6 @@
 # Jalon 007 — Fenêtrage, contrôle de débit et métriques temps réel
 
-> **Statut :** À faire · **Dépend de :** step-006 · **Réf. spec :** §9.1–9.3, §9.5, §9.6, §18.1 · **Exigences :** EF-DBT-01, EF-DBT-02, EF-DBT-04, ENF-PERF-01
+> **Statut :** Terminé (2026-07-26) · **Dépend de :** step-006 · **Réf. spec :** §9.1–9.3, §9.5, §9.6, §18.1 · **Exigences :** EF-DBT-01, EF-DBT-02, EF-DBT-04, ENF-PERF-01
 
 ## 1. Objectif
 
@@ -40,16 +40,16 @@ Le débit réel résulte de **deux** contraintes indépendantes appliquées conj
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-007-01** — Avec `throughput_tps = 100`, l'émission de 1 000 messages prend 10 s ±5 % et **aucune** seconde glissante ne dépasse 100 envois (mesure sur le serveur factice, horloge virtuelle).
-- [ ] **CA-007-02** — Avec `window_size = 10` et un serveur qui ne répond pas, exactement 10 PDU sont émis puis le writer se met en pause ; aucune émission supplémentaire.
-- [ ] **CA-007-03** — Un slot de fenêtre est libéré aussi bien par une réponse que par un timeout : après `response_timeout`, l'émission reprend (test avec serveur silencieux).
-- [ ] **CA-007-04** — `throughput_tps = 0` signifie illimité et n'introduit aucun délai artificiel.
-- [ ] **CA-007-05** — Débit soutenu ≥ **1 000 TPS** sur une session contre le serveur factice, sans dépassement de fenêtre ni perte (ENF-PERF-01).
-- [ ] **CA-007-06** — Back-pressure vérifiée : alimenter la file plus vite que le SMSC ne consomme pendant 5 minutes laisse la mémoire du processus stable (variation < 10 % après stabilisation).
-- [ ] **CA-007-07** — `metrics:tick` est émis au plus à 4 Hz quelle que soit la charge : test comptant les événements pendant un envoi à 1 000 TPS.
-- [ ] **CA-007-08** — Les métriques affichées correspondent à la réalité : TPS mesuré ≈ TPS réel ±5 %, occupation de fenêtre exacte, RTT cohérent avec la latence injectée dans le serveur factice.
-- [ ] **CA-007-09** — L'UI reste réactive (< 16 ms/frame) pendant un envoi à débit maximal (ENF-PERF-03, mesuré via les outils de performance du navigateur).
-- [ ] **CA-007-10** — Aucune fuite de slot de fenêtre : après 100 000 messages mêlant succès, erreurs et timeouts, le compteur de fenêtre revient exactement à zéro.
+- [x] **CA-007-01** — Avec `throughput_tps = 100`, l'émission de 1 000 messages prend 10 s ±5 % et **aucune** seconde glissante ne dépasse 100 envois (mesure sur le serveur factice, horloge virtuelle).
+- [x] **CA-007-02** — Avec `window_size = 10` et un serveur qui ne répond pas, exactement 10 PDU sont émis puis le writer se met en pause ; aucune émission supplémentaire.
+- [x] **CA-007-03** — Un slot de fenêtre est libéré aussi bien par une réponse que par un timeout : après `response_timeout`, l'émission reprend (test avec serveur silencieux).
+- [x] **CA-007-04** — `throughput_tps = 0` signifie illimité et n'introduit aucun délai artificiel.
+- [x] **CA-007-05** — Débit soutenu ≥ **1 000 TPS** sur une session contre le serveur factice, sans dépassement de fenêtre ni perte (ENF-PERF-01).
+- [x] **CA-007-06** — Back-pressure vérifiée : alimenter la file plus vite que le SMSC ne consomme pendant 5 minutes laisse la mémoire du processus stable (variation < 10 % après stabilisation).
+- [x] **CA-007-07** — `metrics:tick` est émis au plus à 4 Hz quelle que soit la charge : test comptant les événements pendant un envoi à 1 000 TPS.
+- [x] **CA-007-08** — Les métriques affichées correspondent à la réalité : TPS mesuré ≈ TPS réel ±5 %, occupation de fenêtre exacte, RTT cohérent avec la latence injectée dans le serveur factice.
+- [x] **CA-007-09** — L'UI reste réactive (< 16 ms/frame) pendant un envoi à débit maximal (ENF-PERF-03, mesuré via les outils de performance du navigateur).
+- [x] **CA-007-10** — Aucune fuite de slot de fenêtre : après 100 000 messages mêlant succès, erreurs et timeouts, le compteur de fenêtre revient exactement à zéro.
 
 ## 5. Tests attendus
 
