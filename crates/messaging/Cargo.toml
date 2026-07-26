@@ -11,16 +11,22 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
-# Layering boundaries from guide §4.2: dependencies always point
-# downwards, never up. Any violation becomes a compile error.
-smpp-session = { path = "../smpp-session" }
-persistence = { path = "../persistence" }
-
-# Direct, although `smpp-session` already brings it in transitively: milestone
-# 004 names `DataCoding`, `EsmClass`, `MessagePayload` and the concatenation
-# UDH in its own public API. Relying on a re-export through a sibling crate
-# would tie this crate's compilation to a dependency it does not control.
+# THE ONLY INTERNAL DEPENDENCY, and that is the milestone-006 change.
+#
+# This crate used to depend on `smpp-session` and `persistence`. It now
+# declares two ports instead — `MessageRepository` and `SmscSession` — which
+# those crates implement (ADR 0010). The edges therefore point *at* this
+# crate, which is what dependency inversion means (CLAUDE.md §3): the
+# orchestrator states its contract, the layers below satisfy it, and a test
+# needs neither a socket nor a database file.
+#
+# It is also what makes the graph acyclic. `smpp-session` depends on
+# `persistence` for the session-profile record; had this crate kept its own
+# edge to `smpp-session`, moving `MessageRepository` here would have closed
+# the loop `messaging -> smpp-session -> persistence -> messaging`.
 smpp-core = { path = "../smpp-core" }
+
+tracing.workspace = true
 
 # Only for the random seed of the concatenation reference counter: a
 # deterministic start would hand a restarting session a reference that may

@@ -12,7 +12,7 @@ use smpp_core::values::{
     CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
 };
 
-use crate::records::{CampaignId, ContactId, ListId};
+use crate::records::{CampaignId, ContactId, ListId, MessageState};
 use crate::{PersistenceError, Timestamp};
 
 /// Widens an unsigned count to the signed integer SQLite stores.
@@ -176,6 +176,19 @@ pub(crate) fn read_client_message_id(
         table,
         column,
         expected: "a UUID in canonical form",
+    })
+}
+
+/// Reads the `messages.state` column.
+///
+/// `MessageState` moved to `messaging` at milestone 006 (ADR 0010) and parses
+/// to an `Option` rather than to an error, because its two callers want
+/// different errors out of the same failure. This is the storage one.
+pub(crate) fn read_message_state(raw: &str) -> Result<MessageState, PersistenceError> {
+    MessageState::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "messages",
+        column: "state",
+        expected: "one of QUEUED, SENT, ACCEPTED, DELIVERED, FAILED, EXPIRED",
     })
 }
 

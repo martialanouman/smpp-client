@@ -25,6 +25,17 @@ uuid.workspace = true
 # `String`/`u8` — exactly what CLAUDE.md §4 forbids.
 smpp-core = { path = "../smpp-core" }
 
+# THE UPWARD EDGE, and it is the point rather than an accident.
+#
+# `messaging` declares `MessageRepository` and this crate implements it — the
+# dependency inversion of guide §8.1 and CLAUDE.md §3, whose whole cost is
+# exactly this edge. ADR 0007 deferred it while `messaging` was an empty
+# shell; ADR 0010 pays it now that the shell has an orchestrator.
+#
+# `messaging` itself depends on `smpp-core` and on nothing else of ours, so
+# the graph stays acyclic.
+messaging = { path = "../messaging" }
+
 # `tokio::fs` for creating the data directory. Async on purpose: the blocking
 # `std::fs` equivalent on a runtime thread is what CLAUDE.md §4 rules out.
 tokio = { workspace = true, features = ["fs"] }

@@ -10,10 +10,10 @@ use std::alloc::System;
 use std::time::Instant;
 
 use futures_util::StreamExt;
-use persistence::ports::MessageRepository;
+use messaging::ports::{MessageRepository, MessageStoreError};
+use persistence::ports::MessageJournal;
 use persistence::{
-    Cursor, Message, MessageFilter, MessageState, MessageStateUpdate, PersistenceError,
-    SqliteMessageRepository,
+    Cursor, Message, MessageFilter, MessageState, MessageStateUpdate, SqliteMessageRepository,
 };
 use smpp_core::types::ClientMessageId;
 use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
@@ -200,7 +200,7 @@ async fn a_batch_of_transitions_that_fails_rolls_back_the_whole_batch() {
     ));
 
     let rejection = repository.update_states(&updates).await.unwrap_err();
-    assert!(matches!(rejection, PersistenceError::NotFound { .. }));
+    assert_eq!(rejection, MessageStoreError::NotFound);
 
     for message in &messages {
         let read_back = repository

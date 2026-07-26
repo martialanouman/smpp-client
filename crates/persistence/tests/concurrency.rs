@@ -9,7 +9,8 @@ mod support;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use persistence::ports::MessageRepository;
+use messaging::ports::MessageRepository;
+use persistence::ports::MessageJournal;
 use persistence::{Message, MessageFilter, MessageState, SqliteMessageRepository};
 use smpp_core::types::ClientMessageId;
 

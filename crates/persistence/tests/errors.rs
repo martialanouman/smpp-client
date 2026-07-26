@@ -8,7 +8,8 @@ mod support;
 
 use std::error::Error;
 
-use persistence::ports::{ContactRepository, MessageRepository, SessionProfileRepository};
+use messaging::ports::{MessageRepository, MessageStoreError};
+use persistence::ports::{ContactRepository, SessionProfileRepository};
 use persistence::{
     ContactId, PersistenceError, SqliteContactRepository, SqliteMessageRepository,
     SqliteSessionProfileRepository,
@@ -117,23 +118,51 @@ async fn a_rejected_insert_never_echoes_the_offending_value() {
 #[tokio::test]
 async fn a_conflict_names_the_row_by_identifier_only() {
     let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let contact = a_contact(ContactId::new(), "+2250102030405");
+    repository.insert_contact(&contact).await.unwrap();
+
+    let rejection = repository.insert_contact(&contact).await.unwrap_err();
+    let rendered = rejection.to_string();
+
+    assert!(rendered.contains("contacts"), "{rendered}");
+    assert!(
+        rendered.contains(&contact.contact_id.to_string()),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("2250102030405"),
+        "the number reached the error message: {rendered}"
+    );
+}
+
+/// The message port says **less** than the storage error behind it, and that
+/// is deliberate rather than an oversight (ADR 0010).
+///
+/// `MessageStoreError` names what a caller can act on and nothing else. It is
+/// what reaches `messaging`, and through it the IPC boundary, so a UUID it
+/// carried would be a UUID in a toast. The identifier and the source chain
+/// stay in the log line `persistence` writes before mapping.
+#[tokio::test]
+async fn a_message_store_conflict_carries_neither_the_identifier_nor_the_body() {
+    let harness = temp_database().await;
     let repository = SqliteMessageRepository::new(harness.database().clone());
 
     let message = a_queued_message(ClientMessageId::new(), "+2250102030405");
     repository.insert_message(&message).await.unwrap();
 
     let rejection = repository.insert_message(&message).await.unwrap_err();
-    let rendered = rejection.to_string();
 
-    assert!(rendered.contains("messages"), "{rendered}");
+    assert_eq!(rejection, MessageStoreError::Conflict);
+
+    let rendered = rejection.to_string();
     assert!(
-        rendered.contains(&message.client_message_id.to_string()),
+        !rendered.contains(&message.client_message_id.to_string()),
         "{rendered}"
     );
-    assert!(
-        !rendered.contains("Bonjour"),
-        "the message body reached the error message: {rendered}"
-    );
+    assert!(!rendered.contains("2250102030405"), "{rendered}");
+    assert!(!rendered.contains("Bonjour"), "{rendered}");
 }
 
 /// Opening a database inside a path that cannot be created reports the path —

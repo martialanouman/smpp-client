@@ -45,7 +45,7 @@ pub use error::PersistenceError;
 pub use records::{
     BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, ListId,
     Message, MessageFilter, MessageState, MessageStateUpdate, PduDirection, PduLogEntry,
-    SessionProfile,
+    SessionProfile, SmscMessageIdUpdate,
 };
 pub use repositories::{
     SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,

@@ -33,15 +33,17 @@ use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use smpp_core::types::ClientMessageId;
 
+use messaging::ports::{MessageRepository, MessageStoreError};
+
 use crate::db::Database;
-use crate::ports::MessageRepository;
+use crate::ports::MessageJournal;
 use crate::records::{
     Message, MessageFilter, MessageState, MessageStateUpdate, SmscMessageIdUpdate,
 };
 use crate::repositories::convert::{
-    read_client_message_id, read_command_status, read_data_coding, read_msisdn, read_npi,
-    read_optional_campaign_id, read_optional_session_id, read_optional_timestamp, read_timestamp,
-    read_ton, read_u32, store_command_status, store_u32, store_u8,
+    read_client_message_id, read_command_status, read_data_coding, read_message_state, read_msisdn,
+    read_npi, read_optional_campaign_id, read_optional_session_id, read_optional_timestamp,
+    read_timestamp, read_ton, read_u32, store_command_status, store_u32, store_u8,
 };
 use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
@@ -132,7 +134,7 @@ impl PagedRow for MessageRow {
             data_coding: read_data_coding(self.data_coding, TABLE, "data_coding")?,
             segments: read_u32(self.segments, TABLE, "segments")?,
             text: self.text,
-            state: MessageState::parse(&self.state)?,
+            state: read_message_state(&self.state)?,
             command_status: read_command_status(self.command_status, TABLE, "command_status")?,
             dlr_stat: self.dlr_stat,
             dlr_err: self.dlr_err,
@@ -145,13 +147,18 @@ impl PagedRow for MessageRow {
     }
 }
 
-impl MessageRepository for SqliteMessageRepository {
-    async fn insert_message(&self, message: &Message) -> Result<(), PersistenceError> {
+/// The SQL half, reporting this crate's own error.
+///
+/// Private: the only way in from outside is the [`MessageRepository`] impl
+/// below, so no caller can pick the richer error and start branching on a
+/// `sqlx::Error` three layers up.
+impl SqliteMessageRepository {
+    async fn stored_insert_message(&self, message: &Message) -> Result<(), PersistenceError> {
         let mut connection = self.database.pool().acquire().await?;
         insert_one(&mut *connection, message).await
     }
 
-    async fn insert_messages(&self, messages: &[Message]) -> Result<u64, PersistenceError> {
+    async fn stored_insert_messages(&self, messages: &[Message]) -> Result<u64, PersistenceError> {
         // ONE transaction for the whole batch (CA-002-06, guide §11.2). The
         // `?` on each insert drops `transaction` without committing, which
         // rolls back: a batch either lands whole or not at all.
@@ -166,7 +173,7 @@ impl MessageRepository for SqliteMessageRepository {
         Ok(messages.len().try_into().unwrap_or(u64::MAX))
     }
 
-    async fn find_message(
+    async fn stored_find_message(
         &self,
         client_message_id: ClientMessageId,
     ) -> Result<Option<Message>, PersistenceError> {
@@ -189,7 +196,7 @@ impl MessageRepository for SqliteMessageRepository {
         row.map(PagedRow::into_record).transpose()
     }
 
-    async fn find_message_by_smsc_id(
+    async fn stored_find_message_by_smsc_id(
         &self,
         smsc_message_id: &str,
     ) -> Result<Option<Message>, PersistenceError> {
@@ -212,12 +219,18 @@ impl MessageRepository for SqliteMessageRepository {
         row.map(PagedRow::into_record).transpose()
     }
 
-    async fn update_state(&self, update: &MessageStateUpdate) -> Result<(), PersistenceError> {
+    async fn stored_update_state(
+        &self,
+        update: &MessageStateUpdate,
+    ) -> Result<(), PersistenceError> {
         let mut connection = self.database.pool().acquire().await?;
         apply_update(&mut *connection, update).await
     }
 
-    async fn update_states(&self, updates: &[MessageStateUpdate]) -> Result<u64, PersistenceError> {
+    async fn stored_update_states(
+        &self,
+        updates: &[MessageStateUpdate],
+    ) -> Result<u64, PersistenceError> {
         let mut transaction = self.database.pool().begin().await?;
 
         for update in updates {
@@ -228,7 +241,81 @@ impl MessageRepository for SqliteMessageRepository {
 
         Ok(updates.len().try_into().unwrap_or(u64::MAX))
     }
+}
 
+/// The write-and-lookup half of the journal, as `messaging` declares it.
+///
+/// # Why the two layers keep different error types
+///
+/// The methods above report a [`PersistenceError`], which names the failing
+/// table and carries a `sqlx::Error` — the detail a log needs. The port speaks
+/// in [`MessageStoreError`], which names only what a caller can act on. The
+/// translation happens here, and it **logs the full failure first**: the source
+/// chain the port cannot carry is written to the trace rather than dropped,
+/// which is the price ADR 0010 records for the boundary.
+impl MessageRepository for SqliteMessageRepository {
+    async fn insert_message(&self, message: &Message) -> Result<(), MessageStoreError> {
+        self.stored_insert_message(message)
+            .await
+            .map_err(store_error)
+    }
+
+    async fn insert_messages(&self, messages: &[Message]) -> Result<u64, MessageStoreError> {
+        self.stored_insert_messages(messages)
+            .await
+            .map_err(store_error)
+    }
+
+    async fn find_message(
+        &self,
+        client_message_id: ClientMessageId,
+    ) -> Result<Option<Message>, MessageStoreError> {
+        self.stored_find_message(client_message_id)
+            .await
+            .map_err(store_error)
+    }
+
+    async fn find_message_by_smsc_id(
+        &self,
+        smsc_message_id: &str,
+    ) -> Result<Option<Message>, MessageStoreError> {
+        self.stored_find_message_by_smsc_id(smsc_message_id)
+            .await
+            .map_err(store_error)
+    }
+
+    async fn update_state(&self, update: &MessageStateUpdate) -> Result<(), MessageStoreError> {
+        self.stored_update_state(update).await.map_err(store_error)
+    }
+
+    async fn update_states(
+        &self,
+        updates: &[MessageStateUpdate],
+    ) -> Result<u64, MessageStoreError> {
+        self.stored_update_states(updates)
+            .await
+            .map_err(store_error)
+    }
+}
+
+/// Projects a storage failure onto the port's vocabulary.
+///
+/// The `#[source]` chain — the sqlx error, and on one variant a filesystem
+/// path — is logged here and does not travel: the port is consumed by
+/// `messaging`, whose failures reach the interface.
+fn store_error(error: PersistenceError) -> MessageStoreError {
+    tracing::error!(error = ?error, "the message journal refused an operation");
+
+    match error {
+        PersistenceError::Conflict { .. } => MessageStoreError::Conflict,
+        PersistenceError::NotFound { .. } => MessageStoreError::NotFound,
+        other => MessageStoreError::Unavailable {
+            reason: other.to_string(),
+        },
+    }
+}
+
+impl MessageJournal for SqliteMessageRepository {
     async fn page_messages(
         &self,
         filter: &MessageFilter,
@@ -633,9 +720,9 @@ mod tests {
 
     use super::{SqliteMessageRepository, TABLE};
     use crate::db::{Database, DatabaseConfig};
-    use crate::ports::MessageRepository;
     use crate::records::{Message, MessageState, MessageStateUpdate};
     use crate::Timestamp;
+    use messaging::ports::MessageRepository;
 
     /// Counts commits by measuring what they append to the write-ahead log.
     ///

@@ -5,14 +5,15 @@
 //! to [`smpp_session`]. Also orchestrates bulk campaigns — resume after
 //! interruption, progress tracking, volume caps.
 //!
-//! Declares the *ports* that [`persistence`] implements
-//! (`MessageRepository`): the trait belongs to this layer, its SQLx
-//! implementation to the lower one. That is what makes the orchestrator
-//! testable without a real database.
+//! Declares the *ports* the layers below implement ([`ports`]): the traits
+//! belong to this layer, their SQLx and socket implementations to the lower
+//! ones. That is what makes the orchestrator testable with neither a database
+//! nor a socket, and it is why this crate depends on `smpp-core` and on
+//! nothing else of ours (ADR 0010).
 //!
 //! Implemented at milestones 004, 006 and 010.
 //!
-//! # Milestone 004 — what is here now
+//! # Milestone 004 — encoding and segmentation
 //!
 //! Text in, segments out, no I/O at all. Two modules:
 //!
@@ -49,9 +50,13 @@
 
 pub mod encoding;
 mod error;
+pub mod message;
+pub mod ports;
 pub mod segmentation;
 
 pub use error::MessagingError;
+pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
+pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
 
 /// Crate version, as declared in its manifest.
 ///

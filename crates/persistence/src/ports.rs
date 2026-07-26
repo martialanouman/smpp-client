@@ -2,19 +2,27 @@
 //!
 //! # Where these traits live, and why here for now
 //!
-//! Guide §8.1 puts a port in the crate that **consumes** it: `MessageRepository`
-//! belongs to `messaging`, which then depends on nothing below it and can be
-//! tested against a double. step-002 §6 asks for the placement to be decided
-//! explicitly and written down — ADR 0007 does that, and this is its summary.
+//! Guide §8.1 puts a port in the crate that **consumes** it. ADR 0007 decided
+//! at milestone 002 to park them here instead, with an argument that only held
+//! while the consuming crates were empty shells: declaring a port in a crate
+//! that uses it for nothing pays the inversion's whole cost — the upward
+//! `persistence` → consumer edge — and buys none of its benefit.
 //!
-//! The consuming crates are empty shells at this milestone: `messaging` starts
-//! at milestone 004, `contacts` at 006. Declaring the traits there today would
-//! mean creating a `persistence` → `messaging` edge to reach them, i.e. paying
-//! the inversion's whole cost — the upward-looking dependency — while nobody
-//! is using it to invert anything. So the traits sit here, next to their only
-//! implementation, and move up the day a consumer exists to own them. That
-//! move is a declaration change: the trait's shape, and every implementation
-//! and double written against it, are unaffected.
+//! That argument has now expired for one of them. Milestone 006 gave
+//! `messaging` its send orchestrator, so `MessageRepository` moved there
+//! (ADR 0010) and this crate implements it. What is left below are the ports
+//! whose consumers are still to come:
+//!
+//! | Port | Consumer, and when it arrives |
+//! |------|-------------------------------|
+//! | [`SessionProfileRepository`] | `smpp-session`, no milestone yet |
+//! | [`ContactRepository`] | `contacts`, milestone 009 (CA-009-13) |
+//! | [`CampaignRepository`] | `messaging`, milestone 010 |
+//! | [`MessageJournal`] | `logging-export`, milestone 013 |
+//! | [`PduLogRepository`] | `logging-export`, milestone 013 |
+//!
+//! Each move is a declaration change: the trait's shape, and every
+//! implementation and double written against it, are unaffected.
 //!
 //! # Shape of the methods
 //!
@@ -30,11 +38,11 @@
 use std::future::Future;
 
 use futures_core::stream::BoxStream;
-use smpp_core::types::{ClientMessageId, SessionId};
+use smpp_core::types::SessionId;
 
 use crate::records::{
     Campaign, CampaignId, Contact, ContactId, ContactList, ListId, Message, MessageFilter,
-    MessageStateUpdate, PduLogEntry, SessionProfile,
+    PduLogEntry, SessionProfile,
 };
 use crate::{Cursor, Page, PersistenceError};
 
@@ -247,84 +255,22 @@ pub trait CampaignRepository {
     ) -> impl Future<Output = Result<bool, PersistenceError>> + Send;
 }
 
-/// Reads and writes the message journal (spec §14.2, CLAUDE.md §4).
-pub trait MessageRepository {
-    /// Writes one message, before it is sent.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Conflict`] if the `client_message_id` already
-    /// exists — which is the guard that makes a replayed send idempotent
-    /// (spec §10.5).
-    fn insert_message(
-        &self,
-        message: &Message,
-    ) -> impl Future<Output = Result<(), PersistenceError>> + Send;
-
-    /// Writes a batch of messages in **one** transaction.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Conflict`] if any identifier already exists — and
-    /// then **no** message of the batch is written.
-    fn insert_messages(
-        &self,
-        messages: &[Message],
-    ) -> impl Future<Output = Result<u64, PersistenceError>> + Send;
-
-    /// Reads one message by its client-side identifier.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Database`] if the read fails, or
-    /// [`PersistenceError::MalformedRow`] if a stored value no longer fits its
-    /// type.
-    fn find_message(
-        &self,
-        client_message_id: ClientMessageId,
-    ) -> impl Future<Output = Result<Option<Message>, PersistenceError>> + Send;
-
-    /// Reads one message by the identifier the SMSC assigned.
-    ///
-    /// The lookup a delivery receipt needs (spec §7.8, milestone 008), which
-    /// is why `idx_messages_smscid` exists from this milestone on.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Database`] if the read fails.
-    fn find_message_by_smsc_id(
-        &self,
-        smsc_message_id: &str,
-    ) -> impl Future<Output = Result<Option<Message>, PersistenceError>> + Send;
-
-    /// Applies one state transition.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::NotFound`] if the message does not exist.
-    fn update_state(
-        &self,
-        update: &MessageStateUpdate,
-    ) -> impl Future<Output = Result<(), PersistenceError>> + Send;
-
-    /// Applies a batch of state transitions in **one** transaction.
-    ///
-    /// CA-002-06: N transitions produce one transaction, not N. On the hot
-    /// path of a campaign this is the difference between one commit per
-    /// response window and one per message.
-    ///
-    /// All-or-nothing, and that is observable: if any message of the batch is
-    /// missing, the whole batch is rolled back and **none** of the transitions
-    /// applies.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::NotFound`] if any message does not exist.
-    fn update_states(
-        &self,
-        updates: &[MessageStateUpdate],
-    ) -> impl Future<Output = Result<u64, PersistenceError>> + Send;
-
+/// Reads the message journal in bulk (spec §14.2, §13.5).
+///
+/// # What became of `MessageRepository`
+///
+/// Its write-and-lookup half moved to `messaging` at milestone 006 — the
+/// deadline ADR 0007 set itself, recorded by ADR 0010. This crate implements
+/// that port on [`crate::SqliteMessageRepository`].
+///
+/// The three methods below did **not** move with it, and deliberately: their
+/// caller is the log screen and the exporter of milestone 013, not the send
+/// orchestrator, and a port belongs to the layer that consumes it. They also
+/// speak in [`Cursor`] and [`Page`], types whose whole reason to exist is the
+/// storage they page over. So they stay here until `logging-export` has the
+/// logic to own them — the same argument ADR 0007 made, applied to the half
+/// that still has no consumer.
+pub trait MessageJournal {
     /// Reads one page of messages, in insertion order.
     ///
     /// # Errors
