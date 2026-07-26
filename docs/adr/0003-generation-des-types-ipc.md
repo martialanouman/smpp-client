@@ -75,9 +75,13 @@ Cette ADR **supersède explicitement** la mention `ts-rs` du guide §15.1.
   `scripts/check-ipc-types.sh` bascule automatiquement dès que
   `src-tauri/src/bin/gen_ipc.rs` existe, et **échoue** si un fichier généré
   apparaît sans générateur.
-- **Point de réexamen :** au jalon 001. Si `tauri-specta` se révèle
-  inutilisable, le repli est `ts-rs` + une revue disciplinée des signatures,
-  ce qui serait une régression assumée et documentée par une nouvelle ADR.
+- **Point de réexamen — tranché au jalon 001 :** `tauri-specta 2.0.0-rc.25` a
+  été branché et tient. Les commandes, les événements et les DTO sont générés,
+  et l'étape 4 de la CI compare à chaque run. Le repli vers `ts-rs` n'est pas
+  retenu ; le risque de préversion reste, mais la sortie étant du TypeScript
+  ordinaire commité dans le dépôt, une disparition de l'outil laisserait le
+  code fonctionnel le temps de migrer. Prochain réexamen seulement si une
+  version cassante de `tauri-specta` sort.
 
 ## Références
 

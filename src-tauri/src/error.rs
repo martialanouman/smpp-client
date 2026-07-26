@@ -1,0 +1,278 @@
+//! The stable IPC error DTO.
+//!
+//! Every command returns `Result<T, ErrorDto>`. The shape
+//! `{ code, message, details }` is a **durable design point** (milestone 001
+//! §6): every later milestone adds codes to it, none reshapes it.
+//!
+//! The three fields answer three different questions, and conflating them is
+//! what makes an error contract rot:
+//!
+//! - `code` — machine-readable and **stable**. The frontend branches on it and
+//!   uses it as an i18n key. Renaming one is a breaking change to the IPC
+//!   contract (CLAUDE.md §6: major bump).
+//! - `message` — a short English sentence for the logs and for a developer.
+//!   Never shown raw to the user, who sees the translation of `code`.
+//! - `details` — optional, structured, machine-readable. Bounds, accepted
+//!   values, the offending field. Never free-form prose.
+//!
+//! # What must never cross
+//!
+//! CA-001-06: no absolute path, no secret, no internal trace. The guarantee is
+//! structural rather than a matter of care — a DTO is only ever built from a
+//! **fixed** `ConfigError` message and from `details` assembled here from
+//! constants. The `#[source]` chain, which is where the paths live, is logged
+//! and dropped.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
+use crate::config::ConfigError;
+
+/// Stable, machine-readable error identifier.
+///
+/// Serialised in `SCREAMING_SNAKE_CASE` — `CONFIG_INVALID_LANGUAGE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+// The shared `Config` prefix is the point, not an accident: a code is
+// `<DOMAIN>_<REASON>`, and later milestones add `Smpp*`, `Session*`,
+// `Contacts*` beside it. Dropping the prefix here would produce `Malformed`
+// and `Unwritable`, which say nothing on their own once the enum holds forty
+// variants — and would break the `CONFIG_*` naming the frontend keys off.
+#[allow(clippy::enum_variant_names)]
+pub(crate) enum ErrorCode {
+    /// The submitted language is not supported.
+    ConfigInvalidLanguage,
+    /// The submitted theme is not supported.
+    ConfigInvalidTheme,
+    /// The submitted log level is not supported.
+    ConfigInvalidLogLevel,
+    /// The submitted retention falls outside the accepted range.
+    ConfigInvalidRetention,
+    /// The preferences file could not be read.
+    ConfigUnreadable,
+    /// The preferences file could not be written.
+    ConfigUnwritable,
+    /// The preferences file is not valid JSON.
+    ConfigMalformed,
+}
+
+/// Key of the `details` entry naming the offending field.
+const FIELD: &str = "field";
+
+/// Key of the `details` entry listing the accepted values.
+const ALLOWED: &str = "allowed";
+
+/// The error handed to the WebView.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub(crate) struct ErrorDto {
+    /// Stable identifier the frontend branches on and translates.
+    pub(crate) code: ErrorCode,
+    /// Short English sentence, for logs and developers.
+    pub(crate) message: String,
+    /// Optional structured context — never prose, never a path.
+    pub(crate) details: Option<BTreeMap<String, String>>,
+}
+
+impl ErrorDto {
+    /// Builds a DTO with no details.
+    fn bare(code: ErrorCode, message: &impl ToString) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+            details: None,
+        }
+    }
+
+    /// Builds a DTO carrying structured details.
+    fn detailed(
+        code: ErrorCode,
+        message: &impl ToString,
+        details: impl IntoIterator<Item = (&'static str, String)>,
+    ) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+            details: Some(
+                details
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl From<&ConfigError> for ErrorDto {
+    /// Projects a typed configuration error onto the IPC contract.
+    ///
+    /// Takes a reference so the caller keeps the error and can log it **with**
+    /// its `#[source]` chain — the part that carries the path, and the part
+    /// that must not travel.
+    fn from(error: &ConfigError) -> Self {
+        match error {
+            ConfigError::InvalidLanguage { allowed } => Self::detailed(
+                ErrorCode::ConfigInvalidLanguage,
+                error,
+                [
+                    (FIELD, "language".to_owned()),
+                    (ALLOWED, allowed.join(", ")),
+                ],
+            ),
+            ConfigError::InvalidTheme { allowed } => Self::detailed(
+                ErrorCode::ConfigInvalidTheme,
+                error,
+                [(FIELD, "theme".to_owned()), (ALLOWED, allowed.join(", "))],
+            ),
+            ConfigError::InvalidLogLevel { allowed } => Self::detailed(
+                ErrorCode::ConfigInvalidLogLevel,
+                error,
+                [
+                    (FIELD, "logLevel".to_owned()),
+                    (ALLOWED, allowed.join(", ")),
+                ],
+            ),
+            ConfigError::InvalidRetention { min, max } => Self::detailed(
+                ErrorCode::ConfigInvalidRetention,
+                error,
+                [
+                    (FIELD, "retentionDays".to_owned()),
+                    ("min", min.to_string()),
+                    ("max", max.to_string()),
+                ],
+            ),
+            ConfigError::Unreadable(_) => Self::bare(ErrorCode::ConfigUnreadable, error),
+            ConfigError::Unwritable(_) => Self::bare(ErrorCode::ConfigUnwritable, error),
+            ConfigError::Malformed(_) => Self::bare(ErrorCode::ConfigMalformed, error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AppConfig, ConfigSetInput, Language, LogLevel, RetentionDays, Theme};
+
+    /// Every `ConfigError` variant, each fed a source that carries an absolute
+    /// path and a password — the two things CA-001-06 forbids from travelling.
+    fn every_error() -> Vec<ConfigError> {
+        let poisoned = || {
+            std::io::Error::other(
+                "/Users/someone/Library/Application Support/com.shinobismpp.desktop/config.json \
+                 password=hunter2",
+            )
+        };
+
+        vec![
+            ConfigError::InvalidLanguage {
+                allowed: Language::ALLOWED,
+            },
+            ConfigError::InvalidTheme {
+                allowed: Theme::ALLOWED,
+            },
+            ConfigError::InvalidLogLevel {
+                allowed: LogLevel::ALLOWED,
+            },
+            ConfigError::InvalidRetention {
+                min: RetentionDays::MIN,
+                max: RetentionDays::MAX,
+            },
+            ConfigError::Unreadable(poisoned()),
+            ConfigError::Unwritable(poisoned()),
+            ConfigError::Malformed(
+                serde_json::from_str::<AppConfig>("{ not json")
+                    .expect_err("this input is not valid JSON"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn maps_each_error_to_its_own_stable_code() {
+        let codes: Vec<_> = every_error()
+            .iter()
+            .map(|error| ErrorDto::from(error).code)
+            .collect();
+
+        assert_eq!(
+            codes,
+            vec![
+                ErrorCode::ConfigInvalidLanguage,
+                ErrorCode::ConfigInvalidTheme,
+                ErrorCode::ConfigInvalidLogLevel,
+                ErrorCode::ConfigInvalidRetention,
+                ErrorCode::ConfigUnreadable,
+                ErrorCode::ConfigUnwritable,
+                ErrorCode::ConfigMalformed,
+            ]
+        );
+    }
+
+    #[test]
+    fn leaks_neither_a_path_nor_a_secret_nor_an_internal_trace() {
+        for error in every_error() {
+            let dto = ErrorDto::from(&error);
+
+            let mut surface = vec![dto.message.clone()];
+            surface.extend(dto.details.into_iter().flatten().flat_map(|(k, v)| [k, v]));
+
+            for text in surface {
+                assert!(!text.contains('/'), "path leaked: {text}");
+                assert!(!text.contains('\\'), "path leaked: {text}");
+                assert!(!text.contains("password"), "secret leaked: {text}");
+                assert!(
+                    !text.contains("config.json"),
+                    "internal name leaked: {text}"
+                );
+                assert!(!text.contains("src-tauri"), "internal path leaked: {text}");
+                assert!(
+                    !text.contains("shinobismpp::"),
+                    "internal trace leaked: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn serialises_codes_in_screaming_snake_case() {
+        let json = serde_json::to_string(&ErrorCode::ConfigInvalidLanguage)
+            .expect("serialisation must succeed");
+
+        assert_eq!(json, "\"CONFIG_INVALID_LANGUAGE\"");
+    }
+
+    #[test]
+    fn exposes_the_accepted_values_of_a_rejected_field() {
+        let error = AppConfig::parse(ConfigSetInput {
+            language: "kl".to_owned(),
+            theme: "dark".to_owned(),
+            log_level: "info".to_owned(),
+            retention_days: 30,
+        })
+        .expect_err("an unknown language must be rejected");
+
+        let dto = ErrorDto::from(&error);
+        let details = dto.details.expect("a validation error carries details");
+
+        assert_eq!(details.get(FIELD).map(String::as_str), Some("language"));
+        assert_eq!(details.get(ALLOWED).map(String::as_str), Some("fr, en"));
+    }
+
+    #[test]
+    fn exposes_the_bounds_of_a_rejected_retention() {
+        let error = RetentionDays::parse(0).expect_err("zero is out of bounds");
+        let details = ErrorDto::from(&error)
+            .details
+            .expect("bounds are carried as details");
+
+        assert_eq!(details.get("min").map(String::as_str), Some("1"));
+        assert_eq!(details.get("max").map(String::as_str), Some("365"));
+    }
+
+    #[test]
+    fn carries_no_details_for_a_filesystem_failure() {
+        let error = ConfigError::Unreadable(std::io::Error::from(std::io::ErrorKind::NotFound));
+
+        assert_eq!(ErrorDto::from(&error).details, None);
+    }
+}

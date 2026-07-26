@@ -1,19 +1,58 @@
 @import "tailwindcss";
 
-/* Tailwind v4 sets no default text or background colour: without these rules
-   the page inherits the WebView theme and text renders black on a dark
-   background. Minimal baseline, replaced by the full theme at milestone 001. */
+/* Tailwind v4 sets no default colours, so the palette lives here.
+ *
+ * Three layers, and the order matters:
+ *   1. `:root` — the light values, the baseline;
+ *   2. `prefers-color-scheme: dark` — what "system" resolves to;
+ *   3. `[data-theme]` — an explicit user choice, which must beat the media
+ *      query in BOTH directions. Hence the light block being restated under
+ *      `[data-theme="light"]`: without it, choosing "light" on a machine set to
+ *      dark would change nothing.
+ *
+ * The store removes `data-theme` entirely for "system", handing the decision
+ * back to the media query.
+ */
+
 :root {
   color-scheme: light dark;
   --shinobi-background: #f8fafc;
+  --shinobi-surface: #ffffff;
   --shinobi-text: #0f172a;
+  --shinobi-border: #e2e8f0;
+  --shinobi-hover: #f1f5f9;
+  --shinobi-accent: #e0f2fe;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --shinobi-background: #0f172a;
+    --shinobi-surface: #1e293b;
     --shinobi-text: #e2e8f0;
+    --shinobi-border: #334155;
+    --shinobi-hover: #1e293b;
+    --shinobi-accent: #0c4a6e;
   }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --shinobi-background: #f8fafc;
+  --shinobi-surface: #ffffff;
+  --shinobi-text: #0f172a;
+  --shinobi-border: #e2e8f0;
+  --shinobi-hover: #f1f5f9;
+  --shinobi-accent: #e0f2fe;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --shinobi-background: #0f172a;
+  --shinobi-surface: #1e293b;
+  --shinobi-text: #e2e8f0;
+  --shinobi-border: #334155;
+  --shinobi-hover: #1e293b;
+  --shinobi-accent: #0c4a6e;
 }
 
 body {
@@ -25,4 +64,11 @@ body {
     "Segoe UI",
     sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard navigation must stay visible: the sidebar is operated with Tab and
+   Enter, and Tailwind's reset removes the default outline. */
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }

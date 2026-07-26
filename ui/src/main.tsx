@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { AppShell } from "./components/AppShell";
 import "./i18n";
+import { startBackendBridge } from "./store/bridge";
 import "./styles.css";
-import { PlaceholderView } from "./views/PlaceholderView";
 
 const rootElement = document.getElementById("root");
 
@@ -14,8 +15,13 @@ if (!rootElement) {
   throw new Error("Mount point #root not found in index.html");
 }
 
+// Started before the first render so preferences persisted by the backend are
+// in place, rather than making the interface flash from the defaults to the
+// stored values.
+void startBackendBridge();
+
 createRoot(rootElement).render(
   <StrictMode>
-    <PlaceholderView />
+    <AppShell />
   </StrictMode>,
 );

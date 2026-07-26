@@ -9,5 +9,7 @@
 //! - the `{ code, message, details }` error DTO is stable and leaks neither
 //!   file paths nor secrets.
 //!
-//! Empty at milestone 000: the IPC contract and TypeScript type generation
-//! land at milestone 001.
+//! A command validates, calls, serialises. Anything longer than that is
+//! business logic and belongs in a module or a crate below.
+
+pub(crate) mod config;
