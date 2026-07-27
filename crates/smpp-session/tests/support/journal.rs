@@ -136,6 +136,33 @@ impl Journal {
         self.inner.lock().await.rows.len()
     }
 
+    /// Writes an `smsc_message_id` onto a row, bypassing the transition rules.
+    ///
+    /// Only a test setup uses this, and only to reach a state the send path
+    /// cannot produce on its own: a **terminal** message that nevertheless
+    /// carries an identifier a receipt can correlate to. The send path refuses
+    /// to build one — `Sender::aggregate` drops the identifier of a failed
+    /// message precisely so no receipt can find it — and that refusal is the
+    /// *first* barrier. Reaching past it is the only way to exercise the
+    /// *second*, the state machine's `FAILED → DELIVERED` refusal, which would
+    /// otherwise be shadowed for ever by the first.
+    pub(crate) async fn force_identifier(
+        &self,
+        client_message_id: ClientMessageId,
+        smsc_message_id: &str,
+    ) {
+        if let Some(row) = self
+            .inner
+            .lock()
+            .await
+            .rows
+            .iter_mut()
+            .find(|row| row.client_message_id == client_message_id)
+        {
+            row.smsc_message_id = Some(smsc_message_id.to_owned());
+        }
+    }
+
     /// Applies one transition to the stored row, the way SQLite does.
     ///
     /// The merge semantics are copied from the schema deliberately: `None`
