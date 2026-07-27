@@ -3,41 +3,9 @@
     "name": "ShinobiSMPP",
     "tagline": "SMPP ESME client"
   },
-  "nav": {
-    "label": "Main navigation",
-    "dashboard": "Dashboard",
-    "sessions": "Sessions",
-    "send": "Send",
-    "contacts": "Contacts",
-    "numbers": "Generator",
-    "logs": "Logs",
-    "stats": "Statistics",
-    "settings": "Settings"
-  },
-  "screen": {
-    "dashboard": "Overview of sessions and throughput.",
-    "sessions": "SMSC connections, bind and supervision.",
-    "send": "Single messages and campaigns.",
-    "contacts": "Import, E.164 validation and lists.",
-    "numbers": "Country-aware phone number generation.",
-    "logs": "Message log and delivery receipts.",
-    "stats": "Sending and delivery statistics.",
-    "settings": "Language, theme, logging and retention."
-  },
-  "settings": {
-    "language": "Language",
-    "theme": "Theme",
-    "themeLight": "Light",
-    "themeDark": "Dark",
-    "themeSystem": "System"
-  },
   "empty": {
     "title": "Screen to come",
     "body": "This screen is a placeholder: its implementation lands in a later milestone."
-  },
-  "notification": {
-    "region": "Notifications",
-    "dismiss": "Dismiss notification"
   },
   "error": {
     "CONFIG_INVALID_LANGUAGE": "Unsupported language.",
@@ -67,70 +35,145 @@
     "SESSION_TRANSPORT": "The connection to the message centre failed.",
     "unknown": "Something went wrong."
   },
-  "sessions": {
-    "empty": "No connection profile yet. Create one to open a session to a message centre.",
-    "newProfile": "New profile",
-    "edit": "Edit",
-    "close": "Close",
-    "delete": "Delete",
-    "save": "Save",
-    "cancel": "Cancel",
-    "bind": "Bind",
-    "unbind": "Unbind",
-    "password": "SMSC password",
-    "inFlight": "{{count}} in flight",
-    "gsm7Hint": "The GSM 7-bit layout is dictated by the message centre: it cannot be guessed, and getting it wrong only shows on the recipient's handset.",
+  "logs": {
+    "tab": {
+      "messages": "Messages",
+      "orphans": "Orphaned receipts",
+      "pdus": "PDUs"
+    },
+    "count": "{{count}} row(s)",
+    "refresh": "Refresh",
+    "empty": "No row matches the filter.",
+    "failure": "The journal could not be read.",
     "state": {
-      "CLOSED": "Closed",
-      "CONNECTING": "Connecting…",
-      "BINDING": "Binding…",
-      "BOUND": "Bound",
-      "UNBOUND": "Unbound",
-      "RECONNECT": "Reconnecting…",
-      "ERROR": "Error"
+      "QUEUED": "Queued",
+      "SENT": "Sent",
+      "ACCEPTED": "Accepted",
+      "DELIVERED": "Delivered",
+      "FAILED": "Failed",
+      "EXPIRED": "Expired"
     },
-    "giveUp": {
-      "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
-      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
-      "SESSION_ENDED": "The session ended and will not restart on its own."
+    "filters": {
+      "label": "Journal filters",
+      "search": "Search",
+      "destPrefix": "Recipient prefix",
+      "state": "State",
+      "anyState": "Any",
+      "dlrErr": "Error code",
+      "from": "From",
+      "to": "To",
+      "apply": "Filter",
+      "clear": "Reset",
+      "unsupported": "These criteria apply to messages only: an orphaned receipt and a PDU have no state, no recipient and no body."
     },
-    "bindType": {
-      "transmitter": "Transmit only (TX)",
-      "receiver": "Receive only (RX)",
-      "transceiver": "Transmit and receive (TRX)"
+    "column": {
+      "createdAt": "Created",
+      "dest": "Recipient",
+      "state": "State",
+      "status": "Status",
+      "dlrStat": "Receipt",
+      "dlrErr": "Error",
+      "segments": "Segments",
+      "text": "Message",
+      "receivedAt": "Received",
+      "smscId": "SMSC identifier",
+      "reason": "Reason",
+      "raw": "Raw body",
+      "ts": "Timestamp",
+      "direction": "Direction",
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "sequence": "sequence_number"
     },
-    "gsm7Packing": {
-      "unpacked": "Unpacked (default)",
-      "packed": "Packed"
-    },
-    "gsm7Charset": {
-      "gsm0338": "GSM 03.38 (default)",
-      "latin1": "Latin-1 (alt-charset)"
+    "detail": {
+      "label": "Row detail",
+      "title": "Detail",
+      "none": "Select a row to see its detail.",
+      "close": "Close",
+      "pduLogging": "Record PDUs",
+      "pduDisabled": "PDU recording is off: no header, no decoded body and no hexadecimal is kept until it is turned on."
     },
     "field": {
-      "name": "Name",
-      "host": "Host",
-      "port": "Port",
-      "systemId": "system_id",
-      "systemType": "system_type",
-      "bindType": "Bind type",
-      "interfaceVersion": "SMPP version",
-      "windowSize": "Window",
-      "enquireLinkS": "enquire_link (s)",
-      "responseTimeoutS": "Response timeout (s)",
-      "minBackoffS": "Min back-off (s)",
-      "maxBackoffS": "Max back-off (s)",
-      "reconnectEnabled": "Automatic reconnection",
-      "jitter": "Jitter on the back-off",
-      "dlrIdMatching": "Receipt identifier matching"
+      "clientMessageId": "Client identifier",
+      "smscMessageId": "SMSC identifier",
+      "sessionId": "Session",
+      "source": "Sender",
+      "dest": "Recipient",
+      "state": "State",
+      "commandStatus": "command_status",
+      "dlrStat": "Receipt stat",
+      "dlrErr": "Receipt err",
+      "segments": "Segments",
+      "attempts": "Attempts",
+      "createdAt": "Created",
+      "sentAt": "Sent",
+      "respAt": "Answered",
+      "dlrAt": "Receipt received",
+      "text": "Message",
+      "reason": "Reason",
+      "receivedAt": "Received",
+      "raw": "Raw body",
+      "direction": "Direction",
+      "commandId": "command_id",
+      "sequence": "sequence_number",
+      "ts": "Timestamp",
+      "decoded": "Decoded body",
+      "rawHex": "Raw hexadecimal"
     },
-    "dlrIdMatching": {
-      "exact": "Strict",
-      "relaxed": "Lenient (case, zeroes)",
-      "bases": "Lenient + other base"
+    "reason": {
+      "UNKNOWN_ID": "Unknown identifier",
+      "NO_IDENTIFIER": "No readable identifier"
     },
-    "dlrIdMatchingHint": "Lenient also compares case and strips leading zeroes: two spellings of the same identifier, never two different identifiers.",
-    "dlrIdMatchingWarning": "“Other base” re-reads the identifier as hexadecimal or decimal. Two distinct identifiers can then be confused, and a receipt credit the wrong message. Reserve it for a message centre you know changes base."
+    "pending": "{{count}} update(s)"
+  },
+  "metrics": {
+    "accepted": "Accepted",
+    "backingOff": "The message centre is throttling: submissions are held back.",
+    "curve": "Throughput over the last ten seconds",
+    "ms": "{{value}} ms",
+    "noLiveSession": "No live session. Bind a profile to see the throughput.",
+    "reconnects": "Reconnections",
+    "rejected": "Rejected",
+    "rtt": "Round trip",
+    "seconds": "{{value}} s",
+    "throttled": "Throttles",
+    "throughput": "Throughput",
+    "throughputSpoken": "Current throughput: {{value}} messages per second.",
+    "timedOut": "Unanswered",
+    "tps10s": "10 s throughput",
+    "tpsAverage": "Average throughput",
+    "tpsOfTarget": "{{value}} / {{target}} msg/s",
+    "tpsPeak": "Peak throughput",
+    "tpsUnlimited": "{{value}} msg/s",
+    "uptime": "Link uptime",
+    "window": "Send window",
+    "windowOf": "{{value}} / {{total}}",
+    "windowSpoken": "{{value}} slots in use out of {{total}}."
+  },
+  "nav": {
+    "label": "Main navigation",
+    "dashboard": "Dashboard",
+    "sessions": "Sessions",
+    "send": "Send",
+    "contacts": "Contacts",
+    "numbers": "Generator",
+    "logs": "Logs",
+    "stats": "Statistics",
+    "settings": "Settings"
+  },
+  "notification": {
+    "region": "Notifications",
+    "dismiss": "Dismiss notification"
+  },
+  "screen": {
+    "dashboard": "Overview of sessions and throughput.",
+    "sessions": "SMSC connections, bind and supervision.",
+    "send": "Single messages and campaigns.",
+    "contacts": "Import, E.164 validation and lists.",
+    "numbers": "Country-aware phone number generation.",
+    "logs": "Message log and delivery receipts.",
+    "stats": "Sending and delivery statistics.",
+    "settings": "Language, theme, logging and retention."
   },
   "send": {
     "intro": "Send one message to a message centre and read its answer. The advanced fields follow the SMPP §7.3 table.",
@@ -241,95 +284,81 @@
     },
     "derived": "Derived from the address"
   },
-  "logs": {
-    "tab": {
-      "messages": "Messages",
-      "orphans": "Orphaned receipts",
-      "pdus": "PDUs"
-    },
-    "count": "{{count}} row(s)",
-    "refresh": "Refresh",
-    "empty": "No row matches the filter.",
-    "failure": "The journal could not be read.",
+  "sessions": {
+    "empty": "No connection profile yet. Create one to open a session to a message centre.",
+    "newProfile": "New profile",
+    "edit": "Edit",
+    "close": "Close",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel",
+    "bind": "Bind",
+    "unbind": "Unbind",
+    "password": "SMSC password",
+    "inFlight": "{{count}} in flight",
+    "gsm7Hint": "The GSM 7-bit layout is dictated by the message centre: it cannot be guessed, and getting it wrong only shows on the recipient's handset.",
     "state": {
-      "QUEUED": "Queued",
-      "SENT": "Sent",
-      "ACCEPTED": "Accepted",
-      "DELIVERED": "Delivered",
-      "FAILED": "Failed",
-      "EXPIRED": "Expired"
+      "CLOSED": "Closed",
+      "CONNECTING": "Connecting…",
+      "BINDING": "Binding…",
+      "BOUND": "Bound",
+      "UNBOUND": "Unbound",
+      "RECONNECT": "Reconnecting…",
+      "ERROR": "Error"
     },
-    "filters": {
-      "label": "Journal filters",
-      "search": "Search",
-      "destPrefix": "Recipient prefix",
-      "state": "State",
-      "anyState": "Any",
-      "dlrErr": "Error code",
-      "from": "From",
-      "to": "To",
-      "apply": "Filter",
-      "clear": "Reset",
-      "unsupported": "These criteria apply to messages only: an orphaned receipt and a PDU have no state, no recipient and no body."
+    "giveUp": {
+      "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
+      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
+      "SESSION_ENDED": "The session ended and will not restart on its own."
     },
-    "column": {
-      "createdAt": "Created",
-      "dest": "Recipient",
-      "state": "State",
-      "status": "Status",
-      "dlrStat": "Receipt",
-      "dlrErr": "Error",
-      "segments": "Segments",
-      "text": "Message",
-      "receivedAt": "Received",
-      "smscId": "SMSC identifier",
-      "reason": "Reason",
-      "raw": "Raw body",
-      "ts": "Timestamp",
-      "direction": "Direction",
-      "commandId": "command_id",
-      "commandStatus": "command_status",
-      "sequence": "sequence_number"
+    "bindType": {
+      "transmitter": "Transmit only (TX)",
+      "receiver": "Receive only (RX)",
+      "transceiver": "Transmit and receive (TRX)"
     },
-    "detail": {
-      "label": "Row detail",
-      "title": "Detail",
-      "none": "Select a row to see its detail.",
-      "close": "Close",
-      "pduLogging": "Record PDUs",
-      "pduDisabled": "PDU recording is off: no header, no decoded body and no hexadecimal is kept until it is turned on."
+    "gsm7Packing": {
+      "unpacked": "Unpacked (default)",
+      "packed": "Packed"
+    },
+    "gsm7Charset": {
+      "gsm0338": "GSM 03.38 (default)",
+      "latin1": "Latin-1 (alt-charset)"
     },
     "field": {
-      "clientMessageId": "Client identifier",
-      "smscMessageId": "SMSC identifier",
-      "sessionId": "Session",
-      "source": "Sender",
-      "dest": "Recipient",
-      "state": "State",
-      "commandStatus": "command_status",
-      "dlrStat": "Receipt stat",
-      "dlrErr": "Receipt err",
-      "segments": "Segments",
-      "attempts": "Attempts",
-      "createdAt": "Created",
-      "sentAt": "Sent",
-      "respAt": "Answered",
-      "dlrAt": "Receipt received",
-      "text": "Message",
-      "reason": "Reason",
-      "receivedAt": "Received",
-      "raw": "Raw body",
-      "direction": "Direction",
-      "commandId": "command_id",
-      "sequence": "sequence_number",
-      "ts": "Timestamp",
-      "decoded": "Decoded body",
-      "rawHex": "Raw hexadecimal"
+      "bindType": "Bind type",
+      "dlrIdMatching": "Receipt identifier matching",
+      "enquireLinkS": "enquire_link (s)",
+      "gsm7Charset": "GSM 7-bit character set",
+      "gsm7Packing": "GSM 7-bit packing",
+      "host": "Host",
+      "interfaceVersion": "SMPP version",
+      "jitter": "Jitter on the back-off",
+      "maxBackoffS": "Max back-off (s)",
+      "minBackoffS": "Min back-off (s)",
+      "minTps": "Throughput floor (msg/s)",
+      "name": "Name",
+      "port": "Port",
+      "reconnectEnabled": "Automatic reconnection",
+      "responseTimeoutS": "Response timeout (s)",
+      "systemId": "system_id",
+      "systemType": "system_type",
+      "throughputTps": "Target throughput (msg/s)",
+      "windowSize": "Window"
     },
-    "reason": {
-      "UNKNOWN_ID": "Unknown identifier",
-      "NO_IDENTIFIER": "No readable identifier"
+    "dlrIdMatching": {
+      "exact": "Strict",
+      "relaxed": "Lenient (case, zeroes)",
+      "bases": "Lenient + other base"
     },
-    "pending": "{{count}} update(s)"
+    "dlrIdMatchingHint": "Lenient also compares case and strips leading zeroes: two spellings of the same identifier, never two different identifiers.",
+    "dlrIdMatchingWarning": "“Other base” re-reads the identifier as hexadecimal or decimal. Two distinct identifiers can then be confused, and a receipt credit the wrong message. Reserve it for a message centre you know changes base.",
+    "throughputHint": "Zero means unlimited. The floor is the lower bound of the congestion adaptation; nothing reaches it before milestone 012."
+  },
+  "settings": {
+    "language": "Language",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System"
   }
 }
