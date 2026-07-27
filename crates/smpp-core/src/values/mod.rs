@@ -55,6 +55,15 @@
 //!   [`RegisteredDelivery`], which was re-exported without them, so the only
 //!   values constructible were `default()` and `request_all()`. Spec §23.3
 //!   asks for `registered_delivery = 1`, which is neither.
+//!
+//! # Milestone 008 additions
+//!
+//! [`MessageState`] is the payload of the `message_state` TLV of spec §7.8 —
+//! the machine-readable half of a delivery receipt, and the fallback when a
+//! message centre sends no `stat:` in the body. It is **not** this
+//! application's `messaging::MessageState`: one is a wire value with ten
+//! variants, the other the six-state lifecycle of spec §14.3. `messaging`
+//! imports this one under an alias for exactly that reason.
 
 mod gsm7;
 mod version;
@@ -65,8 +74,8 @@ pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 pub use rusmpp::{
     values::{
         Ansi41Specific, DataCoding, EsmClass, GsmFeatures, InterfaceVersion,
-        IntermediateNotification, MCDeliveryReceipt, MessagePayload, MessageType, MessagingMode,
-        Npi, PriorityFlag, RegisteredDelivery, ReplaceIfPresentFlag, ServiceType,
+        IntermediateNotification, MCDeliveryReceipt, MessagePayload, MessageState, MessageType,
+        MessagingMode, Npi, PriorityFlag, RegisteredDelivery, ReplaceIfPresentFlag, ServiceType,
         SmeOriginatedAcknowledgement, Ton, UserMessageReference,
     },
     CommandId, CommandStatus,
