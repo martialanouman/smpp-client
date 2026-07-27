@@ -70,6 +70,8 @@ impl SessionServices {
         password: Password,
         logs: &crate::logs::LogServices,
     ) -> Result<SessionHandle, ErrorDto> {
+        let matching = profile.dlr_id_matching();
+
         let session = self
             .registry
             .bind(profile, password)
@@ -82,8 +84,9 @@ impl SessionServices {
         self.spawn_metrics_ticker(app, &handle);
         // Milestone 008: the delivery queue is read rather than drained and
         // dropped. `LogServices` owns the pipeline because it owns the journal
-        // the receipts are correlated against.
-        logs.spawn_receipt_loop(app, session);
+        // the receipts are correlated against; the identifier-matching policy
+        // is the profile's, read here because this is where the profile is.
+        logs.spawn_receipt_loop(app, session, matching);
 
         Ok(handle)
     }

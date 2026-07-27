@@ -121,8 +121,16 @@
       "minBackoffS": "Back-off min (s)",
       "maxBackoffS": "Back-off max (s)",
       "reconnectEnabled": "Reconnexion automatique",
-      "jitter": "Jitter sur le back-off"
-    }
+      "jitter": "Jitter sur le back-off",
+      "dlrIdMatching": "Correspondance des identifiants d'accusé"
+    },
+    "dlrIdMatching": {
+      "exact": "Stricte",
+      "relaxed": "Souple (casse, zéros)",
+      "bases": "Souple + autre base"
+    },
+    "dlrIdMatchingHint": "Souple compare aussi la casse et retire les zéros de tête : deux écritures du même identifiant, jamais deux identifiants différents.",
+    "dlrIdMatchingWarning": "« Autre base » relit l'identifiant en hexadécimal ou en décimal. Deux identifiants distincts peuvent alors se confondre, et un accusé créditer le mauvais message. À réserver à un SMSC dont vous savez qu'il change de base."
   },
   "send": {
     "intro": "Envoyez un message unitaire vers un SMSC et lisez sa réponse. Les champs avancés reprennent la table de la spécification SMPP §7.3.",

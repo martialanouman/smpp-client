@@ -17,7 +17,7 @@ use std::sync::Arc;
 use logging_export::journal::Journal;
 use logging_export::pdu_log::{PduRecorder, StoredPduLog};
 use messaging::correlation::{
-    Correlator, IncomingReceipt, ReceiptNote, ReceiptObserver, ReceiptPipeline,
+    Correlator, IdMatching, IncomingReceipt, ReceiptNote, ReceiptObserver, ReceiptPipeline,
 };
 use messaging::dlr::{as_deliver_sm, classify, Incoming};
 use persistence::{
@@ -129,12 +129,18 @@ impl LogServices {
         &self,
         app: &AppHandle<R>,
         mut session: smpp_session::Session,
+        matching: IdMatching,
     ) {
         let session_id = session.handle.session_id();
         let (receipts, inbox) = tokio::sync::mpsc::channel(RECEIPT_QUEUE_CAPACITY);
 
+        // The policy comes from the SESSION PROFILE, not from a default chosen
+        // here. `IdMatching::Bases` is lossy — it can map two distinct
+        // identifiers onto each other — so it exists for the one message centre
+        // whose operator knows it changes base, and an escape hatch nothing can
+        // reach is not an escape hatch.
         let pipeline = ReceiptPipeline::new(
-            Correlator::new(self.messages.clone(), SystemClock),
+            Correlator::new(self.messages.clone(), SystemClock).with_matching(matching),
             self.orphans.clone(),
         );
         let observer = ReceiptForwarder {

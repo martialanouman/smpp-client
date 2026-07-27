@@ -20,6 +20,7 @@ pub use smpp_core::types::CampaignId;
 /// the lifecycle owns the type that carries it, and this crate implements its
 /// port. Re-exported because the whole message half of this crate's public
 /// surface speaks in these types, so `persistence::Message` still resolves.
+pub use messaging::correlation::IdMatching;
 pub use messaging::message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 
 use smpp_core::time::Timestamp;
@@ -92,6 +93,13 @@ pub struct SessionProfile {
     pub gsm7_charset: Gsm7BitCharset,
     /// Number of parallel binds for this logical session (spec §8.5).
     pub bind_count: u32,
+    /// How hard to look for a message when a delivery receipt quotes its
+    /// identifier differently (step-008 §6).
+    ///
+    /// A property of the **message centre**, like the two GSM 7-bit settings
+    /// beside it: whether identifiers come back in another base is something
+    /// the provider decides, not something a message carries.
+    pub dlr_id_matching: IdMatching,
     /// When the profile was created.
     pub created_at: Timestamp,
     /// When the profile was last written.
@@ -129,6 +137,7 @@ impl core::fmt::Debug for SessionProfile {
             .field("gsm7_packing", &self.gsm7_packing)
             .field("gsm7_charset", &self.gsm7_charset)
             .field("bind_count", &self.bind_count)
+            .field("dlr_id_matching", &self.dlr_id_matching)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
             .finish()
@@ -359,7 +368,7 @@ pub struct PduLogEntry {
 mod tests {
     use smpp_core::types::SessionId;
 
-    use super::{MessageFilter, SessionProfile};
+    use super::{IdMatching, MessageFilter, SessionProfile};
     use crate::records::BindType;
     use crate::Timestamp;
     use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
@@ -385,6 +394,7 @@ mod tests {
             gsm7_packing: Gsm7BitPacking::Unpacked,
             gsm7_charset: Gsm7BitCharset::Gsm0338,
             bind_count: 1,
+            dlr_id_matching: IdMatching::default(),
             created_at: Timestamp::now(),
             updated_at: Timestamp::now(),
         }

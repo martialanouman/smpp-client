@@ -386,6 +386,22 @@ export type Gsm7PackingDto =
 /**  Eight septets in seven octets. */
 "packed";
 
+/**
+ *  How hard to look for a message when a delivery receipt quotes its
+ *  identifier differently (step-008 §6).
+ * 
+ *  A closed enum rather than a free-form string: the storage carries a `CHECK`
+ *  constraint listing exactly these three, and a fourth value would be a
+ *  migration rather than an input.
+ */
+export type IdMatchingDto = 
+/**  The identifier as it arrived, and nothing else. */
+"exact" | 
+/**  Also the case variants and the unpadded form. Lossless, and the default. */
+"relaxed" | 
+/**  Also the other base. **Lossy** — see `messaging::correlation::IdMatching`. */
+"bases";
+
 /**  The protocol version announced at bind time (EF-CNX-04). */
 export type InterfaceVersionDto = 
 /**  SMPP v3.4, `interface_version` `0x34`. */
@@ -964,6 +980,11 @@ export type SessionProfileDto = {
 	gsm7Packing: Gsm7PackingDto,
 	/**  What those octets mean. */
 	gsm7Charset: Gsm7CharsetDto,
+	/**
+	 *  How hard to look for a message when a delivery receipt quotes its
+	 *  identifier differently (step-008 §6).
+	 */
+	dlrIdMatching: IdMatchingDto,
 	/**  Parallel binds for this logical session (spec §8.5, milestone 011). */
 	bindCount: number,
 };

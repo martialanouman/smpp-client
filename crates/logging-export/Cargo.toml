@@ -32,5 +32,13 @@ tokio = { workspace = true, features = ["sync"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
+# For the doubles that stand in for the two storage ports: `MessageJournal`
+# returns a `BoxStream`, so a double has to be able to build an empty one.
+futures-core.workspace = true
+futures-util.workspace = true
+
+# The orphan record is `messaging`'s, and a double has to build one.
+messaging = { path = "../messaging" }
+
 [lints]
 workspace = true

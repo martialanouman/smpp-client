@@ -50,6 +50,7 @@ export type {
   ErrorNotify,
   Gsm7CharsetDto,
   Gsm7PackingDto,
+  IdMatchingDto,
   InterfaceVersionDto,
   Language,
   LogFilterInput,

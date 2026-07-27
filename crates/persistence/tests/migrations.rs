@@ -67,6 +67,16 @@ const SHIPPED_MIGRATIONS: &[(&str, &str)] = &[
         "20260727090000_dlr_orphans.up.sql",
         "edb50001a43100a8f1f1700d8bac6fd2f23e0598668421c7b434c596109e789b",
     ),
+    // Milestone 008, step-008 §6: how hard to look for a message when a
+    // delivery receipt quotes its identifier differently.
+    (
+        "20260727120000_session_dlr_id_matching.down.sql",
+        "abead3a5979dd1d5a6e887af2007941d19b44105793609a3c944af619f2273bc",
+    ),
+    (
+        "20260727120000_session_dlr_id_matching.up.sql",
+        "5897cf125eed2557fb61a84eb8ec1266fbb417e89b5320a27a4003848195dde1",
+    ),
 ];
 
 /// The `migrations/` directory, resolved from this crate's manifest.

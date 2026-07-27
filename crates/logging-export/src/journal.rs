@@ -50,6 +50,22 @@ use crate::error::LoggingExportError;
 /// it defaults to [`Self::Truncated`], and nothing yet lets the interface ask
 /// for [`Self::Full`]. Reversing that — full by default, masking added later —
 /// would mean shipping a screen that leaks and fixing it afterwards.
+///
+/// # What this policy is deliberately NOT applied to
+///
+/// The **raw body of an orphaned receipt**. It was, and that was a bug that
+/// contradicted three places at once: the note on
+/// `messaging::correlation::OrphanReceipt::raw` ("an orphan whose body has been
+/// redacted is an orphan nobody can diagnose"), the comment in the migration
+/// that creates the table, and CA-008-04.
+///
+/// An orphan exists precisely because nothing could be made of it. The operator
+/// opening it is asking "what did my provider actually send?", and
+/// `<<< something no specifi…` does not answer that. The message content it may
+/// carry sits behind `text:`, at the **end** of a body whose useful half —
+/// `id:`, `stat:`, `err:` — comes first; truncating the whole thing throws away
+/// the diagnosis to protect the part that a 24-character budget was never
+/// reaching anyway.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ContentVisibility {
@@ -221,11 +237,8 @@ where
             .map_err(unavailable)?;
 
         Ok(OrphanPage {
-            orphans: page
-                .items
-                .into_iter()
-                .map(|orphan| self.apply_orphan_visibility(orphan))
-                .collect(),
+            // NOT put through the content policy. See below.
+            orphans: page.items,
             next: page.next,
             total,
         })
@@ -236,16 +249,6 @@ where
         message.text = message.text.map(|text| self.visibility.apply(&text));
 
         message
-    }
-
-    /// The same, on the `text:` an orphaned receipt quotes.
-    ///
-    /// The raw body of a receipt holds the head of the original message, so it
-    /// is content in the same sense the `text` column is.
-    fn apply_orphan_visibility(&self, mut orphan: StoredOrphan) -> StoredOrphan {
-        orphan.receipt.raw = self.visibility.apply(&orphan.receipt.raw);
-
-        orphan
     }
 }
 
@@ -264,6 +267,10 @@ fn unavailable(error: PersistenceError) -> LoggingExportError {
 
 #[cfg(test)]
 mod tests {
+    // `#[tokio::test]` expands to `Runtime::block_on`, which `clippy.toml`
+    // reserves for "the binary entry point". A test harness is one.
+    #![allow(clippy::disallowed_methods)]
+
     use super::{ContentVisibility, TRUNCATED_BODY_CHARS};
 
     #[test]
@@ -310,5 +317,117 @@ mod tests {
         let body = "a".repeat(TRUNCATED_BODY_CHARS);
 
         assert_eq!(ContentVisibility::Truncated.apply(&body), body);
+    }
+
+    /// **Non-regression: an orphan's raw body is handed over whole.**
+    ///
+    /// It was put through the content policy, so the one diagnostic an operator
+    /// has for "my delivery rate is wrong" arrived as
+    /// `<<< something no specifi…`. The useful half of a receipt body — `id:`,
+    /// `stat:`, `err:` — is at the front and fits in nobody's 24 characters.
+    ///
+    /// The test drives [`Journal::orphans`] rather than asserting on a private
+    /// helper: the helper was **deleted**, and a test on a helper cannot notice
+    /// a call site being added back.
+    #[tokio::test]
+    async fn an_orphan_keeps_its_whole_body_under_every_policy() {
+        const BODY: &str = "id:STRANGER sub:001 dlvrd:000 submit date:2607261200 \
+                            done date:2607261205 stat:UNDELIV err:058 text:promotion du mois";
+
+        for visibility in [ContentVisibility::Truncated, ContentVisibility::Full] {
+            let store = OneOrphan(BODY);
+            let journal = Journal::new(NoMessages, store).showing(visibility);
+
+            let page = journal
+                .orphans(None, Cursor::start(), 10)
+                .await
+                .expect("the double answers");
+
+            assert_eq!(
+                page.orphans[0].receipt.raw, BODY,
+                "the raw body must survive {visibility:?} whole"
+            );
+            assert!(
+                page.orphans[0].receipt.raw.contains("err:058"),
+                "the diagnostic fields sit past any truncation budget"
+            );
+        }
+    }
+
+    // --- doubles for the orphan test ------------------------------------------
+
+    use futures_core::stream::BoxStream;
+    use messaging::correlation::{OrphanReason, OrphanReceipt};
+    use persistence::{
+        Message, MessageFilter, OrphanJournal, Page, PersistenceError, StoredOrphan, Timestamp,
+    };
+    use smpp_core::types::SessionId;
+
+    use super::{Cursor, Journal};
+
+    /// A message journal holding nothing: this test is about orphans.
+    struct NoMessages;
+
+    impl persistence::ports::MessageJournal for NoMessages {
+        async fn page_messages(
+            &self,
+            _filter: &MessageFilter,
+            _cursor: Cursor,
+            _limit: u32,
+        ) -> Result<Page<Message>, PersistenceError> {
+            Ok(Page {
+                items: Vec::new(),
+                next: None,
+            })
+        }
+
+        async fn count_messages(&self, _filter: &MessageFilter) -> Result<u64, PersistenceError> {
+            Ok(0)
+        }
+
+        fn stream_messages(
+            &self,
+            _filter: &MessageFilter,
+        ) -> BoxStream<'_, Result<Message, PersistenceError>> {
+            Box::pin(futures_util::stream::empty())
+        }
+    }
+
+    /// An orphan journal holding exactly one receipt, with this body.
+    struct OneOrphan(&'static str);
+
+    impl OrphanJournal for OneOrphan {
+        async fn page_orphans(
+            &self,
+            _session_id: Option<SessionId>,
+            _cursor: Cursor,
+            _limit: u32,
+        ) -> Result<Page<StoredOrphan>, PersistenceError> {
+            Ok(Page {
+                items: vec![StoredOrphan {
+                    id: 1,
+                    receipt: OrphanReceipt {
+                        session_id: None,
+                        smsc_message_id: Some(String::from("STRANGER")),
+                        reason: OrphanReason::UnknownIdentifier,
+                        dlr_stat: Some(String::from("UNDELIV")),
+                        dlr_err: Some(String::from("058")),
+                        submit_date: None,
+                        done_date: None,
+                        raw: self.0.to_owned(),
+                        received_at: Timestamp::parse("2026-07-26T12:00:00Z")
+                            .expect("valid instant"),
+                    },
+                }],
+                next: None,
+            })
+        }
+
+        async fn count_orphans(
+            &self,
+            _session_id: Option<SessionId>,
+        ) -> Result<u64, PersistenceError> {
+            Ok(1)
+        }
     }
 }

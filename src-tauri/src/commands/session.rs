@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, State};
 
+use messaging::correlation::IdMatching;
 use persistence::ports::SessionProfileRepository as _;
 use smpp_core::types::SessionId;
 use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
@@ -124,6 +125,45 @@ impl From<Gsm7BitPacking> for Gsm7PackingDto {
     }
 }
 
+/// How hard to look for a message when a delivery receipt quotes its
+/// identifier differently (step-008 §6).
+///
+/// A closed enum rather than a free-form string: the storage carries a `CHECK`
+/// constraint listing exactly these three, and a fourth value would be a
+/// migration rather than an input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum IdMatchingDto {
+    /// The identifier as it arrived, and nothing else.
+    Exact,
+    /// Also the case variants and the unpadded form. Lossless, and the default.
+    Relaxed,
+    /// Also the other base. **Lossy** — see `messaging::correlation::IdMatching`.
+    Bases,
+}
+
+impl From<IdMatchingDto> for IdMatching {
+    fn from(value: IdMatchingDto) -> Self {
+        match value {
+            IdMatchingDto::Exact => Self::Exact,
+            IdMatchingDto::Relaxed => Self::Relaxed,
+            IdMatchingDto::Bases => Self::Bases,
+        }
+    }
+}
+
+impl From<IdMatching> for IdMatchingDto {
+    fn from(value: IdMatching) -> Self {
+        match value {
+            IdMatching::Exact => Self::Exact,
+            IdMatching::Bases => Self::Bases,
+            // `IdMatching` is `#[non_exhaustive]`; the safe fallback is the
+            // lossless default, never the lossy one.
+            _ => Self::Relaxed,
+        }
+    }
+}
+
 /// What those octets mean (ADR 0009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -199,6 +239,9 @@ pub(crate) struct SessionProfileDto {
     pub(crate) gsm7_packing: Gsm7PackingDto,
     /// What those octets mean.
     pub(crate) gsm7_charset: Gsm7CharsetDto,
+    /// How hard to look for a message when a delivery receipt quotes its
+    /// identifier differently (step-008 §6).
+    pub(crate) dlr_id_matching: IdMatchingDto,
     /// Parallel binds for this logical session (spec §8.5, milestone 011).
     pub(crate) bind_count: u32,
 }
@@ -235,6 +278,7 @@ impl SessionProfileDto {
             .reconnect(reconnect)
             .gsm7_packing(self.gsm7_packing.into())
             .gsm7_charset(self.gsm7_charset.into())
+            .dlr_id_matching(self.dlr_id_matching.into())
             .bind_count(self.bind_count)
             .build()
             .map_err(|error| ErrorDto::from(&error))
@@ -265,6 +309,7 @@ impl From<&SessionProfile> for SessionProfileDto {
             jitter: reconnect.has_jitter(),
             gsm7_packing: profile.gsm7_packing().into(),
             gsm7_charset: profile.gsm7_charset().into(),
+            dlr_id_matching: profile.dlr_id_matching().into(),
             bind_count: profile.bind_count(),
         }
     }
@@ -634,6 +679,7 @@ mod tests {
             jitter: true,
             gsm7_packing: Gsm7PackingDto::Unpacked,
             gsm7_charset: Gsm7CharsetDto::Gsm0338,
+            dlr_id_matching: IdMatchingDto::Relaxed,
             bind_count: 1,
         }
     }

@@ -43,8 +43,8 @@ mod repositories;
 pub use db::{Database, DatabaseConfig, SchemaObject};
 pub use error::PersistenceError;
 pub use records::{
-    BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, ListId,
-    Message, MessageFilter, MessageState, MessageStateUpdate, PduDirection, PduLogEntry,
+    BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, IdMatching,
+    ListId, Message, MessageFilter, MessageState, MessageStateUpdate, PduDirection, PduLogEntry,
     SessionProfile, SmscMessageIdUpdate,
 };
 pub use repositories::{

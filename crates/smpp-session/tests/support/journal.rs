@@ -253,21 +253,33 @@ impl MessageRepository for Journal {
     async fn find_message_by_smsc_id(
         &self,
         smsc_message_id: &str,
+        session_id: Option<smpp_core::types::SessionId>,
     ) -> Result<Option<Message>, MessageStoreError> {
+        // The session is part of the key, exactly as it is in SQL. A double
+        // that ignored it would let a receipt correlate across sessions here
+        // and fail against the real repository — which is the failure mode the
+        // predicate exists to prevent.
         Ok(self
             .inner
             .lock()
             .await
             .rows
             .iter()
-            .find(|row| row.smsc_message_id.as_deref() == Some(smsc_message_id))
+            .find(|row| {
+                row.smsc_message_id.as_deref() == Some(smsc_message_id)
+                    && match (session_id, row.session_id) {
+                        (None, _) => true,
+                        (Some(wanted), Some(stored)) => wanted == stored,
+                        (Some(_), None) => false,
+                    }
+            })
             .cloned())
     }
 
-    async fn update_state(&self, update: &MessageStateUpdate) -> Result<(), MessageStoreError> {
+    async fn update_state(&self, update: &MessageStateUpdate) -> Result<bool, MessageStoreError> {
         self.update_states(core::slice::from_ref(update))
             .await
-            .map(|_| ())
+            .map(|applied| applied == 1)
     }
 
     async fn update_states(
@@ -305,9 +317,15 @@ impl MessageRepository for Journal {
             }
         }
 
+        // The number of transitions actually WRITTEN, not the size of the
+        // batch. The two differ whenever the machine refuses one, and a double
+        // that reported the batch size would let the pipeline announce to the
+        // interface a transition the real journal declines.
+        let written = applied.len() as u64;
+
         state.events.push(JournalEvent::Transitioned(applied));
 
-        Ok(updates.len() as u64)
+        Ok(written)
     }
 }
 

@@ -114,9 +114,24 @@ pub trait MessageRepository: Send + Sync {
         client_message_id: ClientMessageId,
     ) -> impl Future<Output = Result<Option<Message>, MessageStoreError>> + Send;
 
-    /// Reads one message by the identifier the SMSC assigned.
+    /// Reads one message by the identifier the SMSC assigned, on one session.
     ///
     /// The lookup a delivery receipt needs (spec §7.8, milestone 008).
+    ///
+    /// # Why the session is part of the key
+    ///
+    /// `smsc_message_id` is unique **per message centre**, and nothing more.
+    /// CLAUDE.md §1 has this application talk to "one or several SMSCs", and two
+    /// providers handing out sequential identifiers both mint `1234` within the
+    /// week. Without the session in the predicate, a receipt arriving on the
+    /// second session finds the *first* session's message — the oldest row
+    /// wins — and fails a message that has nothing to do with it. Silently, and
+    /// deterministically.
+    ///
+    /// `None` means "any session", and is not a convenience: a message sent
+    /// before its profile was deleted has a `NULL` `session_id`
+    /// (`ON DELETE SET NULL`, spec §17.6), and a caller that cannot name a
+    /// session must still be able to find it.
     ///
     /// # Errors
     ///
@@ -124,9 +139,17 @@ pub trait MessageRepository: Send + Sync {
     fn find_message_by_smsc_id(
         &self,
         smsc_message_id: &str,
+        session_id: Option<SessionId>,
     ) -> impl Future<Output = Result<Option<Message>, MessageStoreError>> + Send;
 
-    /// Applies one state transition.
+    /// Applies one state transition, reporting whether it was **written**.
+    ///
+    /// `false` means the message exists and the machine of spec §14.3 refused
+    /// the move — a delivery receipt for a message that already failed, most
+    /// often. That is not an error and not a fault of the caller, but it is
+    /// something the caller must be able to see: announcing to the interface a
+    /// transition the journal declined is how a screen ends up showing `FAILED`
+    /// for a row the journal holds at `DELIVERED`.
     ///
     /// # Errors
     ///
@@ -134,13 +157,18 @@ pub trait MessageRepository: Send + Sync {
     fn update_state(
         &self,
         update: &MessageStateUpdate,
-    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
+    ) -> impl Future<Output = Result<bool, MessageStoreError>> + Send;
 
     /// Applies a batch of state transitions in **one** transaction.
     ///
     /// All-or-nothing, and that is observable: if any message of the batch is
     /// missing, the whole batch is rolled back and **none** of the transitions
     /// applies.
+    ///
+    /// Returns how many transitions were **written**, which is not the length
+    /// of the batch: the machine of spec §14.3 refuses some of them, and a
+    /// caller told otherwise reports progress that did not happen. See
+    /// [`Self::update_state`].
     ///
     /// # Errors
     ///

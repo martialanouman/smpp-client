@@ -66,27 +66,55 @@ use crate::ports::{MessageRepository, MessageStoreError};
 
 /// How hard to look for a message when the identifier does not match verbatim.
 ///
-/// # Why this is a setting and not a fixed rule
+/// # The three policies, and why the middle one is the default
 ///
-/// step-008 §6: the first cause of uncorrelated receipts in production is a
-/// message centre that answers `submit_sm` with an identifier in one base and
-/// sends the receipt in another — hexadecimal in `submit_sm_resp`, decimal in
-/// the body of the `deliver_sm`, or the same digits in a different case.
+/// step-008 §6 names the problem: a message centre that answers `submit_sm`
+/// with an identifier in one form and quotes it in another. Two kinds of
+/// difference exist, and they are **not** equally safe to paper over.
 ///
-/// Trying the alternatives costs one indexed lookup each and fixes the
-/// commonest failure, so it is the **default**. It is nevertheless not free of
-/// risk: a message centre whose identifiers are opaque strings could, in
-/// principle, mint both `1A` and `26`, and the relaxed search would credit the
-/// wrong one. [`Self::Exact`] exists for that centre, and the choice belongs to
-/// the session profile rather than to this module.
+/// A difference of **spelling** — `ABCDEF` against `abcdef`, `0000000042`
+/// against `42` — is lossless. Two identifiers that differ only in case or in
+/// leading zeroes are the same identifier written twice; no message centre
+/// mints both as distinct. [`Self::Relaxed`] tries those, and is the default.
+///
+/// A difference of **base** is not. Reading `101` as hexadecimal gives `257`,
+/// and reading it as decimal-rendered-hex gives `65`: three *different*
+/// identifiers, any of which some other message may legitimately carry. That is
+/// [`Self::Bases`], and it is opt-in.
+///
+/// # Why the base conversion was demoted, and it is not a matter of taste
+///
+/// The "identifier not found" path is the **nominal** path, not the rare one:
+/// this milestone produces one orphan per extra segment of every split message
+/// (see the module header). Each of those orphans probes two or three extra
+/// identifiers against a dense numeric space — Kannel and most message centres
+/// hand out sequential numbers — and [`Correlator::correlate`] takes the
+/// **first** candidate that finds a row.
+///
+/// So with the base conversion on by default, a receipt for segment 2 of one
+/// message reliably credits an unrelated message that happens to sit at the
+/// reinterpreted number. A `stat:UNDELIV` fails a message nobody complained
+/// about; a `stat:DELIVRD` marks as delivered one that never was. Deterministic,
+/// silent, and expected rather than improbable.
+///
+/// The escape hatch is per session profile, which is what step-008 §6
+/// anticipates: a centre known to change base gets [`Self::Bases`], and pays
+/// for it with the risk above rather than imposing it on every other centre.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IdMatching {
     /// The identifier as it arrived, and nothing else.
     Exact,
-    /// Also try the case variants, the two bases, and the unpadded form.
+    /// Also try the case variants and the unpadded form.
+    ///
+    /// Both are lossless: they cannot map two distinct identifiers onto each
+    /// other.
     #[default]
     Relaxed,
+    /// Everything [`Self::Relaxed`] tries, plus the other base.
+    ///
+    /// **Lossy.** Read the type's note before turning this on for a session.
+    Bases,
 }
 
 impl IdMatching {
@@ -110,10 +138,22 @@ impl IdMatching {
         push_new(&mut candidates, received.to_ascii_uppercase());
         push_new(&mut candidates, received.to_ascii_lowercase());
 
-        // Decimal seen as hexadecimal, and back. `u64` rather than `u128`: an
-        // SMPP `message_id` is a 65-octet C-Octet String in principle, but the
-        // centres that change base are the ones handing out a machine word,
-        // and a value that does not fit one is not a number this conversion is
+        // Padding. `id:0000000042` against a stored `42`.
+        let unpadded = received.trim_start_matches('0');
+
+        if !unpadded.is_empty() {
+            push_new(&mut candidates, unpadded.to_owned());
+        }
+
+        if self == Self::Relaxed {
+            return candidates;
+        }
+
+        // Decimal seen as hexadecimal, and back — LOSSY, and reached only when
+        // a session profile asked for it. `u64` rather than `u128`: an SMPP
+        // `message_id` is a 65-octet C-Octet String in principle, but the
+        // centres that change base are the ones handing out a machine word, and
+        // a value that does not fit one is not a number this conversion is
         // about.
         if let Ok(decimal) = received.parse::<u64>() {
             push_new(&mut candidates, format!("{decimal:x}"));
@@ -124,15 +164,44 @@ impl IdMatching {
             push_new(&mut candidates, hexadecimal.to_string());
         }
 
-        // Padding. `id:0000000042` against a stored `42`.
-        let unpadded = received.trim_start_matches('0');
-
-        if !unpadded.is_empty() {
-            push_new(&mut candidates, unpadded.to_owned());
-        }
-
         candidates
     }
+
+    /// Every policy, in increasing order of tolerance.
+    pub const ALL: &'static [Self] = &[Self::Exact, Self::Relaxed, Self::Bases];
+
+    /// The text form stored on the session profile.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Relaxed => "relaxed",
+            Self::Bases => "bases",
+        }
+    }
+
+    /// Parses the stored form, or `None` when the text names no known policy.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|policy| policy.as_str() == raw)
+    }
+
+    /// Whether this policy can map two distinct identifiers onto each other.
+    ///
+    /// Exposed so the interface can warn where the operator turns it on, rather
+    /// than leaving the risk in a comment nobody reads.
+    #[must_use]
+    pub const fn is_lossy(self) -> bool {
+        matches!(self, Self::Bases)
+    }
+}
+
+/// Narrows a length for the outcome counters, saturating rather than wrapping.
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// Appends `value` unless the list already holds it, preserving order.
@@ -304,7 +373,11 @@ where
         let mut matched = None;
 
         for candidate in self.matching.candidates(identifier) {
-            if let Some(message) = self.repository.find_message_by_smsc_id(&candidate).await? {
+            if let Some(message) = self
+                .repository
+                .find_message_by_smsc_id(&candidate, session_id)
+                .await?
+            {
                 if candidate != identifier {
                     // Worth a line: it is the signal that this session's
                     // message centre changes the form of its identifiers, and
@@ -499,8 +572,18 @@ impl ReceiptObserver for () {
 /// What one commit did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BatchOutcome {
-    /// Transitions written.
+    /// Transitions the journal actually **wrote**.
+    ///
+    /// Not the number of receipts that correlated: the machine of spec §14.3
+    /// refuses some of them, and the difference is [`Self::refused`].
     pub applied: u64,
+    /// Transitions that correlated and which the journal declined.
+    ///
+    /// A late receipt for a message that already failed, most often. Not a
+    /// fault — but a batch where this is large means the message centre and
+    /// this application disagree about where messages stand, which is worth
+    /// seeing.
+    pub refused: u64,
     /// Orphans journalled.
     pub orphaned: u64,
     /// Receipts that correlated but called for no transition.
@@ -647,11 +730,28 @@ where
             }
         }
 
-        outcome.applied = self.write_transitions(&updates).await;
+        let written = self.write_transitions(&updates).await;
+
+        outcome.applied = count(written.iter().filter(|applied| **applied).count());
+        outcome.refused = count(written.len()) - outcome.applied;
         outcome.orphaned = self.write_orphans(&orphans).await;
 
-        if !notes.is_empty() {
-            observer.receipts_applied(&notes);
+        // ONLY the transitions the journal actually wrote.
+        //
+        // `notes` and `updates` are built together and stay index-aligned, so
+        // the flags line up. Announcing the whole batch instead was a real bug:
+        // the state machine refuses a receipt for a message that already
+        // failed, the row keeps `DELIVERED`, and the interface was told
+        // `FAILED` anyway. The `WHERE` clause protects the journal; it does not
+        // protect an event nobody filtered.
+        let announced: Vec<ReceiptNote> = notes
+            .into_iter()
+            .zip(written)
+            .filter_map(|(note, applied)| applied.then_some(note))
+            .collect();
+
+        if !announced.is_empty() {
+            observer.receipts_applied(&announced);
         }
 
         outcome
@@ -671,13 +771,30 @@ where
     /// the ones that still fail are logged and dropped. The cost is a hundred
     /// transactions on a path that normally does one, on a failure that
     /// normally does not happen.
-    async fn write_transitions(&self, updates: &[MessageStateUpdate]) -> u64 {
+    async fn write_transitions(&self, updates: &[MessageStateUpdate]) -> Vec<bool> {
         if updates.is_empty() {
-            return 0;
+            return Vec::new();
         }
 
         match self.correlator.repository().update_states(updates).await {
-            Ok(applied) => applied,
+            // Every transition landed, which is the nominal case: one
+            // transaction, and nothing to attribute.
+            Ok(applied) if applied == updates.len() as u64 => vec![true; updates.len()],
+            // Some were refused by the state machine. The batch IS committed —
+            // this is not a failure — but the caller has to know **which** ones
+            // to announce, and a count cannot say. Replaying resolves it, and
+            // is safe precisely because a transition is idempotent
+            // (CLAUDE.md §4): reapplying one that landed writes the same values
+            // and reports the same answer.
+            Ok(applied) => {
+                tracing::debug!(
+                    batch = updates.len(),
+                    applied,
+                    "the journal declined part of a receipt batch; attributing it"
+                );
+
+                self.attribute(updates).await
+            }
             Err(error) => {
                 tracing::warn!(
                     error = %error,
@@ -685,22 +802,39 @@ where
                     "a batch of delivery receipts was refused; replaying it one by one"
                 );
 
-                let mut applied = 0;
-
-                for update in updates {
-                    match self.correlator.repository().update_state(update).await {
-                        Ok(()) => applied += 1,
-                        Err(error) => tracing::error!(
-                            error = %error,
-                            client_message_id = %update.client_message_id,
-                            "a delivery receipt could not be journalled"
-                        ),
-                    }
-                }
-
-                applied
+                self.attribute(updates).await
             }
         }
+    }
+
+    /// Applies each transition on its own, reporting which ones were written.
+    ///
+    /// The fallback of [`Self::write_transitions`], and the reason it is one
+    /// transaction per transition rather than a retry of the batch:
+    /// `update_states` is all-or-nothing, which is the right guarantee for the
+    /// send path — a batch there is one message's two transitions — and the
+    /// wrong failure mode here, where a batch is two hundred unrelated receipts
+    /// and one deleted message would discard a hundred and ninety-nine
+    /// deliveries.
+    async fn attribute(&self, updates: &[MessageStateUpdate]) -> Vec<bool> {
+        let mut written = Vec::with_capacity(updates.len());
+
+        for update in updates {
+            match self.correlator.repository().update_state(update).await {
+                Ok(applied) => written.push(applied),
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        client_message_id = %update.client_message_id,
+                        "a delivery receipt could not be journalled"
+                    );
+
+                    written.push(false);
+                }
+            }
+        }
+
+        written
     }
 
     /// Journals the orphans of one batch in **one** transaction.
@@ -747,7 +881,7 @@ mod tests {
     use std::sync::Mutex;
 
     use smpp_core::time::{Clock, Timestamp};
-    use smpp_core::types::{ClientMessageId, Msisdn};
+    use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
 
     use super::{
         BatchPolicy, Correlated, Correlator, IdMatching, IncomingReceipt, OrphanReason,
@@ -810,6 +944,32 @@ mod tests {
         /// How many transactions the journal was asked to commit.
         fn transactions(&self) -> usize {
             self.transactions.lock().expect("uncontended").len()
+        }
+
+        /// Applies one transition, reporting whether the machine allowed it.
+        ///
+        /// The double **models the state machine**, on purpose. A double that
+        /// answered "applied" to everything would let the pipeline announce a
+        /// transition the real journal declines — which is exactly the bug that
+        /// shipped, and exactly what no test could catch while the double
+        /// returned `updates.len()`.
+        fn apply(&self, update: &MessageStateUpdate) -> bool {
+            let mut rows = self.by_smsc_id.lock().expect("uncontended");
+
+            let Some(row) = rows
+                .values_mut()
+                .find(|row| row.client_message_id == update.client_message_id)
+            else {
+                return false;
+            };
+
+            if !row.state.can_move_to(update.state) {
+                return false;
+            }
+
+            row.state = update.state;
+
+            true
         }
     }
 
@@ -894,27 +1054,36 @@ mod tests {
         async fn find_message_by_smsc_id(
             &self,
             smsc_message_id: &str,
+            session_id: Option<SessionId>,
         ) -> Result<Option<Message>, MessageStoreError> {
             self.lookups
                 .lock()
                 .expect("uncontended")
                 .push(smsc_message_id.to_owned());
 
+            // The session is part of the key, exactly as it is in SQL: a
+            // double that ignored it would let a receipt correlate across
+            // sessions here and fail against the real repository.
             Ok(self
                 .by_smsc_id
                 .lock()
                 .expect("uncontended")
                 .get(smsc_message_id)
+                .filter(|message| match (session_id, message.session_id) {
+                    (None, _) => true,
+                    (Some(wanted), Some(stored)) => wanted == stored,
+                    (Some(_), None) => false,
+                })
                 .cloned())
         }
 
         async fn update_state(
             &self,
-            _update: &MessageStateUpdate,
-        ) -> Result<(), MessageStoreError> {
+            update: &MessageStateUpdate,
+        ) -> Result<bool, MessageStoreError> {
             self.transactions.lock().expect("uncontended").push(1);
 
-            Ok(())
+            Ok(self.apply(update))
         }
 
         async fn update_states(
@@ -930,7 +1099,9 @@ mod tests {
                 .expect("uncontended")
                 .push(updates.len());
 
-            Ok(updates.len().try_into().unwrap_or(u64::MAX))
+            let applied = updates.iter().filter(|update| self.apply(update)).count();
+
+            Ok(applied.try_into().unwrap_or(u64::MAX))
         }
     }
 
@@ -1141,13 +1312,15 @@ mod tests {
     }
 
     /// step-008 §6 — the identifier came back hexadecimal and the receipt
-    /// quotes it in decimal. The commonest cause of uncorrelated receipts.
+    /// quotes it in decimal. The commonest cause of uncorrelated receipts, and
+    /// the reason [`IdMatching::Bases`] exists — **for the session that asked
+    /// for it**, which is why this test has to opt in.
     #[tokio::test]
-    async fn an_identifier_sent_in_another_base_still_correlates() {
+    async fn an_identifier_sent_in_another_base_correlates_when_the_session_asked() {
         let client_message_id = ClientMessageId::new();
         // 0x2a == 42.
         let journal = FakeJournal::holding(&[("2a", client_message_id)]);
-        let correlator = Correlator::new(journal, frozen());
+        let correlator = Correlator::new(journal, frozen()).with_matching(IdMatching::Bases);
         let receipt = parse_receipt_body("id:42 stat:DELIVRD");
 
         let Correlated::Matched {
@@ -1159,6 +1332,147 @@ mod tests {
         };
 
         assert_eq!(matched, client_message_id);
+    }
+
+    /// **The missing negative test, and the bug it pins.**
+    ///
+    /// The base conversion used to be on by default, and `correlate` takes the
+    /// **first** candidate that finds a row. So a receipt whose identifier is
+    /// genuinely unknown — the nominal case in this milestone, since every
+    /// extra segment of a split message produces one — reliably credited
+    /// whichever unrelated message happened to sit at the reinterpreted number.
+    ///
+    /// The setup is the one from the review, and it is not contrived: two
+    /// messages on a centre handing out sequential numbers, and a receipt for
+    /// segment 2 of the second. `candidates("101")` under the old default was
+    /// `["101", "65", "257"]`; `"101"` is absent by construction — milestone
+    /// 006 keeps only segment 1's identifier — and `"65"` belongs to somebody
+    /// else.
+    #[tokio::test]
+    async fn a_receipt_for_an_unknown_identifier_does_not_credit_another_message() {
+        let innocent = ClientMessageId::new();
+        let journal = FakeJournal::holding(&[
+            // 0x65 == 101: the identifier the old default would reinterpret to.
+            ("65", innocent),
+            ("100", ClientMessageId::new()),
+        ]);
+        let correlator = Correlator::new(journal, frozen());
+
+        // Segment 2 of the second message. Nothing in the journal carries it.
+        let receipt = parse_receipt_body("id:101 stat:UNDELIV err:058");
+
+        let outcome = correlator.correlate(None, &receipt).await.expect("answers");
+
+        match outcome {
+            Correlated::Orphan(orphan) => {
+                assert_eq!(orphan.reason, OrphanReason::UnknownIdentifier);
+                assert_eq!(orphan.smsc_message_id.as_deref(), Some("101"));
+            }
+            Correlated::Matched {
+                client_message_id, ..
+            } => panic!(
+                "the receipt credited {client_message_id}; the innocent message is {innocent}"
+            ),
+            other => panic!("expected an orphan, got {other:?}"),
+        }
+    }
+
+    /// The same, in the direction that marks a message as delivered. A
+    /// `stat:DELIVRD` mis-credited is worse than a `stat:UNDELIV`: it inflates
+    /// every delivery figure milestone 014 draws.
+    #[tokio::test]
+    async fn a_delivered_receipt_for_an_unknown_identifier_credits_nobody() {
+        let journal = FakeJournal::holding(&[("65", ClientMessageId::new())]);
+        let correlator = Correlator::new(journal, frozen());
+
+        assert!(matches!(
+            correlator
+                .correlate(None, &parse_receipt_body("id:101 stat:DELIVRD"))
+                .await
+                .expect("answers"),
+            Correlated::Orphan(_)
+        ));
+    }
+
+    /// The default probes only **lossless** spellings, so an unknown identifier
+    /// cannot reach a different one. Stated on the candidate list itself, where
+    /// it is a property rather than a scenario.
+    #[test]
+    fn the_default_policy_never_proposes_a_different_identifier() {
+        for received in ["101", "42", "2a", "0042", "ABCDEF", "SMSC-1"] {
+            for candidate in IdMatching::Relaxed.candidates(received) {
+                assert!(
+                    candidate.eq_ignore_ascii_case(received)
+                        || candidate.eq_ignore_ascii_case(received.trim_start_matches('0')),
+                    "the default proposed {candidate:?} for {received:?}, which is a \
+                     DIFFERENT identifier, not another spelling of the same one"
+                );
+            }
+        }
+    }
+
+    /// And the opt-in policy does propose different ones — which is exactly why
+    /// it is opt-in.
+    #[test]
+    fn the_base_policy_proposes_identifiers_that_are_not_the_received_one() {
+        let candidates = IdMatching::Bases.candidates("101");
+
+        assert!(candidates.contains(&String::from("65")), "{candidates:?}");
+        assert!(candidates.contains(&String::from("257")), "{candidates:?}");
+        assert!(IdMatching::Bases.is_lossy());
+        assert!(!IdMatching::Relaxed.is_lossy());
+        assert!(!IdMatching::Exact.is_lossy());
+    }
+
+    /// **Two providers both minting `1234`.** `smsc_message_id` is unique per
+    /// message centre and nothing more, so the session has to be part of the
+    /// key — otherwise the oldest row wins and a receipt fails a message that
+    /// has nothing to do with it.
+    #[tokio::test]
+    async fn a_receipt_correlates_within_its_own_session_only() {
+        let first_session = SessionId::new();
+        let second_session = SessionId::new();
+        let on_first = ClientMessageId::new();
+
+        // One row under `1234`, on the FIRST session — the oldest, which is
+        // the one `ORDER BY rowid LIMIT 1` returns when the session is not part
+        // of the predicate.
+        let journal = FakeJournal::default();
+        let mut older = a_message();
+        older.client_message_id = on_first;
+        older.session_id = Some(first_session);
+        older.smsc_message_id = Some(String::from("1234"));
+        journal
+            .by_smsc_id
+            .lock()
+            .expect("uncontended")
+            .insert(String::from("1234"), older);
+
+        let correlator = Correlator::new(journal, frozen());
+        let receipt = parse_receipt_body("id:1234 stat:UNDELIV err:058");
+
+        // The receipt arrives on the SECOND session, whose message is not the
+        // one stored under `1234`.
+        assert!(
+            matches!(
+                correlator
+                    .correlate(Some(second_session), &receipt)
+                    .await
+                    .expect("answers"),
+                Correlated::Orphan(_)
+            ),
+            "a receipt must not correlate to another session's message"
+        );
+
+        // And on the first session it does correlate, so the filter is a
+        // predicate and not a blanket refusal.
+        assert!(matches!(
+            correlator
+                .correlate(Some(first_session), &receipt)
+                .await
+                .expect("answers"),
+            Correlated::Matched { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1532,6 +1846,71 @@ mod tests {
             *pipeline.orphans.transactions.lock().expect("uncontended"),
             1
         );
+    }
+
+    /// **The interface is told only what the journal wrote.**
+    ///
+    /// `notes` used to be announced whole, before the write and without
+    /// filtering. The state machine protects the *journal*; it does not protect
+    /// an event nobody filtered. So a late `UNDELIV` for a message already
+    /// `DELIVERED` left the row alone and told the screen `FAILED` — the badge
+    /// and the journal disagreeing about the same message.
+    ///
+    /// Both receipts are put in the **same batch** here, which is the harder
+    /// case and the one the review named.
+    #[tokio::test(start_paused = true)]
+    async fn a_transition_the_journal_refuses_is_not_announced() {
+        let client_message_id = ClientMessageId::new();
+        let journal = FakeJournal::holding(&[("SMSC-1", client_message_id)]);
+        let pipeline =
+            ReceiptPipeline::new(Correlator::new(journal, frozen()), FakeOrphans::default());
+        let observer = RecordingObserver::default();
+
+        let mut pending = vec![
+            IncomingReceipt {
+                session_id: None,
+                receipt: parse_receipt_body("id:SMSC-1 stat:DELIVRD err:000"),
+            },
+            IncomingReceipt {
+                session_id: None,
+                receipt: parse_receipt_body("id:SMSC-1 stat:UNDELIV err:058"),
+            },
+        ];
+
+        let outcome = pipeline.commit(&mut pending, &observer).await;
+
+        assert_eq!(outcome.applied, 1, "DELIVERED lands, FAILED is refused");
+        assert_eq!(outcome.refused, 1);
+
+        let announced: Vec<MessageState> = observer
+            .batches()
+            .into_iter()
+            .flatten()
+            .map(|note| note.state)
+            .collect();
+
+        assert_eq!(
+            announced,
+            vec![MessageState::Delivered],
+            "the interface must not be told about a transition the journal declined"
+        );
+    }
+
+    /// And when every transition lands, the whole batch is announced — the
+    /// filter must not be a blanket refusal.
+    #[tokio::test(start_paused = true)]
+    async fn every_transition_the_journal_writes_is_announced() {
+        let (journal, receipts) = a_backlog(4);
+        let pipeline =
+            ReceiptPipeline::new(Correlator::new(journal, frozen()), FakeOrphans::default());
+        let observer = RecordingObserver::default();
+        let mut pending = receipts;
+
+        let outcome = pipeline.commit(&mut pending, &observer).await;
+
+        assert_eq!(outcome.applied, 4);
+        assert_eq!(outcome.refused, 0);
+        assert_eq!(observer.batches().into_iter().flatten().count(), 4);
     }
 
     /// A batch the journal refuses as a whole is replayed one transition at a

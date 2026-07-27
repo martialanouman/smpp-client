@@ -50,6 +50,7 @@ function aProfile(sessionId: string): SessionProfileDto {
     gsm7Packing: "unpacked",
     gsm7Charset: "gsm0338",
     bindCount: 1,
+    dlrIdMatching: "relaxed",
   };
 }
 

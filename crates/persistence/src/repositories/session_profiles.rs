@@ -4,6 +4,7 @@ use smpp_core::types::SessionId;
 
 use crate::db::Database;
 use crate::ports::SessionProfileRepository;
+use crate::records::IdMatching;
 use crate::records::{BindType, SessionProfile};
 use crate::repositories::convert::{
     read_gsm7_charset, read_gsm7_packing, read_interface_version, read_session_id, read_timestamp,
@@ -47,6 +48,7 @@ struct SessionProfileRow {
     reconnect_config: Option<String>,
     gsm7_packing: String,
     gsm7_charset: String,
+    dlr_id_matching: String,
     bind_count: i64,
     created_at: String,
     updated_at: String,
@@ -74,6 +76,17 @@ impl SessionProfileRow {
             reconnect_config: self.reconnect_config,
             gsm7_packing: read_gsm7_packing(&self.gsm7_packing)?,
             gsm7_charset: read_gsm7_charset(&self.gsm7_charset)?,
+            // The `CHECK` constraint of the migration makes an unknown value
+            // unreachable through this application; it is reachable through a
+            // hand-written `UPDATE` on the file, which is what the schema's
+            // second line of defence is for.
+            dlr_id_matching: IdMatching::parse(&self.dlr_id_matching).ok_or(
+                PersistenceError::MalformedRow {
+                    table: TABLE,
+                    column: "dlr_id_matching",
+                    expected: "exact, relaxed or bases",
+                },
+            )?,
             bind_count: read_u32(self.bind_count, TABLE, "bind_count")?,
             created_at: read_timestamp(&self.created_at, TABLE, "created_at")?,
             updated_at: read_timestamp(&self.updated_at, TABLE, "updated_at")?,
@@ -98,6 +111,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
         let bind_count = store_u32(profile.bind_count);
         let gsm7_packing = profile.gsm7_packing.code();
         let gsm7_charset = profile.gsm7_charset.code();
+        let dlr_id_matching = profile.dlr_id_matching.as_str();
         let created_at = profile.created_at.to_storage();
         let updated_at = profile.updated_at.to_storage();
 
@@ -110,9 +124,9 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
                    session_id, name, host, port, bind_type, interface_version,
                    system_id, password_enc, system_type, tls_config,
                    window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
-                   reconnect_config, gsm7_packing, gsm7_charset,
+                   reconnect_config, gsm7_packing, gsm7_charset, dlr_id_matching,
                    bind_count, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (session_id) DO UPDATE SET
                    name = excluded.name,
                    host = excluded.host,
@@ -131,6 +145,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
                    reconnect_config = excluded.reconnect_config,
                    gsm7_packing = excluded.gsm7_packing,
                    gsm7_charset = excluded.gsm7_charset,
+                   dlr_id_matching = excluded.dlr_id_matching,
                    bind_count = excluded.bind_count,
                    updated_at = excluded.updated_at"#,
             session_id,
@@ -151,6 +166,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             profile.reconnect_config,
             gsm7_packing,
             gsm7_charset,
+            dlr_id_matching,
             bind_count,
             created_at,
             updated_at
@@ -172,7 +188,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
                       window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
-                      reconnect_config, gsm7_packing, gsm7_charset,
+                      reconnect_config, gsm7_packing, gsm7_charset, dlr_id_matching,
                       bind_count, created_at, updated_at
                FROM session_profiles
                WHERE session_id = ?"#,
@@ -190,7 +206,7 @@ impl SessionProfileRepository for SqliteSessionProfileRepository {
             r#"SELECT session_id, name, host, port, bind_type, interface_version,
                       system_id, password_enc, system_type, tls_config,
                       window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,
-                      reconnect_config, gsm7_packing, gsm7_charset,
+                      reconnect_config, gsm7_packing, gsm7_charset, dlr_id_matching,
                       bind_count, created_at, updated_at
                FROM session_profiles
                ORDER BY rowid"#

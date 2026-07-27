@@ -121,8 +121,16 @@
       "minBackoffS": "Min back-off (s)",
       "maxBackoffS": "Max back-off (s)",
       "reconnectEnabled": "Automatic reconnection",
-      "jitter": "Jitter on the back-off"
-    }
+      "jitter": "Jitter on the back-off",
+      "dlrIdMatching": "Receipt identifier matching"
+    },
+    "dlrIdMatching": {
+      "exact": "Strict",
+      "relaxed": "Lenient (case, zeroes)",
+      "bases": "Lenient + other base"
+    },
+    "dlrIdMatchingHint": "Lenient also compares case and strips leading zeroes: two spellings of the same identifier, never two different identifiers.",
+    "dlrIdMatchingWarning": "“Other base” re-reads the identifier as hexadecimal or decimal. Two distinct identifiers can then be confused, and a receipt credit the wrong message. Reserve it for a message centre you know changes base."
   },
   "send": {
     "intro": "Send one message to a message centre and read its answer. The advanced fields follow the SMPP §7.3 table.",

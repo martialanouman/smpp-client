@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT session_id, name, host, port, bind_type, interface_version,\n                      system_id, password_enc, system_type, tls_config,\n                      window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,\n                      reconnect_config, gsm7_packing, gsm7_charset,\n                      bind_count, created_at, updated_at\n               FROM session_profiles\n               ORDER BY rowid",
+  "query": "SELECT session_id, name, host, port, bind_type, interface_version,\n                      system_id, password_enc, system_type, tls_config,\n                      window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,\n                      reconnect_config, gsm7_packing, gsm7_charset, dlr_id_matching,\n                      bind_count, created_at, updated_at\n               FROM session_profiles\n               WHERE session_id = ?",
   "describe": {
     "columns": [
       {
@@ -202,8 +202,19 @@
         }
       },
       {
-        "name": "bind_count",
+        "name": "dlr_id_matching",
         "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "dlr_id_matching"
+          }
+        }
+      },
+      {
+        "name": "bind_count",
+        "ordinal": 19,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -214,7 +225,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 19,
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -225,7 +236,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 20,
+        "ordinal": 21,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -236,7 +247,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -259,8 +270,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "65277c6957cc8a40b48356628f56baea8dcedd5403155b998520b9e0fd80986a"
+  "hash": "32743a5848ce69bf16cab899d3a2c5f30ec0eeeb7d25a51304b39eab9a3ae184"
 }

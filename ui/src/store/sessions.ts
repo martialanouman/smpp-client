@@ -173,6 +173,10 @@ export function blankProfile(): SessionProfileDto {
     jitter: true,
     gsm7Packing: "unpacked",
     gsm7Charset: "gsm0338",
+    // The lossless default. `bases` also reads the identifier in the other
+    // base, which can map two distinct identifiers onto each other — see the
+    // note on `IdMatching` in `messaging::correlation`.
+    dlrIdMatching: "relaxed",
     bindCount: 1,
   };
 }

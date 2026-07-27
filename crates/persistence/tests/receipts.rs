@@ -224,6 +224,107 @@ async fn an_undeliverable_receipt_fails_the_message_and_keeps_its_error_code() {
     assert_eq!(stored.dlr_err.as_deref(), Some("058"));
 }
 
+/// **Two providers both minting `1234`.**
+///
+/// `smsc_message_id` is unique per message centre and nothing more, and
+/// CLAUDE.md §1 has this application talk to several. Without the session in
+/// the predicate the lookup returned the oldest row — deterministically the
+/// wrong one — and a receipt failed a message belonging to another provider.
+#[tokio::test]
+async fn a_lookup_by_smsc_identifier_stays_inside_its_session() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+    let profiles = persistence::SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let first = SessionId::new();
+    let second = SessionId::new();
+
+    {
+        use persistence::ports::SessionProfileRepository as _;
+
+        for (session_id, name) in [(first, "provider A"), (second, "provider B")] {
+            profiles
+                .upsert_session_profile(&support::a_session_profile(session_id, name))
+                .await
+                .unwrap();
+        }
+    }
+
+    // The older row is the one a session-blind query would return.
+    let on_first = ClientMessageId::new();
+    let on_second = ClientMessageId::new();
+
+    for (client_message_id, session_id) in [(on_first, first), (on_second, second)] {
+        let mut message = a_queued_message(client_message_id, "+2250102030405");
+        message.state = MessageState::Accepted;
+        message.session_id = Some(session_id);
+        message.smsc_message_id = Some(String::from("1234"));
+        repository.insert_message(&message).await.unwrap();
+    }
+
+    let found = repository
+        .find_message_by_smsc_id("1234", Some(second))
+        .await
+        .unwrap()
+        .expect("the second session's message exists");
+
+    assert_eq!(
+        found.client_message_id, on_second,
+        "a receipt on the second session must not reach the first session's message"
+    );
+
+    assert_eq!(
+        repository
+            .find_message_by_smsc_id("1234", Some(first))
+            .await
+            .unwrap()
+            .map(|message| message.client_message_id),
+        Some(on_first)
+    );
+
+    // `None` still means "any session": a message whose profile was deleted
+    // carries a NULL `session_id` and must remain reachable.
+    assert!(repository
+        .find_message_by_smsc_id("1234", None)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+/// A session that never sent this identifier finds nothing, rather than the
+/// nearest row.
+#[tokio::test]
+async fn a_lookup_on_a_session_that_never_sent_the_identifier_finds_nothing() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+    let profiles = persistence::SqliteSessionProfileRepository::new(harness.database().clone());
+
+    let owner = SessionId::new();
+    let stranger = SessionId::new();
+
+    {
+        use persistence::ports::SessionProfileRepository as _;
+
+        for (session_id, name) in [(owner, "owner"), (stranger, "stranger")] {
+            profiles
+                .upsert_session_profile(&support::a_session_profile(session_id, name))
+                .await
+                .unwrap();
+        }
+    }
+
+    let mut message = a_queued_message(ClientMessageId::new(), "+2250102030405");
+    message.session_id = Some(owner);
+    message.smsc_message_id = Some(String::from("9999"));
+    repository.insert_message(&message).await.unwrap();
+
+    assert!(repository
+        .find_message_by_smsc_id("9999", Some(stranger))
+        .await
+        .unwrap()
+        .is_none());
+}
+
 // --- The orphan journal (CA-008-04) -----------------------------------------
 
 fn an_orphan(identifier: Option<&str>, reason: OrphanReason) -> OrphanReceipt {
