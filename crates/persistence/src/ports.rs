@@ -321,6 +321,22 @@ pub trait PduLogRepository {
         entry: &PduLogEntry,
     ) -> impl Future<Output = Result<i64, PersistenceError>> + Send;
 
+    /// Appends a batch of entries in **one** transaction.
+    ///
+    /// The PDU log records both directions of every PDU on a session that may
+    /// run at a thousand messages a second (spec §9.5). One transaction per
+    /// entry would mean one `fsync` per PDU, and turning the debug switch on
+    /// would become a throughput cliff rather than a diagnostic.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Database`] if the write fails — and then **no**
+    /// entry of the batch is written.
+    fn insert_entries(
+        &self,
+        entries: &[PduLogEntry],
+    ) -> impl Future<Output = Result<u64, PersistenceError>> + Send;
+
     /// Reads one page of entries, oldest first, optionally for one session.
     ///
     /// # Errors

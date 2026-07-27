@@ -15,4 +15,16 @@ pub enum LoggingExportError {
     /// by real variants as soon as its layer is implemented.
     #[error("not implemented yet")]
     NotImplemented,
+
+    /// A store this crate reads or writes could not be reached.
+    ///
+    /// `reason` is the implementor's own rendering, **without** its source
+    /// chain: the driver error and the filesystem path it may carry stay in the
+    /// trace, because what this type carries is rendered towards the interface
+    /// (CLAUDE.md §4, §8).
+    #[error("the journal is unavailable: {reason}")]
+    Unavailable {
+        /// Short, path-free summary of the underlying failure.
+        reason: String,
+    },
 }

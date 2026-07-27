@@ -68,34 +68,63 @@ impl PagedRow for PduLogRow {
     }
 }
 
+/// Writes one entry on the given executor.
+///
+/// Generic over the executor so the same statement serves a single insert and
+/// a batch inside a transaction — the alternative is the same SQL written
+/// twice, which is the same SQL until someone changes one of them.
+async fn insert_one<'e, E>(executor: E, entry: &PduLogEntry) -> Result<i64, PersistenceError>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
+    let session_id = entry.session_id.map(|id| id.to_string());
+    let direction = entry.direction.as_str();
+    let command_id = entry.command_id.map(store_u32);
+    let command_status = entry.command_status.map(store_u32);
+    let sequence_number = entry.sequence_number.map(store_u32);
+    let ts = entry.ts.to_storage();
+
+    let id = sqlx::query!(
+        r#"INSERT INTO pdu_log (
+               session_id, direction, command_id, command_status,
+               sequence_number, raw_hex, decoded, ts
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+        session_id,
+        direction,
+        command_id,
+        command_status,
+        sequence_number,
+        entry.raw_hex,
+        entry.decoded,
+        ts
+    )
+    .execute(executor)
+    .await?
+    .last_insert_rowid();
+
+    Ok(id)
+}
+
 impl PduLogRepository for SqlitePduLogRepository {
     async fn insert_entry(&self, entry: &PduLogEntry) -> Result<i64, PersistenceError> {
-        let session_id = entry.session_id.map(|id| id.to_string());
-        let direction = entry.direction.as_str();
-        let command_id = entry.command_id.map(store_u32);
-        let command_status = entry.command_status.map(store_u32);
-        let sequence_number = entry.sequence_number.map(store_u32);
-        let ts = entry.ts.to_storage();
+        let mut connection = self.database.pool().acquire().await?;
 
-        let id = sqlx::query!(
-            r#"INSERT INTO pdu_log (
-                   session_id, direction, command_id, command_status,
-                   sequence_number, raw_hex, decoded, ts
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
-            session_id,
-            direction,
-            command_id,
-            command_status,
-            sequence_number,
-            entry.raw_hex,
-            entry.decoded,
-            ts
-        )
-        .execute(self.database.pool())
-        .await?
-        .last_insert_rowid();
+        insert_one(&mut *connection, entry).await
+    }
 
-        Ok(id)
+    async fn insert_entries(&self, entries: &[PduLogEntry]) -> Result<u64, PersistenceError> {
+        // ONE transaction for the whole batch. The `?` on each insert drops
+        // `transaction` without committing, which rolls back: a batch either
+        // lands whole or not at all.
+        let mut transaction = self.database.pool().begin().await?;
+
+        for entry in entries {
+            insert_one(&mut *transaction, entry).await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(entries.len().try_into().unwrap_or(u64::MAX))
     }
 
     async fn page_entries(
