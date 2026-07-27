@@ -71,6 +71,7 @@ smpp-session = { path = "../crates/smpp-session" }
 # The send orchestrator of milestone 006. `src-tauri` holds it and calls it;
 # every rule it applies — validation, segmentation, the write-ahead order —
 # belongs to the crate, not to the command (CLAUDE.md §3).
+contacts = { path = "../crates/contacts" }
 messaging = { path = "../crates/messaging" }
 
 # The business journal and the PDU recorder of milestone 008. Same rule: the

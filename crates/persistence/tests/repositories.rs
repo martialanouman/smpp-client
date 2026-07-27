@@ -6,8 +6,8 @@
 
 mod support;
 
-use futures_util::StreamExt;
 use contacts::ports::{ContactRepository, ContactStoreError};
+use futures_util::StreamExt;
 use messaging::ports::{MessageRepository, MessageStoreError};
 use persistence::ports::{
     CampaignRepository, ContactDirectory, MessageJournal, PduLogRepository,
@@ -15,8 +15,9 @@ use persistence::ports::{
 };
 use persistence::{
     CampaignId, CampaignStatus, ContactId, Cursor, ListId, ListSelection, MessageFilter,
-    MessageState, MessageStateUpdate, PduDirection, PduLogEntry, SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
-    SqlitePduLogRepository, SqliteSessionProfileRepository,
+    MessageState, MessageStateUpdate, PduDirection, PduLogEntry, SqliteCampaignRepository,
+    SqliteContactRepository, SqliteMessageRepository, SqlitePduLogRepository,
+    SqliteSessionProfileRepository,
 };
 use smpp_core::types::{ClientMessageId, SessionId};
 use smpp_core::values::{CommandStatus, Gsm7BitCharset, Gsm7BitPacking};

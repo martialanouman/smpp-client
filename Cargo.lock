@@ -3708,6 +3708,7 @@ name = "shinobismpp"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "contacts",
  "logging-export",
  "messaging",
  "persistence",

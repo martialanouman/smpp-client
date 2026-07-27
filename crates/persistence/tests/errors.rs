@@ -8,8 +8,8 @@ mod support;
 
 use std::error::Error;
 
-use messaging::ports::{MessageRepository, MessageStoreError};
 use contacts::ports::{ContactRepository, ContactStoreError};
+use messaging::ports::{MessageRepository, MessageStoreError};
 use persistence::ports::SessionProfileRepository;
 use persistence::{
     ContactId, PersistenceError, SqliteContactRepository, SqliteMessageRepository,

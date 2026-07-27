@@ -335,13 +335,29 @@ fn merge_attributes(contact: &mut Contact, incoming: Option<&str>) {
     };
 
     for (key, value) in incoming {
-        // An empty string is not information: a second row that leaves a
-        // column blank must not blank out a value the first row supplied.
+        // An empty string is not information, and the rule cuts BOTH ways.
+        //
+        // Incoming blank: a second row leaving a column empty must not blank
+        // out what the first row supplied.
         if value.as_str().is_some_and(str::is_empty) {
             continue;
         }
 
-        merged.entry(key).or_insert(value);
+        // Held blank: `or_insert` alone would keep it, so a first row with an
+        // empty cell would lock the column shut against every later row that
+        // fills it — which is the whole point of merging. A file whose first
+        // occurrence of a number carries only the name, and whose second
+        // carries only the city, would end up with the city lost.
+        let held_is_blank = merged
+            .get(&key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(str::is_empty);
+
+        if held_is_blank {
+            merged.insert(key, value);
+        } else {
+            merged.entry(key).or_insert(value);
+        }
     }
 
     contact.attributes = serde_json::to_string(&serde_json::Value::Object(merged)).ok();

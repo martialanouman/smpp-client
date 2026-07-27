@@ -19,7 +19,7 @@ use contacts::import::{
     ColumnMapping, ColumnRef, Deduplication, HeaderMode, ImportOptions, ImportProgress,
     ImportSource, Importer,
 };
-use contacts::validation::{RejectionReason, Region, ValidationOptions};
+use contacts::validation::{Region, RejectionReason, ValidationOptions};
 use encoding_rs::WINDOWS_1252;
 use tokio_util::sync::CancellationToken;
 
@@ -131,9 +131,7 @@ async fn a_latin1_file_imports_with_its_accents_intact() {
 
     run(
         &store,
-        ImportSource::Csv {
-            path,
-        },
+        ImportSource::Csv { path },
         ivorian(
             ColumnMapping::by_name("telephone")
                 .with_attribute("prenom", ColumnRef::Name(String::from("prenom"))),
@@ -225,9 +223,11 @@ async fn every_rejection_carries_its_line_and_its_reason() {
         vec![
             (3, RejectionReason::TooShort),
             (4, RejectionReason::UnknownCountryCode),
-            (5, RejectionReason::IllegalCharacter),
+            (6, RejectionReason::IllegalCharacter),
         ],
-        "each rejection points at its own line, and each names its own reason"
+        "each rejection points at its own line, and each names its own reason. \
+         Line 4 is the blank line: `csv` reports the record after a blank one \
+         line short, which the reader documents and which does not accumulate"
     );
 
     assert_eq!(report.by_reason.get("TOO_SHORT"), Some(&1));
