@@ -157,6 +157,44 @@ export const commands = {
 	 *  * `MESSAGE_ENCODING` — a forced encoding cannot write the text.
 	 */
 	messagePreview: (input: MessagePreviewInput) => typedError<MessagePreviewDto, ErrorDto>(__TAURI_INVOKE("message_preview", { input })),
+	/**
+	 *  Reads one page of the business journal (spec §13.3, EF-LOG-01).
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] if a filter field does not parse, or if the journal cannot be
+	 *  read.
+	 */
+	logsQuery: (filter: LogFilterInput, cursor: string | null, limit: number | null) => typedError<LogPageDto, ErrorDto>(__TAURI_INVOKE("logs_query", { filter, cursor, limit })),
+	/**
+	 *  Reads one page of the orphaned receipts (CA-008-04).
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] if the session identifier does not parse, or if the journal
+	 *  cannot be read.
+	 */
+	logsOrphans: (sessionId: string | null, cursor: string | null, limit: number | null) => typedError<OrphanPageDto, ErrorDto>(__TAURI_INVOKE("logs_orphans", { sessionId, cursor, limit })),
+	/**
+	 *  Reads one page of the PDU log, and reports whether recording is on.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] if the session identifier does not parse, or if the log cannot
+	 *  be read.
+	 */
+	logsPdus: (sessionId: string | null, cursor: string | null, limit: number | null) => typedError<PduPageDto, ErrorDto>(__TAURI_INVOKE("logs_pdus", { sessionId, cursor, limit })),
+	/**
+	 *  Turns PDU recording on or off (CA-008-09).
+	 * 
+	 *  Returns the state in force, so the interface reflects what happened rather
+	 *  than what it asked for.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] if the buffered entries could not be written on the way out.
+	 */
+	logsSetPduLogging: (enabled: boolean) => typedError<boolean, ErrorDto>(__TAURI_INVOKE("logs_set_pdu_logging", { enabled })),
 };
 
 /** Events */
@@ -298,7 +336,17 @@ export type ErrorCode =
  *  a fault the way a full disk is. The interface tells the operator the
  *  message is already there, not that the database broke.
  */
-"MESSAGE_DUPLICATE";
+"MESSAGE_DUPLICATE" | 
+/**
+ *  A log-screen filter field could not be read.
+ * 
+ *  Its own code rather than a message-domain one: the operator typed a date
+ *  or picked a state, and what the interface has to do is point at the
+ *  offending box — which `details` names.
+ */
+"LOGS_INVALID_FILTER" | 
+/**  The business journal or the PDU log could not be read. */
+"LOGS_UNAVAILABLE";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -338,6 +386,22 @@ export type Gsm7PackingDto =
 /**  Eight septets in seven octets. */
 "packed";
 
+/**
+ *  How hard to look for a message when a delivery receipt quotes its
+ *  identifier differently (step-008 §6).
+ * 
+ *  A closed enum rather than a free-form string: the storage carries a `CHECK`
+ *  constraint listing exactly these three, and a fourth value would be a
+ *  migration rather than an input.
+ */
+export type IdMatchingDto = 
+/**  The identifier as it arrived, and nothing else. */
+"exact" | 
+/**  Also the case variants and the unpadded form. Lossless, and the default. */
+"relaxed" | 
+/**  Also the other base. **Lossy** — see `messaging::correlation::IdMatching`. */
+"bases";
+
 /**  The protocol version announced at bind time (EF-CNX-04). */
 export type InterfaceVersionDto = 
 /**  SMPP v3.4, `interface_version` `0x34`. */
@@ -352,6 +416,39 @@ export type Language =
 /**  English. */
 "en";
 
+/**
+ *  What the log screen filters on (spec §13.3).
+ * 
+ *  Every field is optional and every one is a conjunction: an all-`None` filter
+ *  selects the whole journal. The strings are **raw** on purpose — validation
+ *  belongs to the backend, which treats the WebView as untrusted (CLAUDE.md
+ *  §3), so a malformed identifier is rejected here rather than assumed away.
+ */
+export type LogFilterInput = {
+	/**  Restrict to one session, by identifier. */
+	sessionId: string | null,
+	/**  Restrict to one campaign, by identifier. */
+	campaignId: string | null,
+	/**
+	 *  Restrict to one state — `QUEUED`, `SENT`, `ACCEPTED`, `DELIVERED`,
+	 *  `FAILED`, `EXPIRED`.
+	 */
+	state: string | null,
+	/**  Restrict to messages created at or after this RFC 3339 instant. */
+	createdFrom: string | null,
+	/**  Restrict to messages created at or before this RFC 3339 instant. */
+	createdTo: string | null,
+	/**  Restrict to recipients starting with this prefix, `+` optional. */
+	destPrefix: string | null,
+	/**  Restrict to one delivery-receipt error code. */
+	dlrErr: string | null,
+	/**
+	 *  Restrict to rows containing this text in their recipient, body or SMSC
+	 *  identifier.
+	 */
+	search: string | null,
+};
+
 /**  Verbosity of the `tracing` subscriber. */
 export type LogLevel = 
 /**  Errors only. */
@@ -364,6 +461,73 @@ export type LogLevel =
 "debug" | 
 /**  Everything, including hexadecimal PDU dumps. */
 "trace";
+
+/**  One page of the log table. */
+export type LogPageDto = {
+	/**  The rows, oldest first. */
+	rows: LogRowDto[],
+	/**
+	 *  Cursor to pass back for the next page, or `null` at the end.
+	 * 
+	 *  A **string**, and opaque: the interface hands it back untouched. See
+	 *  [`parse_cursor`] for why it is not a number.
+	 */
+	next: string | null,
+	/**
+	 *  How many rows the filter selects in total.
+	 * 
+	 *  What sizes the virtualised scrollbar. A `u32`, saturating: the bridge
+	 *  carries JSON and `JSON.stringify` throws on a `BigInt`.
+	 */
+	total: number,
+};
+
+/**
+ *  One row of the log table (spec §13.2).
+ * 
+ *  Flat and stringly on purpose: this is what a virtualised table renders, and
+ *  every field is a cell. The typed values — `Ton`, `DataCoding`,
+ *  `CommandStatus` — are rendered here rather than in the WebView, which
+ *  CLAUDE.md §3 keeps free of protocol knowledge.
+ */
+export type LogRowDto = {
+	/**  The write-ahead key, and the row's React key. */
+	clientMessageId: string,
+	/**  Session it went out on. */
+	sessionId: string | null,
+	/**  Campaign it belongs to. */
+	campaignId: string | null,
+	/**  Identifier the message centre assigned. */
+	smscMessageId: string | null,
+	/**  Sender address. */
+	sourceAddr: string | null,
+	/**  Recipient. */
+	destAddr: string | null,
+	/**  Segments the message was split into. */
+	segments: number,
+	/**  The body, **truncated** by default (CLAUDE.md §8). */
+	text: string | null,
+	/**  `QUEUED`, `SENT`, `ACCEPTED`, `DELIVERED`, `FAILED`, `EXPIRED`. */
+	state: string,
+	/**  `command_status` of the response, as its numeric value. */
+	commandStatus: number | null,
+	/**  Its symbol — `ESME_ROK`, `ESME_RTHROTTLED` — for the operator. */
+	commandStatusSymbol: string | null,
+	/**  `stat` field of the delivery receipt. */
+	dlrStat: string | null,
+	/**  `err` field of the delivery receipt. */
+	dlrErr: string | null,
+	/**  Sending attempts spent. */
+	attempts: number,
+	/**  When the row was written. */
+	createdAt: string,
+	/**  When `submit_sm` left. */
+	sentAt: string | null,
+	/**  When the response came back. */
+	respAt: string | null,
+	/**  When the delivery receipt arrived. */
+	dlrAt: string | null,
+};
 
 /**  What the editor's counter shows (CA-006-09). */
 export type MessagePreviewDto = {
@@ -490,25 +654,54 @@ export type MessageSendResultDto = {
 };
 
 /**
- *  Payload of `message:update` — one message reached a new state.
+ *  Payload of `message:update` — a **batch** of messages reached a new state.
  * 
- *  Emitted three times on a nominal send: `QUEUED`, `SENT`, `ACCEPTED`. That
- *  is what CA-006-01 asks the interface to show, and a command that only
- *  returned its final report could not: the three states would collapse into
- *  one repaint.
+ *  Emitted three times on a nominal send, each carrying one entry: `QUEUED`,
+ *  `SENT`, `ACCEPTED`. That is what CA-006-01 asks the interface to show, and a
+ *  command that only returned its final report could not — the three states
+ *  would collapse into one repaint.
  * 
- *  **Unthrottled, deliberately.** A unit send produces three events and the
- *  operator is watching every one of them. The bulk sending of milestone 010
- *  is where a per-message event would saturate the bridge, and that is where
- *  the aggregate `campaign:progress` of spec §15.3 belongs — a throttle here
- *  would drop the last transition of a message nobody would then see finish,
- *  which is the bug `sessions:state` already had.
+ *  # Why a batch, since milestone 008
+ * 
+ *  It carried a single message until delivery receipts arrived. A message
+ *  centre replaying a backlog produces thousands of transitions a second, and
+ *  one event each is what CA-008-08 forbids: the bulk travels through the
+ *  paginated `logs_query`, and this channel carries **aggregated increments**.
+ * 
+ *  The aggregation is the batch the receipt pipeline already commits (one
+ *  transaction per 200 receipts or per 250 ms), so it costs nothing extra and
+ *  cannot drift from what was written: the event describes exactly one commit.
+ * 
+ *  # Still unthrottled, and now for a stronger reason
+ * 
+ *  A throttle here would drop the last transition of a message nobody would
+ *  then see finish — the bug `sessions:state` already had. The rate is now
+ *  bounded by the pipeline's own batching instead, which is a **pacing** and
+ *  not a filter: nothing is discarded, several receipts become one event.
  */
 export type MessageUpdate = {
+	/**
+	 *  The messages that moved, in the order they were committed.
+	 * 
+	 *  Never empty: an event announcing nothing is a repaint of the same
+	 *  screen.
+	 */
+	updates: MessageUpdateEntry[],
+};
+
+/**  One message's new standing. */
+export type MessageUpdateEntry = {
 	/**  The write-ahead key, so the interface knows which message moved. */
 	clientMessageId: string,
 	/**  `QUEUED`, `SENT`, `ACCEPTED`, `FAILED` — the names of spec §14.3. */
 	state: string,
+	/**
+	 *  The `stat` code of the delivery receipt that moved it, when one did.
+	 * 
+	 *  `None` on the send path: `QUEUED`, `SENT` and `ACCEPTED` come from this
+	 *  application's own progress, not from a receipt.
+	 */
+	dlrStat: string | null,
 };
 
 /**
@@ -581,6 +774,83 @@ export type NpiDto =
 "national" | 
 /**  `9` — private. */
 "private";
+
+/**  One page of orphaned receipts. */
+export type OrphanPageDto = {
+	/**  The rows, oldest first. */
+	rows: OrphanRowDto[],
+	/**  Cursor to pass back for the next page, or `null` at the end. */
+	next: string | null,
+	/**  How many orphans there are in total. */
+	total: number,
+};
+
+/**  One orphaned delivery receipt (CA-008-04). */
+export type OrphanRowDto = {
+	/**
+	 *  Row identifier, and the row's React key.
+	 * 
+	 *  A string for the same reason a cursor is one: it is a SQLite `rowid`.
+	 */
+	id: string,
+	/**  Session it arrived on. */
+	sessionId: string | null,
+	/**  The identifier it quoted, when it quoted one. */
+	smscMessageId: string | null,
+	/**  `UNKNOWN_ID` or `NO_IDENTIFIER` — the interface translates it. */
+	reason: string,
+	/**  `stat`, as the message centre wrote it. */
+	dlrStat: string | null,
+	/**  `err`, as the message centre wrote it. */
+	dlrErr: string | null,
+	/**  The body, **truncated** by default (CLAUDE.md §8). */
+	raw: string,
+	/**  When this application received it. */
+	receivedAt: string,
+};
+
+/**  One page of recorded PDUs, and whether recording is on. */
+export type PduPageDto = {
+	/**  The entries, oldest first. */
+	rows: PduRowDto[],
+	/**  Cursor to pass back for the next page, or `null` at the end. */
+	next: string | null,
+	/**
+	 *  Whether the recorder is on right now.
+	 * 
+	 *  Travels with the page so an empty table can say **why** it is empty:
+	 *  "nothing recorded" and "recording is off" are different states, and a
+	 *  screen that showed the same emptiness for both would have an operator
+	 *  hunting a bug that is a switch.
+	 */
+	enabled: boolean,
+};
+
+/**  One recorded PDU (CA-008-09). */
+export type PduRowDto = {
+	/**
+	 *  Row identifier, and the row's React key.
+	 * 
+	 *  A string for the same reason a cursor is one: it is a SQLite `rowid`.
+	 */
+	id: string,
+	/**  Session it belonged to. */
+	sessionId: string | null,
+	/**  `in` or `out`. */
+	direction: string,
+	/**  `command_id` of the header. */
+	commandId: number | null,
+	/**  `command_status` of the header. */
+	commandStatus: number | null,
+	/**  `sequence_number` of the header. */
+	sequenceNumber: number | null,
+	/**  Hexadecimal dump — present only because debug mode was on. */
+	rawHex: string | null,
+	/**  Decoded body and TLVs — same. */
+	decoded: string | null,
+	/**  When the PDU crossed the socket. */
+	ts: string,
+};
 
 /**
  *  What `registered_delivery` asks the message centre for.
@@ -710,6 +980,11 @@ export type SessionProfileDto = {
 	gsm7Packing: Gsm7PackingDto,
 	/**  What those octets mean. */
 	gsm7Charset: Gsm7CharsetDto,
+	/**
+	 *  How hard to look for a message when a delivery receipt quotes its
+	 *  identifier differently (step-008 §6).
+	 */
+	dlrIdMatching: IdMatchingDto,
 	/**  Parallel binds for this logical session (spec §8.5, milestone 011). */
 	bindCount: number,
 };

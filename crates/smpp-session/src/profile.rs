@@ -25,7 +25,7 @@
 
 use core::time::Duration;
 
-use persistence::{BindType, SessionProfile as SessionProfileRecord, Timestamp};
+use persistence::{BindType, IdMatching, SessionProfile as SessionProfileRecord, Timestamp};
 use smpp_core::types::SessionId;
 use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 
@@ -166,6 +166,13 @@ pub struct SessionProfile {
     reconnect: ReconnectPolicy,
     gsm7_packing: Gsm7BitPacking,
     gsm7_charset: Gsm7BitCharset,
+    /// How hard to look for a message when a delivery receipt quotes its
+    /// identifier differently (step-008 §6).
+    ///
+    /// Here for the same reason the two GSM 7-bit settings are: it describes
+    /// the **message centre**, not the message. Whether identifiers come back
+    /// in another base is something the provider decides.
+    dlr_id_matching: IdMatching,
     bind_count: u32,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -192,6 +199,7 @@ impl SessionProfile {
             reconnect: ReconnectPolicy::default(),
             gsm7_packing: Gsm7BitPacking::default(),
             gsm7_charset: Gsm7BitCharset::default(),
+            dlr_id_matching: IdMatching::default(),
             bind_count: 1,
             created_at: Timestamp::now(),
             updated_at: Timestamp::now(),
@@ -316,6 +324,13 @@ impl SessionProfile {
         self.gsm7_charset
     }
 
+    /// How hard to look for a message when a receipt quotes its identifier
+    /// differently (step-008 §6).
+    #[must_use]
+    pub const fn dlr_id_matching(&self) -> IdMatching {
+        self.dlr_id_matching
+    }
+
     /// Parallel binds for this logical session (spec §8.5).
     ///
     /// Validated here; milestone 005 opens **one**, and milestone 011 opens
@@ -365,6 +380,7 @@ impl SessionProfile {
             reconnect,
             gsm7_packing: record.gsm7_packing,
             gsm7_charset: record.gsm7_charset,
+            dlr_id_matching: record.dlr_id_matching,
             bind_count: record.bind_count,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -399,6 +415,7 @@ impl SessionProfile {
             reconnect_config: Some(reconnect_document(self.reconnect)),
             gsm7_packing: self.gsm7_packing,
             gsm7_charset: self.gsm7_charset,
+            dlr_id_matching: self.dlr_id_matching,
             bind_count: self.bind_count,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -429,6 +446,7 @@ pub struct ProfileBuilder {
     reconnect: ReconnectPolicy,
     gsm7_packing: Gsm7BitPacking,
     gsm7_charset: Gsm7BitCharset,
+    dlr_id_matching: IdMatching,
     bind_count: u32,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -516,6 +534,16 @@ impl ProfileBuilder {
     #[must_use]
     pub const fn gsm7_charset(mut self, charset: Gsm7BitCharset) -> Self {
         self.gsm7_charset = charset;
+        self
+    }
+
+    /// How hard to look for a message when a receipt quotes its identifier
+    /// differently (step-008 §6).
+    ///
+    /// [`IdMatching::Bases`] is **lossy** — read its note before setting it.
+    #[must_use]
+    pub const fn dlr_id_matching(mut self, matching: IdMatching) -> Self {
+        self.dlr_id_matching = matching;
         self
     }
 
@@ -620,6 +648,7 @@ impl ProfileBuilder {
             reconnect: self.reconnect,
             gsm7_packing: self.gsm7_packing,
             gsm7_charset: self.gsm7_charset,
+            dlr_id_matching: self.dlr_id_matching,
             bind_count: self.bind_count,
             created_at: self.created_at,
             updated_at: self.updated_at,

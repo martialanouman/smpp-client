@@ -50,6 +50,7 @@ pub(crate) async fn bind<S>(
     framed: &mut Framed<S, SessionCodec>,
     profile: &SessionProfile,
     password: &Password,
+    watcher: &crate::actors::reader::Watcher,
 ) -> Result<(), SessionError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -57,12 +58,21 @@ where
     let request = bind_request(profile, password)?;
     let expected = profile.bind_mode().bind_operation().matching_response();
 
+    let command = Command::new(CommandStatus::EsmeRok, BIND_SEQUENCE_NUMBER, request);
+
+    // The handshake is observed like everything else, and that is deliberate
+    // rather than an oversight nobody excluded: an operator debugging a bind
+    // rejection wants exactly these two PDUs, and they are the ones that never
+    // reach the supervisor's write path.
+    //
+    // It does mean the recorded bind carries the credential. That is why the
+    // recorder is off by default and behind `DebugDumpAuthorisation`
+    // (CLAUDE.md §8) — the protection is the switch, not a hole in what the
+    // switch covers.
+    watcher.saw(crate::PduFlow::Outbound, &command);
+
     framed
-        .send(Command::new(
-            CommandStatus::EsmeRok,
-            BIND_SEQUENCE_NUMBER,
-            request,
-        ))
+        .send(command)
         .await
         .map_err(|source| SessionError::Transport {
             operation: "sending the bind",
@@ -88,6 +98,8 @@ where
             })
         }
     };
+
+    watcher.saw(crate::PduFlow::Inbound, &response);
 
     if response.id() != expected {
         return Err(SessionError::UnexpectedResponse {

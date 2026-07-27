@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                          client_message_id, campaign_id, session_id, smsc_message_id,\n                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                          data_coding, segments, text, state, command_status,\n                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                   FROM messages\n                   WHERE state = ?\n                     AND (? IS NULL OR session_id = ?)\n                   ORDER BY rowid",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                         AND (? IS NULL OR created_at >= ?)\n                         AND (? IS NULL OR created_at <= ?)\n                         AND (? IS NULL OR dest_addr LIKE ? || '%')\n                         AND (? IS NULL OR dlr_err = ?)\n                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                              OR text LIKE '%' || ? || '%'\n                                              OR smsc_message_id LIKE '%' || ? || '%')\n                       ORDER BY rowid\n                       LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 16
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "7b5e7e83d5667670b4b44e4bf3cf7d9195f0c6e4c3a95edf07f5f21e046efa69"
+  "hash": "edbc32976b6e8e5449c14be532a87549fffad1f2b8bbe2857558e39c1a116a94"
 }

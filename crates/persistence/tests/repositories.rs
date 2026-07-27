@@ -633,7 +633,7 @@ async fn a_later_smsc_identifier_replaces_an_earlier_one() {
 
     // And the delivery receipt correlates against the current identifier.
     let correlated = repository
-        .find_message_by_smsc_id("SMSC-second")
+        .find_message_by_smsc_id("SMSC-second", None)
         .await
         .unwrap()
         .expect("the receipt must find its message");
@@ -706,14 +706,14 @@ async fn a_message_is_found_by_the_identifier_the_smsc_assigned() {
         .unwrap();
 
     let found = repository
-        .find_message_by_smsc_id("SMSC-42")
+        .find_message_by_smsc_id("SMSC-42", None)
         .await
         .unwrap()
         .expect("the delivery receipt must find its message");
 
     assert_eq!(found.client_message_id, message.client_message_id);
     assert!(repository
-        .find_message_by_smsc_id("SMSC-unknown")
+        .find_message_by_smsc_id("SMSC-unknown", None)
         .await
         .unwrap()
         .is_none());
@@ -806,7 +806,13 @@ async fn a_pdu_log_entry_survives_a_round_trip() {
         .await
         .unwrap();
 
-    assert_eq!(page.items, vec![entry]);
+    assert_eq!(
+        page.items
+            .into_iter()
+            .map(|row| row.entry)
+            .collect::<Vec<_>>(),
+        vec![entry]
+    );
 }
 
 #[tokio::test]
@@ -837,5 +843,5 @@ async fn pdu_log_entries_are_filtered_by_session() {
         .unwrap();
 
     assert_eq!(page.len(), 1);
-    assert_eq!(page.items[0].session_id, Some(wanted));
+    assert_eq!(page.items[0].entry.session_id, Some(wanted));
 }

@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
 use crate::events::EventEmitter;
+use crate::logs::LogServices;
 use crate::messages::MessageServices;
 use crate::sessions::SessionServices;
 
@@ -28,6 +29,9 @@ pub(crate) struct AppState {
     sessions: SessionServices,
     /// The send orchestrator and its journal (milestone 006).
     messages: MessageServices,
+    /// The business journal, the PDU recorder and the receipt pipeline
+    /// (milestone 008).
+    logs: LogServices,
 }
 
 impl AppState {
@@ -44,7 +48,8 @@ impl AppState {
             store: Arc::new(store),
             settings: RwLock::new(settings),
             sessions: SessionServices::new(database.clone(), Arc::clone(&events)),
-            messages: MessageServices::new(database, Arc::clone(&events)),
+            messages: MessageServices::new(database.clone(), Arc::clone(&events)),
+            logs: LogServices::new(database, Arc::clone(&events)),
             events,
         }
     }
@@ -109,6 +114,11 @@ impl AppState {
     /// The send services (milestone 006).
     pub(crate) const fn messages(&self) -> &MessageServices {
         &self.messages
+    }
+
+    /// The log services (milestone 008).
+    pub(crate) const fn logs(&self) -> &LogServices {
+        &self.logs
     }
 }
 

@@ -22,6 +22,10 @@ import { commands, events } from "./generated/bindings";
 import type {
   AppConfig,
   ConfigSetInput,
+  LogFilterInput,
+  LogPageDto,
+  OrphanPageDto,
+  PduPageDto,
   ErrorDto,
   ErrorNotify,
   MessagePreviewDto,
@@ -46,16 +50,25 @@ export type {
   ErrorNotify,
   Gsm7CharsetDto,
   Gsm7PackingDto,
+  IdMatchingDto,
   InterfaceVersionDto,
   Language,
+  LogFilterInput,
   LogLevel,
+  LogPageDto,
+  LogRowDto,
   MessagePreviewDto,
   MessagePreviewInput,
   MessageSendInput,
   MessageSendResultDto,
   MessageUpdate,
   MetricsTick,
+  MessageUpdateEntry,
   NpiDto,
+  OrphanPageDto,
+  OrphanRowDto,
+  PduPageDto,
+  PduRowDto,
   RegisteredDeliveryDto,
   RetentionDays,
   SegmentOutcomeDto,
@@ -244,6 +257,11 @@ export function messagePreview(input: MessagePreviewInput): Promise<IpcOutcome<M
 /**
  * Subscribes to `message:update`.
  *
+ * Each payload carries a **batch** of transitions — the commit the receipt
+ * pipeline just made — rather than a single message. A unit send produces
+ * batches of one; a message centre replaying a backlog produces batches of two
+ * hundred, which is the whole point (CA-008-08).
+ *
  * Returns the unsubscribe function; a component that forgets to call it on
  * unmount leaks a listener that keeps firing on a dead reducer.
  */
@@ -263,4 +281,66 @@ export function onMessageUpdate(handler: (payload: MessageUpdate) => void): Prom
  */
 export function onMetricsTick(handler: (payload: MetricsTick) => void): Promise<UnlistenFn> {
   return events.metricsTick.listen((event) => handler(event.payload));
+}
+
+/**
+ * Reads one page of the business journal (EF-LOG-01).
+ *
+ * The bulk of the log crosses **here**, page by page, and never as events:
+ * CA-008-08 keeps `message:update` to aggregated increments so that two
+ * hundred thousand rows cannot be pushed through the bridge.
+ *
+ * `cursor` is opaque — hand back whatever the previous page returned in
+ * `next`, and `null` to start over. It is a string because it is a 64-bit row
+ * identifier, which JSON cannot carry as a number without precision loss.
+ */
+export function logsQuery(
+  filter: LogFilterInput,
+  cursor: string | null,
+  limit: number | null,
+): Promise<IpcOutcome<LogPageDto>> {
+  return call(() => commands.logsQuery(filter, cursor, limit));
+}
+
+/**
+ * Reads one page of the delivery receipts that correlated to no message
+ * (CA-008-04).
+ *
+ * A separate call rather than a filter on {@link logsQuery}: an orphan has no
+ * message behind it, so it has no state, no recipient and no send instant. One
+ * table with half its columns permanently empty would be a worse screen than
+ * two tables.
+ */
+export function logsOrphans(
+  sessionId: string | null,
+  cursor: string | null,
+  limit: number | null,
+): Promise<IpcOutcome<OrphanPageDto>> {
+  return call(() => commands.logsOrphans(sessionId, cursor, limit));
+}
+
+/**
+ * Reads one page of the PDU log (CA-008-09).
+ *
+ * The payload says whether recording is **on**, so an empty table can explain
+ * itself: "nothing recorded" and "recording is off" are different states, and
+ * a screen showing the same emptiness for both sends an operator hunting a bug
+ * that is a switch.
+ */
+export function logsPdus(
+  sessionId: string | null,
+  cursor: string | null,
+  limit: number | null,
+): Promise<IpcOutcome<PduPageDto>> {
+  return call(() => commands.logsPdus(sessionId, cursor, limit));
+}
+
+/**
+ * Turns PDU recording on or off (CA-008-09).
+ *
+ * Returns the state **in force**, not the one requested: the interface shows
+ * what happened rather than what it asked for.
+ */
+export function logsSetPduLogging(enabled: boolean): Promise<IpcOutcome<boolean>> {
+  return call(() => commands.logsSetPduLogging(enabled));
 }

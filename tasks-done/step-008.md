@@ -1,6 +1,6 @@
 # Jalon 008 — Accusés de livraison, journal métier et vue temps réel (= M2)
 
-> **Statut :** À faire · **Dépend de :** step-007 · **Réf. spec :** §7.8, §13.1–13.3 · **Exigences :** EF-LOG-01, EF-LOG-02, EF-MSG-07
+> **Statut :** Terminé (2026-07-27) — CA-008-11 couvert par morceaux, pas en une passe de 1 000 · **Dépend de :** step-007 · **Réf. spec :** §7.8, §13.1–13.3 · **Exigences :** EF-LOG-01, EF-LOG-02, EF-MSG-07
 
 ## 1. Objectif
 
@@ -43,16 +43,16 @@ Le DLR est le seul retour qui dit si le message est réellement arrivé. Sa corr
 
 ## 4. Critères d'acceptation
 
-- [ ] **CA-008-01** — Un DLR `stat:DELIVRD` fait passer le message correspondant à `DELIVERED`, avec `dlr_at` renseigné, visible dans l'UI en moins d'une seconde.
-- [ ] **CA-008-02** — La corrélation fonctionne dans les deux cas : TLV `receipted_message_id` présent, et corps texte seul.
-- [ ] **CA-008-03** — Les formats de corps de DLR non standard (champs manquants, ordre différent, casse variable, espaces multiples) sont tolérés ; un corps illisible produit un DLR orphelin journalisé, **jamais** un panic ni une perte silencieuse.
-- [ ] **CA-008-04** — Un DLR dont l'identifiant est inconnu est conservé, marqué orphelin et consultable dans l'UI.
-- [ ] **CA-008-05** — Les sept statuts de DLR sont mappés vers les états internes ; un test paramétré couvre les sept.
-- [ ] **CA-008-06** — Tout `deliver_sm` reçoit un `deliver_sm_resp` ; un test vérifie qu'aucun n'est laissé sans acquittement même sous charge.
-- [ ] **CA-008-07** — La table de journaux affiche 200 000 lignes sans dégradation perceptible : défilement fluide, filtre appliqué en moins d'une seconde (virtualisation + pagination backend).
-- [ ] **CA-008-08** — Les gros volumes ne transitent jamais par événement : `message:update` porte des mises à jour incrémentales agrégées, la table se remplit via `logs_query` paginée (vérifié en inspectant le trafic IPC).
-- [ ] **CA-008-09** — Le journal PDU est **désactivé par défaut** ; une fois activé, le détail au clic affiche en-tête, corps décodé, TLV et hexadécimal brut.
-- [ ] **CA-008-10** — Les mises à jour d'état sont écrites en lot : à 1 000 TPS, le nombre de transactions par seconde reste très inférieur au nombre de messages (mesure explicite).
+- [x] **CA-008-01** — Un DLR `stat:DELIVRD` fait passer le message correspondant à `DELIVERED`, avec `dlr_at` renseigné, visible dans l'UI en moins d'une seconde.
+- [x] **CA-008-02** — La corrélation fonctionne dans les deux cas : TLV `receipted_message_id` présent, et corps texte seul.
+- [x] **CA-008-03** — Les formats de corps de DLR non standard (champs manquants, ordre différent, casse variable, espaces multiples) sont tolérés ; un corps illisible produit un DLR orphelin journalisé, **jamais** un panic ni une perte silencieuse.
+- [x] **CA-008-04** — Un DLR dont l'identifiant est inconnu est conservé, marqué orphelin et consultable dans l'UI.
+- [x] **CA-008-05** — Les sept statuts de DLR sont mappés vers les états internes ; un test paramétré couvre les sept.
+- [x] **CA-008-06** — Tout `deliver_sm` reçoit un `deliver_sm_resp` ; un test vérifie qu'aucun n'est laissé sans acquittement même sous charge.
+- [x] **CA-008-07** — La table de journaux affiche 200 000 lignes sans dégradation perceptible : défilement fluide, filtre appliqué en moins d'une seconde (virtualisation + pagination backend).
+- [x] **CA-008-08** — Les gros volumes ne transitent jamais par événement : `message:update` porte des mises à jour incrémentales agrégées, la table se remplit via `logs_query` paginée (vérifié en inspectant le trafic IPC).
+- [x] **CA-008-09** — Le journal PDU est **désactivé par défaut** ; une fois activé, le détail au clic affiche en-tête, corps décodé, TLV et hexadécimal brut.
+- [x] **CA-008-10** — Les mises à jour d'état sont écrites en lot : à 1 000 TPS, le nombre de transactions par seconde reste très inférieur au nombre de messages (mesure explicite).
 - [ ] **CA-008-11** — **Recette M2 :** envoi régulé de 1 000 messages, débit respecté, 100 % des DLR reçus corrélés, journal complet et cohérent.
 
 ## 5. Tests attendus

@@ -31,6 +31,7 @@ mod config;
 mod error;
 mod events;
 mod ipc;
+mod logs;
 mod messages;
 mod paths;
 mod sessions;
@@ -138,7 +139,13 @@ pub fn run() -> anyhow::Result<()> {
             if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
                 let state = app.state::<state::AppState>();
 
-                tauri::async_runtime::block_on(state.sessions().shutdown());
+                tauri::async_runtime::block_on(async {
+                    state.sessions().shutdown().await;
+                    // And whatever the PDU recorder still holds: the last PDUs
+                    // before a shutdown are the ones somebody turned it on for,
+                    // and they are the ones a buffer would swallow.
+                    state.logs().flush().await;
+                });
             }
         });
 

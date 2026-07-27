@@ -81,6 +81,14 @@ const DUPLEX_CAPACITY: usize = 64 * 1024;
 /// stopped answering.
 const RESPONSE_QUEUE_CAPACITY: usize = 4 * 1024;
 
+/// `sequence_number` of the first PDU the centre pushes on its own.
+///
+/// Above anything a client allocates in a test, so a `deliver_sm_resp` echoing
+/// one of these can only be answering a pushed PDU. A real message centre
+/// numbers its own requests from its own space too — spec §7.1 makes the
+/// sequence space per-originator.
+const FIRST_PUSHED_SEQUENCE: u32 = 900_000;
+
 /// How the message centre behaves once a client connects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Script {
@@ -158,6 +166,15 @@ pub enum Seen {
     GenericNack,
     /// An `unbind` arrived.
     Unbind,
+    /// A `deliver_sm_resp` came back, acknowledging a receipt this double sent.
+    ///
+    /// What CA-008-06 is stated in: the sequence number ties the answer to the
+    /// `deliver_sm` it answers, so a test can prove that **every** receipt was
+    /// acknowledged rather than that some were.
+    DeliverSmResp {
+        /// The `sequence_number` echoed back.
+        sequence: u32,
+    },
     /// Any other operation.
     Other(CommandId),
 }
@@ -173,6 +190,22 @@ pub struct Smsc {
     connections: Arc<AtomicU32>,
     latency: Duration,
     seen: mpsc::UnboundedSender<Seen>,
+    /// PDUs the centre pushes at the client, unprompted.
+    ///
+    /// Milestone 008 needs a message centre that sends `deliver_sm`, and needs
+    /// to decide **when**: after a delay, out of order, twice, for an
+    /// identifier nobody submitted. A queue the test fills gives all four with
+    /// one mechanism, where a "send receipts automatically" flag would give
+    /// only the first and would bury the ordering the tests are about.
+    pushes: mpsc::UnboundedSender<Command>,
+    /// The other end, taken by the first connection that is served.
+    inbox: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<Command>>>>,
+    /// `sequence_number` of the next pushed PDU.
+    ///
+    /// Starts high so a pushed sequence can never be confused with one the
+    /// client allocated, which is what makes an assertion on
+    /// [`Seen::DeliverSmResp`] unambiguous.
+    pushed: Arc<AtomicU32>,
 }
 
 impl core::fmt::Debug for Smsc {
@@ -202,6 +235,7 @@ impl Smsc {
         fallback: Script,
     ) -> (Self, mpsc::UnboundedReceiver<Seen>) {
         let (seen, receiver) = mpsc::unbounded_channel();
+        let (pushes, inbox) = mpsc::unbounded_channel();
 
         (
             Self {
@@ -213,6 +247,9 @@ impl Smsc {
                 connections: Arc::new(AtomicU32::new(0)),
                 latency: Duration::ZERO,
                 seen,
+                pushes,
+                inbox: Arc::new(tokio::sync::Mutex::new(Some(inbox))),
+                pushed: Arc::new(AtomicU32::new(FIRST_PUSHED_SEQUENCE)),
             },
             receiver,
         )
@@ -262,6 +299,45 @@ impl Smsc {
     #[must_use]
     pub fn submissions(&self) -> u32 {
         self.submitted.load(Ordering::SeqCst)
+    }
+
+    /// Pushes one PDU at the client, unprompted, and returns its sequence
+    /// number.
+    ///
+    /// Queued rather than written: the connection may not be up yet, and a
+    /// test that had to wait for the bind before scheduling a receipt would be
+    /// a test about the bind. The queue is unbounded and drained by the
+    /// connection when it starts, so a receipt pushed before the socket exists
+    /// arrives as soon as it does.
+    pub fn push(&self, pdu: Pdu) -> u32 {
+        let sequence = self.pushed.fetch_add(1, Ordering::SeqCst);
+        let _ignored = self
+            .pushes
+            .send(Command::new(CommandStatus::EsmeRok, sequence, pdu));
+
+        sequence
+    }
+
+    /// Pushes a delivery receipt whose body is `body`.
+    ///
+    /// `esm_class` carries the receipt bit of spec §7.8 — without it the client
+    /// is right to treat the PDU as an incoming message however the body reads,
+    /// so a double that forgot it would make every correlation test fail for
+    /// the wrong reason.
+    pub fn deliver_receipt(&self, body: &str) -> u32 {
+        self.push(Pdu::DeliverSm(receipt_pdu(body)))
+    }
+
+    /// Pushes an ordinary incoming message — a mobile-originated SMS.
+    ///
+    /// `esm_class` says "normal message" whatever the body holds, which is what
+    /// makes it the counterexample: a client that reads the body instead of the
+    /// flag would treat this as a receipt.
+    pub fn deliver_message(&self, body: &str) -> u32 {
+        let mut pdu = receipt_pdu(body);
+        pdu.esm_class = smpp_core::values::EsmClass::default();
+
+        self.push(Pdu::DeliverSm(pdu))
     }
 
     /// The reply for the next `submit_sm`.
@@ -385,6 +461,25 @@ async fn serve(stream: DuplexStream, script: Script, centre: Smsc) {
         }
     });
 
+    // The unprompted half: whatever a test pushed goes out through the same
+    // writer, so a `deliver_sm` and a `submit_sm_resp` cannot interleave
+    // halfway through a frame. Only the first connection takes the inbox — a
+    // reconnection test would otherwise have two consumers racing for it, and
+    // the receipts would land on whichever won.
+    let inbox = centre.inbox.lock().await.take();
+
+    let pusher = inbox.map(|mut inbox| {
+        let answers = answers.clone();
+
+        tokio::spawn(async move {
+            while let Some(pdu) = inbox.recv().await {
+                if answers.send(pdu).await.is_err() {
+                    return;
+                }
+            }
+        })
+    });
+
     while let Some(Ok(command)) = stream.next().await {
         let sequence = command.sequence_number();
 
@@ -397,6 +492,7 @@ async fn serve(stream: DuplexStream, script: Script, centre: Smsc) {
             (CommandId::EnquireLink, _) => Seen::EnquireLink(Instant::now()),
             (CommandId::GenericNack, _) => Seen::GenericNack,
             (CommandId::Unbind, _) => Seen::Unbind,
+            (CommandId::DeliverSmResp, _) => Seen::DeliverSmResp { sequence },
             (other, _) => Seen::Other(other),
         };
         let _ignored = seen.send(note);
@@ -453,7 +549,34 @@ async fn serve(stream: DuplexStream, script: Script, centre: Smsc) {
     }
 
     drop(answers);
+
+    if let Some(pusher) = pusher {
+        pusher.abort();
+    }
+
     let _ignored = writer.await;
+}
+
+/// A `deliver_sm` carrying a delivery receipt, as spec §7.8 describes one.
+///
+/// The `esm_class` is what makes it a receipt rather than an incoming message,
+/// and it is set explicitly rather than left to `EsmClass::default()`: the
+/// default carries a zero `message_type`, which is "normal message".
+fn receipt_pdu(body: &str) -> smpp_core::pdus::DeliverSm {
+    use smpp_core::values::{Ansi41Specific, EsmClass, GsmFeatures, MessageType, MessagingMode};
+
+    smpp_core::pdus::DeliverSm::builder()
+        .esm_class(EsmClass::new(
+            MessagingMode::Default,
+            MessageType::ShortMessageContainsMCDeliveryReceipt,
+            Ansi41Specific::ShortMessageContainsDeliveryAcknowledgement,
+            GsmFeatures::NotSelected,
+        ))
+        .short_message(
+            smpp_core::octets::OctetString::from_slice(body.as_bytes())
+                .expect("the fixture receipt body fits 255 octets"),
+        )
+        .build()
 }
 
 /// A `submit_sm_resp` carrying `message_id`.
@@ -666,6 +789,22 @@ pub fn drain(seen: &mut mpsc::UnboundedReceiver<Seen>) -> Vec<Seen> {
     }
 
     notes
+}
+
+/// Every `deliver_sm_resp` the double received so far, by sequence number.
+///
+/// The set CA-008-06 is stated against: it must hold every sequence number
+/// [`Smsc::deliver_receipt`] returned, with no exception and no duplicate
+/// requirement — one acknowledgement per receipt.
+#[must_use]
+pub fn acknowledged(notes: &[Seen]) -> Vec<u32> {
+    notes
+        .iter()
+        .filter_map(|note| match note {
+            Seen::DeliverSmResp { sequence } => Some(*sequence),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Every `submit_sm` the double received so far, in order.

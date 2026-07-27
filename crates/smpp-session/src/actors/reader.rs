@@ -38,12 +38,37 @@ pub(crate) enum ReaderOutcome {
     WriterGone,
 }
 
+/// The session identifier and the observer, carried together.
+///
+/// Cloned into the reader and kept by the supervisor for its writes: both need
+/// the same pair, and the session identifier cannot change for the life of a
+/// connection.
+#[derive(Clone)]
+pub(crate) struct Watcher {
+    pub(crate) session_id: smpp_core::types::SessionId,
+    pub(crate) observer: Option<Arc<dyn crate::PduObserver>>,
+}
+
+impl Watcher {
+    /// Hands one PDU to the observer, if there is one.
+    ///
+    /// One branch when nobody is watching, which is the default and the case
+    /// that must cost nothing (CA-008-09: the recorder is off unless somebody
+    /// turned it on).
+    pub(crate) fn saw(&self, flow: crate::PduFlow, command: &Command) {
+        if let Some(observer) = self.observer.as_ref() {
+            observer.saw(self.session_id, flow, command);
+        }
+    }
+}
+
 /// Runs the reader until the stream ends or the token is cancelled.
 pub(crate) async fn run<S>(
     mut stream: S,
     pending: Arc<Pending>,
     outgoing: mpsc::Sender<Command>,
     deliveries: Option<mpsc::Sender<Command>>,
+    watcher: Watcher,
     token: CancellationToken,
 ) -> ReaderOutcome
 where
@@ -77,6 +102,10 @@ where
                 send(&outgoing, nack(0), &token).await
             }
             Some(Ok(Ok(command))) => {
+                // Observed before dispatch: what the socket delivered, whatever
+                // this reader then decides to do with it.
+                watcher.saw(crate::PduFlow::Inbound, &command);
+
                 handle(command, &pending, &outgoing, deliveries.as_ref(), &token).await
             }
         };

@@ -33,6 +33,65 @@ describe("translation catalogues", () => {
     expect(flatten(en).sort()).toEqual(flatten(fr).sort());
   });
 
+  /**
+   * **Every literal key a component asks for exists.**
+   *
+   * The two tests above check the catalogues against *each other*; neither
+   * checks them against the components. i18next does not throw on a missing
+   * key — it renders the key itself — so `sessions.field.gsm7Charset` appeared
+   * verbatim as a form label, in both languages, with a green suite. It was
+   * found by launching the application and reading the screen.
+   *
+   * This scans the sources for `t("…")` and t(`…`) with no interpolation and
+   * asserts each one resolves. Interpolated keys — t(`nav.${screen}`) — cannot
+   * be checked this way, and are covered by the first test, which enumerates
+   * their bases.
+   */
+  it("resolves every literal key the components ask for", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { dirname, join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+
+    const sources = (directory: string): string[] =>
+      readdirSync(directory).flatMap((entry) => {
+        const path = join(directory, entry);
+
+        if (statSync(path).isDirectory()) {
+          return sources(path);
+        }
+
+        return /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry) ? [path] : [];
+      });
+
+    const resolves = (key: string): boolean =>
+      key
+        .split(".")
+        .reduce<unknown>(
+          (node, part) =>
+            typeof node === "object" && node !== null && part in node
+              ? (node as Record<string, unknown>)[part]
+              : undefined,
+          fr,
+        ) !== undefined;
+
+    const missing: string[] = [];
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+    for (const path of sources(root)) {
+      const source = readFileSync(path, "utf8");
+
+      for (const match of source.matchAll(/\bt\(\s*["`]([a-zA-Z0-9_.]+)["`]/gu)) {
+        const key = match[1];
+
+        if (key !== undefined && !resolves(key)) {
+          missing.push(`${key} (${path.split("/src/")[1] ?? path})`);
+        }
+      }
+    }
+
+    expect(missing, "keys asked for by a component and absent from fr.json").toEqual([]);
+  });
+
   it("leaves no value empty", () => {
     const values = (value: unknown): string[] =>
       typeof value === "object" && value !== null

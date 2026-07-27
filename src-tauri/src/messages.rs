@@ -88,10 +88,7 @@ impl<R: Runtime> SendObserver for EventForwarder<R> {
     fn state_changed(&self, client_message_id: ClientMessageId, state: MessageState) {
         self.events.emit_message(
             &self.app,
-            &MessageUpdate {
-                client_message_id: client_message_id.to_string(),
-                state: state.as_str().to_owned(),
-            },
+            &MessageUpdate::single(client_message_id.to_string(), state.as_str().to_owned()),
         );
     }
 }

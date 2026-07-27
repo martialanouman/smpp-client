@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO dlr_orphans (\n                       session_id, smsc_message_id, reason,\n                       dlr_stat, dlr_err, submit_date, done_date, raw, received_at\n                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "8db2b76c5f9bd5a495f343feaf22d6e38a33007153be97d13b4c11ed20904332"
+}

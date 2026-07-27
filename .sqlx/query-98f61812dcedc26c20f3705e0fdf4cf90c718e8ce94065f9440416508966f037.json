@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE state = ? AND rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                       ORDER BY rowid\n                       LIMIT ?",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                          client_message_id, campaign_id, session_id, smsc_message_id,\n                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                          data_coding, segments, text, state, command_status,\n                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                   FROM messages\n                   WHERE campaign_id = ?\n                     AND (? IS NULL OR session_id = ?)\n                     AND (? IS NULL OR created_at >= ?)\n                     AND (? IS NULL OR created_at <= ?)\n                     AND (? IS NULL OR dest_addr LIKE ? || '%')\n                     AND (? IS NULL OR dlr_err = ?)\n                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                          OR text LIKE '%' || ? || '%'\n                                          OR smsc_message_id LIKE '%' || ? || '%')\n                   ORDER BY rowid",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 5
+      "Right": 15
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "22f1347d5c4f4819184cc363677b802b3c7e2ed39d6515d3e99e0ed52ff8d9f2"
+  "hash": "98f61812dcedc26c20f3705e0fdf4cf90c718e8ce94065f9440416508966f037"
 }

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"total!: i64\" FROM messages\n                       WHERE (? IS NULL OR session_id = ?)\n                         AND (? IS NULL OR created_at >= ?)\n                         AND (? IS NULL OR created_at <= ?)\n                         AND (? IS NULL OR dest_addr LIKE ? || '%')\n                         AND (? IS NULL OR dlr_err = ?)\n                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                              OR text LIKE '%' || ? || '%'\n                                              OR smsc_message_id LIKE '%' || ? || '%')",
+  "describe": {
+    "columns": [
+      {
+        "name": "total!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8316bf86501147211f958a0f15e302bdf7d7781e3fe728479c0db3525e427b36"
+}

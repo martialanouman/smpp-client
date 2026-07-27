@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) AS \"total!: i64\" FROM messages\n                       WHERE campaign_id = ?\n                         AND (? IS NULL OR session_id = ?)",
+  "query": "SELECT COUNT(*) AS \"total!: i64\" FROM dlr_orphans\n               WHERE (? IS NULL OR session_id = ?)",
   "describe": {
     "columns": [
       {
@@ -11,11 +11,11 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 2
     },
     "nullable": [
       false
     ]
   },
-  "hash": "0e1c3df5f63767fa4d8658983da744b952cf447ea762f20d02262e9e8ae7fc4e"
+  "hash": "bc4e3572eea3828ad985cb3a34aa8b7ac72d74be1f757d0608febd4e7670182d"
 }

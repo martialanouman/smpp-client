@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE campaign_id = ? AND rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                       ORDER BY rowid\n                       LIMIT ?",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                          client_message_id, campaign_id, session_id, smsc_message_id,\n                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                          data_coding, segments, text, state, command_status,\n                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                   FROM messages\n                   WHERE state = ?\n                     AND (? IS NULL OR session_id = ?)\n                     AND (? IS NULL OR created_at >= ?)\n                     AND (? IS NULL OR created_at <= ?)\n                     AND (? IS NULL OR dest_addr LIKE ? || '%')\n                     AND (? IS NULL OR dlr_err = ?)\n                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                          OR text LIKE '%' || ? || '%'\n                                          OR smsc_message_id LIKE '%' || ? || '%')\n                   ORDER BY rowid",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 5
+      "Right": 15
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "ed7bbfed35c3a3a9ce00fc4ad9064d968dacafc9f01585596a4e2f71c3be95ed"
+  "hash": "4dd38358972c43950a36ab3fa573b6f074b53ab7a497a16513a2201b3a95a669"
 }

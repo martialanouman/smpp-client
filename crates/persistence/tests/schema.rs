@@ -22,6 +22,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "contact_list_members",
     "contact_lists",
     "contacts",
+    // Milestone 008, CA-008-04: receipts that correlate to no message.
+    "dlr_orphans",
     "messages",
     "pdu_log",
     "session_profiles",
@@ -29,6 +31,8 @@ const EXPECTED_TABLES: &[&str] = &[
 
 const EXPECTED_INDEXES: &[&str] = &[
     "idx_contacts_msisdn",
+    "idx_dlr_orphans_session",
+    "idx_dlr_orphans_smscid",
     "idx_messages_campaign",
     "idx_messages_smscid",
     "idx_messages_state",

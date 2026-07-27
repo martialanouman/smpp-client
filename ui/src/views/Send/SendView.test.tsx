@@ -6,6 +6,7 @@ import type {
   MessagePreviewDto,
   MessageSendInput,
   MessageSendResultDto,
+  MessageUpdate,
   SessionProfileDto,
   SessionStatusDto,
 } from "../../ipc";
@@ -20,11 +21,20 @@ const messageSend = vi.fn();
 const messagePreview = vi.fn();
 const onMessageUpdate = vi.fn();
 
+/// The live handler the mocked subscription installed.
+let deliverUpdate: ((payload: MessageUpdate) => void) | null = null;
+
 vi.mock("../../ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../ipc")>()),
   messageSend: (input: MessageSendInput) => messageSend(input) as unknown,
   messagePreview: (input: unknown) => messagePreview(input) as unknown,
-  onMessageUpdate: (handler: unknown) => onMessageUpdate(handler) as unknown,
+  // The handler is KEPT, so a test can deliver a real payload: the batched
+  // shape of `message:update` was otherwise never exercised on this screen.
+  onMessageUpdate: (handler: (payload: MessageUpdate) => void) => {
+    deliverUpdate = handler;
+
+    return onMessageUpdate(handler) as unknown;
+  },
 }));
 
 /** A bound profile the form can send on. */
@@ -50,6 +60,7 @@ function aProfile(sessionId: string): SessionProfileDto {
     gsm7Packing: "unpacked",
     gsm7Charset: "gsm0338",
     bindCount: 1,
+    dlrIdMatching: "relaxed",
   };
 }
 
@@ -240,7 +251,20 @@ describe("Send › Simple", () => {
       expect(screen.getByText(fr.send.state.ACCEPTED)).toBeTruthy();
     });
 
-    useSend.getState().adopt(anAcceptedResult().clientMessageId, "DELIVERED");
+    // Delivered through the EVENT, not through the store: since milestone 008
+    // the payload is a batch, and going straight to `adopt` would leave the
+    // screen's own unwrapping of `payload.updates` untested — which is exactly
+    // the code the breaking change touched.
+    expect(deliverUpdate).not.toBeNull();
+    deliverUpdate?.({
+      updates: [
+        {
+          clientMessageId: anAcceptedResult().clientMessageId,
+          state: "DELIVERED",
+          dlrStat: "DELIVRD",
+        },
+      ],
+    });
 
     await waitFor(() => {
       expect(screen.getByText(fr.send.state.DELIVERED)).toBeTruthy();

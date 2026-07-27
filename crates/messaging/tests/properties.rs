@@ -331,3 +331,69 @@ proptest! {
         }
     }
 }
+
+// --- Milestone 008: the delivery-receipt parser -----------------------------
+
+proptest! {
+    /// step-008 §5 — **no delivery-receipt body, whatever it is, may panic.**
+    ///
+    /// The parser walks a body by byte offsets and slices it (`body[at..]`,
+    /// `raw.get(0..2)`), which is where an off-by-one stops being a wrong
+    /// answer and becomes a crash. The input is arbitrary because that is what
+    /// the socket delivers: a message centre can send any octets it likes.
+    ///
+    /// # Why arbitrary **octets** and not an arbitrary `String`
+    ///
+    /// It is the faithful domain, not a convenience. `messaging::dlr` decodes a
+    /// `deliver_sm` body as ISO-8859-1 — one octet, one code point — so every
+    /// string the parser can ever see is built exactly the way this generator
+    /// builds one. A `".{0,400}"` regex would instead draw from the whole
+    /// Unicode range: a domain the parser never receives, and one proptest
+    /// spends minutes sampling.
+    ///
+    /// The assertion is deliberately weak — *reaching* it is the property.
+    /// What it must not become is a check on the parsed fields: an arbitrary
+    /// body has no expected parse, and asserting one would only pin whatever
+    /// the implementation happens to do.
+    #[test]
+    fn no_receipt_body_can_panic(octets in prop::collection::vec(any::<u8>(), 0..400)) {
+        let body: String = octets.iter().map(|byte| char::from(*byte)).collect();
+        let receipt = messaging::dlr::parse_receipt_body(&body);
+
+        prop_assert_eq!(receipt.raw, body);
+    }
+
+    /// The same over arbitrary **text**, which is what a body containing a
+    /// multi-byte character produces once the interface or an export has been
+    /// through it. Kept short: this is about char boundaries, and a body of ten
+    /// characters exercises every one of them.
+    #[test]
+    fn no_multi_byte_body_can_panic(body in "[\\x20-\\x7e\\u{00e9}\\u{20ac}\\u{4e2d}: ]{0,40}") {
+        let receipt = messaging::dlr::parse_receipt_body(&body);
+
+        prop_assert_eq!(receipt.raw, body);
+    }
+
+    /// The same, over bodies shaped enough like receipts to reach every branch.
+    /// `.{0,400}` almost never produces `stat:` or a ten-digit date, so on its
+    /// own it exercises the scanner's skip path and little else.
+    #[test]
+    fn no_receipt_shaped_body_can_panic(
+        identifier in "[a-zA-Z0-9:_-]{0,20}",
+        date in "[0-9]{0,14}",
+        status in "[A-Za-z]{0,12}",
+        error in "[A-Za-z0-9_]{0,12}",
+        text in "[^\n]{0,60}",
+    ) {
+        let body = format!(
+            "id:{identifier} sub:001 dlvrd:001 submit date:{date} \
+             done date:{date} stat:{status} err:{error} text:{text}"
+        );
+
+        let receipt = messaging::dlr::parse_receipt_body(&body);
+
+        // The one field that is always determined: `text:` swallows the rest
+        // of the body, so whatever was put there comes back.
+        prop_assert_eq!(receipt.text.as_deref(), Some(text.trim_start()));
+    }
+}

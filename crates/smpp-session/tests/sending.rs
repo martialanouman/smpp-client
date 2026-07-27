@@ -443,7 +443,7 @@ async fn a_receipt_can_neither_find_nor_revive_a_partially_failed_message() {
     // Milestone 008 looks a receipt up by the identifier the centre quotes.
     assert!(
         journal
-            .find_message_by_smsc_id("FRAGMENT-1")
+            .find_message_by_smsc_id("FRAGMENT-1", None)
             .await
             .expect("the lookup runs")
             .is_none(),

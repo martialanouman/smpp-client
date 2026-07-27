@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                      client_message_id, campaign_id, session_id, smsc_message_id,\n                      source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                      data_coding, segments, text, state, command_status,\n                      dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n               FROM messages\n               WHERE smsc_message_id = ?\n               ORDER BY rowid\n               LIMIT 1",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                      client_message_id, campaign_id, session_id, smsc_message_id,\n                      source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                      data_coding, segments, text, state, command_status,\n                      dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n               FROM messages\n               WHERE smsc_message_id = ?\n                 AND (? IS NULL OR session_id = ?)\n               ORDER BY rowid\n               LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 3
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "6b5f7d6198bbab42a50b6218d3dc09c1193fc2c66a95c4f1936177f342da6a8d"
+  "hash": "a4090ab044e81e3d4118524bbae6638afad01581f8c70aca3200b25c75dbd34d"
 }

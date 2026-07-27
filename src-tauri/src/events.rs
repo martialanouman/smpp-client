@@ -100,27 +100,67 @@ pub(crate) struct SessionsState {
     pub(crate) sessions: Vec<crate::commands::session::SessionStatusDto>,
 }
 
-/// Payload of `message:update` — one message reached a new state.
-///
-/// Emitted three times on a nominal send: `QUEUED`, `SENT`, `ACCEPTED`. That
-/// is what CA-006-01 asks the interface to show, and a command that only
-/// returned its final report could not: the three states would collapse into
-/// one repaint.
-///
-/// **Unthrottled, deliberately.** A unit send produces three events and the
-/// operator is watching every one of them. The bulk sending of milestone 010
-/// is where a per-message event would saturate the bridge, and that is where
-/// the aggregate `campaign:progress` of spec §15.3 belongs — a throttle here
-/// would drop the last transition of a message nobody would then see finish,
-/// which is the bug `sessions:state` already had.
-#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+/// One message's new standing.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-#[tauri_specta(event_name = "message:update")]
-pub(crate) struct MessageUpdate {
+pub(crate) struct MessageUpdateEntry {
     /// The write-ahead key, so the interface knows which message moved.
     pub(crate) client_message_id: String,
     /// `QUEUED`, `SENT`, `ACCEPTED`, `FAILED` — the names of spec §14.3.
     pub(crate) state: String,
+    /// The `stat` code of the delivery receipt that moved it, when one did.
+    ///
+    /// `None` on the send path: `QUEUED`, `SENT` and `ACCEPTED` come from this
+    /// application's own progress, not from a receipt.
+    pub(crate) dlr_stat: Option<String>,
+}
+
+/// Payload of `message:update` — a **batch** of messages reached a new state.
+///
+/// Emitted three times on a nominal send, each carrying one entry: `QUEUED`,
+/// `SENT`, `ACCEPTED`. That is what CA-006-01 asks the interface to show, and a
+/// command that only returned its final report could not — the three states
+/// would collapse into one repaint.
+///
+/// # Why a batch, since milestone 008
+///
+/// It carried a single message until delivery receipts arrived. A message
+/// centre replaying a backlog produces thousands of transitions a second, and
+/// one event each is what CA-008-08 forbids: the bulk travels through the
+/// paginated `logs_query`, and this channel carries **aggregated increments**.
+///
+/// The aggregation is the batch the receipt pipeline already commits (one
+/// transaction per 200 receipts or per 250 ms), so it costs nothing extra and
+/// cannot drift from what was written: the event describes exactly one commit.
+///
+/// # Still unthrottled, and now for a stronger reason
+///
+/// A throttle here would drop the last transition of a message nobody would
+/// then see finish — the bug `sessions:state` already had. The rate is now
+/// bounded by the pipeline's own batching instead, which is a **pacing** and
+/// not a filter: nothing is discarded, several receipts become one event.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "message:update")]
+pub(crate) struct MessageUpdate {
+    /// The messages that moved, in the order they were committed.
+    ///
+    /// Never empty: an event announcing nothing is a repaint of the same
+    /// screen.
+    pub(crate) updates: Vec<MessageUpdateEntry>,
+}
+
+impl MessageUpdate {
+    /// The payload for a single transition, as the send path produces one.
+    pub(crate) fn single(client_message_id: String, state: String) -> Self {
+        Self {
+            updates: vec![MessageUpdateEntry {
+                client_message_id,
+                state,
+                dlr_stat: None,
+            }],
+        }
+    }
 }
 
 /// Interval between two `metrics:tick` emissions.
@@ -314,8 +354,15 @@ impl EventEmitter {
     /// Emits `message:update`.
     ///
     /// Unconditional: see [`MessageUpdate`] for why this channel has no
-    /// throttle.
+    /// throttle. An **empty** batch is dropped rather than emitted — it would
+    /// be a repaint of the same screen, and the receipt pipeline never produces
+    /// one, so this is a guard against a future call site rather than against
+    /// the current ones.
     pub(crate) fn emit_message<R: Runtime>(&self, app: &AppHandle<R>, payload: &MessageUpdate) {
+        if payload.updates.is_empty() {
+            return;
+        }
+
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit message:update");
         }

@@ -105,6 +105,12 @@ pub(crate) struct SupervisorContext<T: Transport> {
     pub(crate) responses: mpsc::Sender<Command>,
     /// Where `deliver_sm` goes, when anyone is listening.
     pub(crate) deliveries: Option<mpsc::Sender<Command>>,
+    /// Who sees every PDU crossing the socket, when anybody does.
+    ///
+    /// `None` on a session with no debug facility, which costs one branch per
+    /// PDU and nothing else. See [`crate::PduObserver`] for why the call has to
+    /// be synchronous.
+    pub(crate) observer: Option<Arc<dyn crate::PduObserver>>,
     /// Where the state is published.
     pub(crate) state: watch::Sender<SessionSnapshot>,
     /// The session-wide shutdown signal.
@@ -246,13 +252,26 @@ async fn attempt_connection<T: Transport>(
 
     let mut framed = connection::frame(stream);
 
+    // The watcher is built here rather than in `serve`: the bind exchange is
+    // the one an operator debugging a rejection most wants, and it happens
+    // before `serve` ever sees the socket.
+    let watcher = reader::Watcher {
+        session_id: context.profile.session_id(),
+        observer: context.observer.clone(),
+    };
+
     publish(&context.state, SessionState::Binding, None, None);
 
     tokio::select! {
         () = context.token.cancelled() => {
             return Ok(Stop::Shutdown { needs_unbind: false });
         }
-        result = connection::bind(&mut framed, &context.profile, &context.password) => result?,
+        result = connection::bind(
+            &mut framed,
+            &context.profile,
+            &context.password,
+            &watcher,
+        ) => result?,
     }
 
     let mode = context.profile.bind_mode();
@@ -268,7 +287,7 @@ async fn attempt_connection<T: Transport>(
     // saw it because none of them ever held a bind and then lost it.
     *attempt = 0;
 
-    Ok(serve(framed, context).await)
+    Ok(serve(framed, context, watcher).await)
 }
 
 /// Publishes the state a session ends in.
@@ -292,6 +311,10 @@ fn conclude(state: &watch::Sender<SessionSnapshot>) {
 async fn serve<T: Transport>(
     framed: Framed<T::Stream, SessionCodec>,
     context: &mut SupervisorContext<T>,
+    // One watcher for the whole connection, built at bind time: the session
+    // identifier is fixed, so resolving it per PDU would be a lookup that
+    // cannot change its answer.
+    watcher: reader::Watcher,
 ) -> Stop {
     let (mut sink, stream) = framed.split();
 
@@ -312,6 +335,7 @@ async fn serve<T: Transport>(
         Arc::clone(&context.pending),
         context.responses.clone(),
         context.deliveries.clone(),
+        watcher.clone(),
         connection_token.clone(),
     ));
     let mut reader_finished = false;
@@ -368,7 +392,7 @@ async fn serve<T: Transport>(
             // again, so the session closes rather than idling on a socket.
             Event::Outgoing(None) => break Stop::Shutdown { needs_unbind: true },
             Event::Outgoing(Some(command)) => {
-                match write(&mut sink, command, timeout, &context.token).await {
+                match write(&mut sink, command, timeout, &watcher, &context.token).await {
                     Written::Ok => {}
                     Written::Cancelled => {
                         break Stop::Shutdown {
@@ -415,7 +439,7 @@ async fn serve<T: Transport>(
                     Ok((command, waiter)) => {
                         keepalive_waiter = Some(waiter);
 
-                        match write(&mut sink, command, timeout, &context.token).await {
+                        match write(&mut sink, command, timeout, &watcher, &context.token).await {
                             Written::Ok => {}
                             Written::Cancelled => {
                                 break Stop::Shutdown {
@@ -464,7 +488,14 @@ async fn serve<T: Transport>(
     };
 
     if matches!(stop, Stop::Shutdown { needs_unbind: true }) {
-        unbind(&mut sink, &context.pending, &context.profile, timeout).await;
+        unbind(
+            &mut sink,
+            &context.pending,
+            &context.profile,
+            timeout,
+            &watcher,
+        )
+        .await;
     }
 
     // No task outlives this function (CA-005-08): the connection token stops
@@ -526,12 +557,17 @@ async fn write<W>(
     sink: &mut W,
     command: Command,
     deadline: Duration,
+    watcher: &reader::Watcher,
     token: &CancellationToken,
 ) -> Written
 where
     W: futures_util::Sink<Command, Error = std::io::Error> + Unpin,
 {
     tracing::trace!(pdu = %pdu_debug::redacted(&command), "writing PDU");
+
+    // Observed BEFORE the write, not after: a PDU that fails to leave is still
+    // a PDU somebody debugging wants to see, and it is the one they want most.
+    watcher.saw(crate::PduFlow::Outbound, &command);
 
     tokio::select! {
         () = token.cancelled() => Written::Cancelled,
@@ -631,6 +667,7 @@ async fn unbind<W>(
     pending: &Pending,
     profile: &SessionProfile,
     write_deadline: Duration,
+    watcher: &reader::Watcher,
 ) where
     W: futures_util::Sink<Command, Error = std::io::Error> + Unpin,
 {
@@ -645,6 +682,8 @@ async fn unbind<W>(
     // token is already cancelled by the time we get here, and passing it would
     // make the goodbye impossible to say at all.
     let command = Command::new(CommandStatus::EsmeRok, sequence.get(), Pdu::Unbind);
+
+    watcher.saw(crate::PduFlow::Outbound, &command);
 
     match tokio::time::timeout(write_deadline, sink.send(command)).await {
         Ok(Ok(())) => {}

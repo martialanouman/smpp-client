@@ -39,9 +39,32 @@ tracing = { workspace = true, features = ["attributes"] }
 # CLAUDE.md §2.
 uuid.workspace = true
 
+# Milestone 008. The delivery-receipt pipeline is a task fed by a bounded
+# channel that commits a batch of transitions every N receipts or every T
+# milliseconds (CA-008-10), so it needs `sync` for the channel and `time` for
+# the deadline. Both are needed *here*, not in `src-tauri`: putting the loop at
+# the boundary would put the batching policy — the thing CA-008-10 is about —
+# in a layer CLAUDE.md §3 says holds no business logic.
+#
+# No `rt`: this crate spawns nothing. The caller owns the task and drives the
+# future, which is what lets the tests run it under `tokio::time::pause()`.
+#
+# `macros` is for `tokio::select!`, not for `#[tokio::main]`: the batching loop
+# waits on "a receipt arrives" and "the deadline expires" at once. Without it
+# the crate builds only when a dev-dependency happens to enable the feature —
+# which it did, so `cargo check --workspace --all-targets` stayed green while
+# `cargo check -p logging-export` did not.
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
+
+# The receipt pipeline is async and time-driven. `macros` for `#[tokio::test]`,
+# `rt` for the harness it expands to, and `test-util` for `start_paused = true`
+# — CLAUDE.md §7 asks for a deterministic clock, and a batching policy measured
+# against the wall clock would assert on how fast the machine is.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
 
 # NO dev-dependency on `smpp-session`, deliberately. The end-to-end tests of
 # the send path need both crates, and putting them here would mean

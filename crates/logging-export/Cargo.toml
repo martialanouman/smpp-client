@@ -10,6 +10,35 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
+
+# Downward edges (guide §8.1): this crate sits above both.
+#
+# `persistence` for the two stores it pages over — `MessageJournal` and
+# `OrphanJournal`. ADR 0007 parks those ports there until this crate has the
+# logic to own them, which milestone 013 is; milestone 008 consumes them where
+# they are rather than moving them early and having to move them again.
+#
+# `smpp-core` for `Command`, `Clock` and the guarded PDU dump: the recorder is
+# the single call site of `DebugDumpAuthorisation::granted` in the application.
+persistence = { path = "../persistence" }
+smpp-core = { path = "../smpp-core" }
+
+# `sync` for the recorder's buffer. `tokio::sync::Mutex` rather than the std
+# one because the guard is held across the `.await` that writes a batch, which
+# is precisely what CLAUDE.md §4 bans the std one for.
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+# For the doubles that stand in for the two storage ports: `MessageJournal`
+# returns a `BoxStream`, so a double has to be able to build an empty one.
+futures-core.workspace = true
+futures-util.workspace = true
+
+# The orphan record is `messaging`'s, and a double has to build one.
+messaging = { path = "../messaging" }
 
 [lints]
 workspace = true

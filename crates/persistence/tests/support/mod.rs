@@ -105,6 +105,7 @@ pub(crate) fn a_session_profile(session_id: SessionId, name: &str) -> SessionPro
         gsm7_packing: Gsm7BitPacking::Unpacked,
         gsm7_charset: Gsm7BitCharset::Gsm0338,
         bind_count: 1,
+        dlr_id_matching: persistence::IdMatching::default(),
         created_at: instant("2026-07-26T10:00:00Z"),
         updated_at: instant("2026-07-26T10:00:00Z"),
     }

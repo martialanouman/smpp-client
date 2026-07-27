@@ -16,6 +16,7 @@
 mod campaigns;
 mod contacts;
 mod convert;
+mod dlr_orphans;
 mod messages;
 mod page;
 mod pdu_log;
@@ -25,6 +26,7 @@ mod session_profiles;
 
 pub use campaigns::SqliteCampaignRepository;
 pub use contacts::SqliteContactRepository;
+pub use dlr_orphans::{OrphanJournal, SqliteOrphanRepository, StoredOrphan};
 pub use messages::SqliteMessageRepository;
-pub use pdu_log::SqlitePduLogRepository;
+pub use pdu_log::{SqlitePduLogRepository, StoredPduEntry};
 pub use session_profiles::SqliteSessionProfileRepository;

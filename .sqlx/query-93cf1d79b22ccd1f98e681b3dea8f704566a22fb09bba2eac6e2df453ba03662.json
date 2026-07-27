@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO pdu_log (\n               session_id, direction, command_id, command_status,\n               sequence_number, raw_hex, decoded, ts\n           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "93cf1d79b22ccd1f98e681b3dea8f704566a22fb09bba2eac6e2df453ba03662"
+}

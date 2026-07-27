@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type {
   BindTypeDto,
   Gsm7CharsetDto,
+  IdMatchingDto,
   Gsm7PackingDto,
   InterfaceVersionDto,
   SessionProfileDto,
@@ -14,6 +15,16 @@ const BIND_TYPES: readonly BindTypeDto[] = ["transmitter", "receiver", "transcei
 const VERSIONS: readonly InterfaceVersionDto[] = ["v3.4", "v5.0"];
 const PACKINGS: readonly Gsm7PackingDto[] = ["unpacked", "packed"];
 const CHARSETS: readonly Gsm7CharsetDto[] = ["gsm0338", "latin1"];
+
+/**
+ * The three identifier-matching policies, safest first.
+ *
+ * `bases` is last on purpose: it is the only lossy one — it reads the receipt's
+ * identifier in the other base, which can land on a different message — and a
+ * list ordered by tolerance puts the choice in the operator's hands in the
+ * order they should consider it.
+ */
+const ID_MATCHINGS: readonly IdMatchingDto[] = ["exact", "relaxed", "bases"];
 
 /** Tailwind classes shared by every control, so the form stays even. */
 const CONTROL =
@@ -242,7 +253,29 @@ export function ProfileForm({ initial, onDone }: ProfileFormProps) {
             ))}
           </select>
         </Field>
+
+        <Field label={t("sessions.field.dlrIdMatching")}>
+          <select
+            value={draft.dlrIdMatching}
+            onChange={(event) => set("dlrIdMatching", event.target.value as IdMatchingDto)}
+            className={CONTROL}
+          >
+            {ID_MATCHINGS.map((value) => (
+              <option key={value} value={value}>
+                {t(`sessions.dlrIdMatching.${value}`)}
+              </option>
+            ))}
+          </select>
+        </Field>
       </div>
+
+      {draft.dlrIdMatching === "bases" ? (
+        <p role="note" className="text-xs text-[var(--shinobi-danger)]">
+          {t("sessions.dlrIdMatchingWarning")}
+        </p>
+      ) : (
+        <p className="text-xs opacity-70">{t("sessions.dlrIdMatchingHint")}</p>
+      )}
 
       <p className="text-xs opacity-70">{t("sessions.throughputHint")}</p>
 

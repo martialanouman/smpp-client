@@ -9,6 +9,191 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 008, accusés de livraison et journal métier (M2)
+
+- **Lecture d'un `deliver_sm`** (`messaging::dlr`) : la distinction accusé /
+  message entrant se fait sur `esm_class` et sur rien d'autre. Un corps qui
+  ressemble à un accusé mais dont le `message_type` dit « message normal » est
+  un SMS entrant, et le traiter autrement ferait passer un message à
+  `DELIVERED` parce qu'un abonné a tapé les bonnes lettres.
+- **Parsing tolérant du corps d'accusé** : casse des clés, trois orthographes de
+  `submit date`, espaces multiples, ordre libre, champs absents, champs
+  propriétaires non documentés. `text:` avale la fin de la ligne, deux-points
+  compris. Rien n'échoue jamais : un corps illisible produit un accusé vide qui
+  garde le texte brut (CA-008-03).
+- **Les sept statuts de la spec §7.8** mappés vers les états internes
+  (CA-008-05). `ACCEPTD` et `UNKNOWN` retombent sur `ACCEPTED` : ce sont les
+  deux seuls qui ne disent rien de la livraison, et les mapper sur `DELIVERED`
+  compterait un message que le destinataire n'a jamais vu.
+- **Corrélation par la base, jamais par la mémoire** (`messaging::correlation`).
+  Un accusé arrive après le `submit_sm_resp`, parfois après un redémarrage : la
+  recherche passe par l'index de `smsc_message_id` du jalon 002.
+- **Normalisation des identifiants** : la forme reçue est essayée en premier,
+  puis la casse, les deux bases et la forme non paddée — la première cause
+  d'accusés non corrélés en production (step-008 §6). Réglable par
+  `IdMatching::Exact` pour un SMSC à identifiants opaques.
+- **Journal des accusés orphelins** (table `dlr_orphans`) : un accusé qui ne
+  corrèle à rien est conservé avec sa raison, son corps brut et son instant
+  d'arrivée, et consultable dans l'écran Journaux (CA-008-04).
+- **Écritures groupées** (`ReceiptPipeline`) : une transaction par lot de
+  200 accusés ou par tranche de 250 ms, la borne de délai courant depuis le
+  **premier** accusé du lot. Mille accusés font cinq transactions (CA-008-10),
+  un accusé isolé est appliqué en 250 ms (CA-008-01).
+- **Journal métier paginé** (`logging_export::journal`) : filtres session,
+  campagne, état, plage de dates, préfixe de destinataire, code d'erreur et
+  recherche plein texte. Le contenu des messages est **tronqué par défaut**
+  (CLAUDE.md §8) ; l'option existe dans le modèle et le réglage utilisateur
+  arrive au jalon 015, comme prévu.
+- **Journal PDU activable** (`logging_export::pdu_log`), **désactivé par
+  défaut** et sans constructeur qui l'allume (CA-008-09). C'est l'unique site
+  d'appel de `DebugDumpAuthorisation::granted` de l'application. Les PDU y
+  arrivent par `smpp_session::PduObserver`, un port **synchrone** que le lecteur
+  et l'écrivain appellent pour chaque PDU — poignée de main comprise, c'est
+  l'échange qu'on veut quand un bind est refusé. `src-tauri` l'implémente en
+  poussant dans une file bornée qu'une tâche draine : attendre une écriture en
+  base dans le lecteur ferait cadencer la session par l'interrupteur de
+  débogage.
+- **Commandes `logs_query`, `logs_orphans`, `logs_pdus`,
+  `logs_set_pdu_logging`** et **écran Journaux** : table fenêtrée, filtres
+  combinés, codes couleur par état — la couleur n'est jamais le seul signal, le
+  code est écrit à côté — et panneau de détail au clic.
+- **Le double SMSC émet des `deliver_sm`** (`smpp_session::testing`) : une file
+  que le test remplit, donc du désordre, des doublons et des identifiants
+  inconnus à volonté.
+
+#### Ce que devient un message segmenté partiellement accusé
+
+Un message découpé en trois segments reçoit **trois** identifiants du SMSC et,
+si `registered_delivery` l'a demandé, **trois** accusés. La ligne `messages`
+porte un seul `smsc_message_id`, celui du premier segment (jalon 006). Donc :
+
+- l'accusé du segment 1 corrèle et pilote l'état du message ;
+- les accusés des segments 2..n ne corrèlent pas et sont journalisés comme
+  orphelins, avec la raison `UNKNOWN_ID`.
+
+C'est une **limite assumée de ce jalon**, pas un oubli. Corréler chaque segment
+demande une table d'identifiants par segment — donc une migration et une
+modification du chemin d'émission — alors que step-008 §2 borne la corrélation
+à « par `smsc_message_id`, l'index de step-002 », c'est-à-dire à cette colonne.
+Rien n'est perdu : les accusés supplémentaires sont dans le journal des
+orphelins avec leur `stat`, et un opérateur voit que les segments 2 et 3 ont
+été livrés même si l'état de la ligne vient du segment 1.
+
+#### Ce qu'un accusé ne peut pas faire
+
+Les deux barrières du jalon 006 sont traversées, jamais contournées :
+
+- une ligne `FAILED` partielle ne porte **aucun** `smsc_message_id`, donc
+  l'accusé de son fragment accepté ne trouve rien et devient un orphelin —
+  c'est le résultat voulu, pas un raté ;
+- la machine d'états refuse `FAILED → DELIVERED`, et le refus est dans la
+  clause `WHERE` de l'`UPDATE`. La corrélation émet la transition que l'accusé
+  réclame et laisse la base la refuser ; elle ne lit jamais l'état courant pour
+  décider elle-même, ce qui serait une course entre deux tâches.
+
+Un accusé redélivré — le même, relu sur la socket — ne change ni l'état, ni le
+`stat`, ni le code d'erreur, ni le compteur de tentatives. Il rafraîchit
+`dlr_at`, qui est « quand cette application a eu l'accusé en main pour la
+dernière fois » et non « quand le combiné a reçu le message » : le `done date`
+du SMSC est la seconde chose, il est invérifiable, et il est conservé sur
+l'accusé plutôt que dans cette colonne.
+
+#### Limite connue — un accusé précoce devient un orphelin définitif
+
+Le `sender` n'écrit `smsc_message_id` qu'au `update_states` final, après le
+dernier `submit_sm_resp`. Un SMSC qui pousse son `deliver_sm` avant que ce
+commit ait eu lieu — verrou SQLite tenu, disque lent, centre qui livre en
+quelques millisecondes — rencontre un journal qui ne connaît pas encore
+l'identifiant. L'accusé part en orphelin et **n'est jamais retenté** : le
+message reste `ACCEPTED` pour toujours, alors que son accusé est là, dans le
+journal des orphelins, avec l'identifiant qui aurait correspondu.
+
+Non corrigé ici. Le moins cher serait un balayage périodique de `dlr_orphans`
+retentant la corrélation — la table existe et porte déjà l'identifiant — mais
+un balayage est une tâche planifiée avec une interaction de rétention, ce qui
+appartient au jalon 014 plutôt qu'à un ajout ici.
+
+Ce qui n'est **pas** une issue : écrire `smsc_message_id` plus tôt. Cela le
+mettrait au journal avant que l'envoi soit connu comme abouti, c'est-à-dire
+l'ordre write-ahead de CLAUDE.md §4 pris à l'envers.
+
+### Corrigé — jalon 008
+
+- **Boucle infinie dans le parseur d'accusés.** Le scanner testait
+  `is_ascii_whitespace` sur l'octet de tête et sautait les jetons avec
+  `char::is_whitespace`. Les deux divergent sur U+0085 et U+00A0 — deux octets
+  d'un corps Latin-1 ordinaire — et le curseur se réassignait sa propre valeur :
+  une boucle infinie dans la tâche qui tient la file de livraison, sur une
+  entrée que le SMSC choisit. Trouvé par le test de propriété, corrigé, avec un
+  test de non-régression.
+- **Filtre par préfixe de destinataire sans résultat.** `Msisdn` stocke les
+  chiffres seuls, sans `+`, donc un `LIKE '+225%'` littéral ne correspondait à
+  rien. Pas une erreur, pas un état vide qu'on questionne : un écran qui dit
+  silencieusement qu'il n'y a aucun message. Le `+` de tête est retiré à la
+  construction du filtre.
+- **`.gitignore` avalait l'écran Journaux.** La règle `logs/` n'était pas
+  ancrée, donc elle attrapait `ui/src/views/Logs/` sur un système de fichiers
+  insensible à la casse. L'écran entier était invisible pour git, et un
+  `git add -A` l'aurait commité vide. Ancrée à la racine.
+- **La conversion de base d'identifiant créditait le mauvais message.** Le
+  défaut relisait l'identifiant d'un accusé dans l'autre base et prenait le
+  premier candidat trouvé ; comme le chemin « identifiant introuvable » est le
+  chemin nominal — un orphelin par segment supplémentaire — un accusé pour un
+  identifiant inconnu atterrissait de façon fiable sur un message sans rapport.
+  La relecture de base est désormais opt-in par profil (`dlr_id_matching`), et
+  le défaut ne tente plus que des différences d'orthographe, qui sont sans
+  perte.
+- **L'interface annonçait des transitions que la base avait refusées.** La
+  barrière `FAILED → DELIVERED` protège le journal, pas l'événement : un
+  UNDELIV tardif laissait la ligne à DELIVERED et affichait FAILED.
+  `update_states` remonte maintenant le nombre de transitions écrites, et seules
+  celles-là sont annoncées.
+- **Le corps brut d'un accusé orphelin était tronqué à 24 caractères**, ce qui
+  amputait le seul diagnostic disponible sur un accusé qui n'a rien corrélé.
+- **`find_message_by_smsc_id` ignorait la session.** `smsc_message_id` n'est
+  unique que par centre : deux fournisseurs séquentiels attribuent tous deux
+  « 1234 », et la ligne la plus ancienne gagnait.
+- **Le filtre de recherche ne trouvait pas un numéro collé avec son `+`**, même
+  cause que le préfixe. Le retrait est conditionnel, pour ne pas casser la
+  recherche d'un `+` dans un corps de message.
+- **Vingt-cinq clés i18n demandées par des composants n'existaient pas** — toute
+  la racine `metrics` du jalon 007, plus cinq clés du formulaire de profil. Le
+  tableau de bord affichait `metrics.throughput` en toutes lettres. Trouvé en
+  lançant l'application ; le correctif durable est le test qui balaie les
+  sources pour les `t("…")` littéraux et vérifie que chacun se résout.
+- **`messaging` ne déclarait pas la fonctionnalité `macros` de Tokio**, alors
+  que la boucle de lots utilise `tokio::select!`. La crate ne compilait que
+  parce qu'une dev-dépendance activait la fonctionnalité — donc
+  `cargo check --workspace --all-targets` restait vert et
+  `cargo check -p logging-export` non.
+
+### Modifié — jalon 008
+
+- **`message:update` porte un lot** (`{ updates: [...] }`) au lieu d'un seul
+  message. **Changement cassant du contrat IPC.** Un SMSC qui rejoue un arriéré
+  produit des milliers de transitions par seconde, et un événement chacun est
+  ce que CA-008-08 interdit : le volume passe par `logs_query` paginée et
+  l'événement ne porte que des incréments agrégés. Le lot est celui que le
+  pipeline commet déjà, donc l'événement décrit exactement une transaction.
+- **`MessageFilter`** gagne la plage de dates, le préfixe de destinataire, le
+  code d'erreur DLR et la recherche plein texte. Aucun n'est indexé, donc tous
+  prennent la forme `(? IS NULL OR …)` — ce qui ne coûte rien ici et garde
+  quatre littéraux SQL au lieu de soixante-quatre.
+- **`PduLogRepository`** gagne `insert_entries` (une transaction pour le lot) et
+  `page_entries` renvoie un `StoredPduEntry` porteur de son identifiant.
+- **La file de livraison d'une session n'est plus drainée et jetée** : le
+  placeholder du jalon 005 est remplacé par le pipeline d'accusés.
+
+### Décisions — jalon 008
+
+- **ADR 0011 — virtualisation de la table des journaux.**
+  `@tanstack/react-virtual` a été intégré puis retiré : le compilateur React
+  refuse de compiler un composant qui l'utilise, et sous Vitest + jsdom il ne se
+  réaffiche jamais après le montage, donc CA-008-07 n'était pas testable du
+  tout. La fenêtre est une fonction **pure** de trente lignes, vérifiée sur
+  100, 200 000 et 2 000 000 de lignes. Écart signalé par rapport à CLAUDE.md §2
+  et step-008 §2.
+
 ### Ajouté — jalon 006, envoi simple de bout en bout (M1)
 
 - **Orchestrateur d'envoi unitaire** (`messaging::sender`) : valide → encode →
