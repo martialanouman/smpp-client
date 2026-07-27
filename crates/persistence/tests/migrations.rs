@@ -77,6 +77,14 @@ const SHIPPED_MIGRATIONS: &[(&str, &str)] = &[
         "20260727120000_session_dlr_id_matching.up.sql",
         "5897cf125eed2557fb61a84eb8ec1266fbb417e89b5320a27a4003848195dde1",
     ),
+    (
+        "20260727150000_import_profiles.down.sql",
+        "5ba80f0414f55e337f0531b6e3676e2163dbc1ec95d73762046bbb5ba1d05631",
+    ),
+    (
+        "20260727150000_import_profiles.up.sql",
+        "f29f73e74f5854dac15b4ccae601c4264412d45ac3a6cddb1ecdb30513bfc47e",
+    ),
 ];
 
 /// The `migrations/` directory, resolved from this crate's manifest.
