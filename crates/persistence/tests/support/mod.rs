@@ -98,6 +98,7 @@ pub(crate) fn a_session_profile(session_id: SessionId, name: &str) -> SessionPro
         tls_config: None,
         window_size: 50,
         throughput_tps: 100,
+        min_tps: 1,
         enquire_link_s: 30,
         response_timeout_s: 10,
         reconnect_config: None,

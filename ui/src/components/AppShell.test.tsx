@@ -19,9 +19,18 @@ const BASE: AppConfig = { language: "fr", theme: "system", logLevel: "info", ret
 // test: merge, call, and adoption of what the backend confirms.
 const configSet = vi.fn<(input: ConfigSetInput) => Promise<IpcOutcome<AppConfig>>>();
 
+// `SessionsView` calls `sessionList` on mount, and the navigation test walks
+// through every screen. Left unmocked it rejects, and its notification lands
+// asynchronously — after the next test's `beforeEach` has already reset the
+// store, so it surfaces as a phantom toast in an unrelated test. Answering
+// with an empty list keeps each test's notifications its own.
 vi.mock("../ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc")>()),
   configSet: (input: ConfigSetInput) => configSet(input),
+  sessionList: () => Promise.resolve({ ok: true, value: [] }),
+  sessionStatuses: () => Promise.resolve({ ok: true, value: [] }),
+  onSessionsState: () => Promise.resolve(() => undefined),
+  onMetricsTick: () => Promise.resolve(() => undefined),
 }));
 
 describe("AppShell", () => {

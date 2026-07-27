@@ -74,6 +74,13 @@ use crate::{Session, SessionHandle, SessionSnapshot, Transport};
 /// would look like a hang.
 const DUPLEX_CAPACITY: usize = 64 * 1024;
 
+/// Responses the double queues before its writer has to catch up.
+///
+/// Comfortably above the largest window any test configures: this queue is not
+/// what is under test, and a full one would look like a message centre that
+/// stopped answering.
+const RESPONSE_QUEUE_CAPACITY: usize = 4 * 1024;
+
 /// How the message centre behaves once a client connects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Script {
@@ -136,6 +143,14 @@ pub enum Seen {
         /// The `sequence_number` of the request, so a test can check that the
         /// response carrying it was the one the sender waited for.
         sequence: u32,
+        /// When it arrived, on the (virtual) clock.
+        ///
+        /// CA-007-01 is stated as a measurement **on the message centre**, and
+        /// it has to be: an instant recorded on the client side is the instant
+        /// the sender was admitted, not the instant the PDU crossed the
+        /// socket, and the whole question is whether the pacing survives the
+        /// hop.
+        at: Instant,
         /// The decoded PDU, exactly as it crossed the socket.
         pdu: Box<SubmitSm>,
     },
@@ -156,6 +171,7 @@ pub struct Smsc {
     submit_fallback: SubmitReply,
     submitted: Arc<AtomicU32>,
     connections: Arc<AtomicU32>,
+    latency: Duration,
     seen: mpsc::UnboundedSender<Seen>,
 }
 
@@ -195,10 +211,27 @@ impl Smsc {
                 submit_fallback: SubmitReply::Accept,
                 submitted: Arc::new(AtomicU32::new(0)),
                 connections: Arc::new(AtomicU32::new(0)),
+                latency: Duration::ZERO,
                 seen,
             },
             receiver,
         )
+    }
+
+    /// A message centre that takes `latency` to answer a `submit_sm`.
+    ///
+    /// The delay is applied **per request, concurrently**: the double keeps
+    /// reading while an answer is pending, so a client with a window of fifty
+    /// really does get fifty PDUs in flight. A double that slept before
+    /// reading again would cap the window at one and make every windowing
+    /// assertion vacuously true.
+    ///
+    /// What CA-007-08 is stated against: the round-trip time the client
+    /// reports has to be the latency injected here.
+    #[must_use]
+    pub const fn with_latency(mut self, latency: Duration) -> Self {
+        self.latency = latency;
+        self
     }
 
     /// Answers the first submissions from `replies`, then `fallback` for ever.
@@ -334,12 +367,31 @@ async fn serve(stream: DuplexStream, script: Script, centre: Smsc) {
     }
 
     // --- The bound phase ---------------------------------------------------
-    while let Some(Ok(command)) = framed.next().await {
+    //
+    // Reading and answering are split apart since milestone 007. A message
+    // centre with a latency that answered inline would stop reading while it
+    // slept, so a client with a window of fifty would only ever get one PDU in
+    // flight — and every windowing assertion would hold for the wrong reason.
+    // The answers go through a bounded queue that a writer task drains, and a
+    // delayed answer is a task that sleeps and then queues.
+    let (mut sink, mut stream) = framed.split();
+    let (answers, mut pending) = mpsc::channel::<Command>(RESPONSE_QUEUE_CAPACITY);
+
+    let writer = tokio::spawn(async move {
+        while let Some(answer) = pending.recv().await {
+            if sink.send(answer).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    while let Some(Ok(command)) = stream.next().await {
         let sequence = command.sequence_number();
 
         let note = match (command.id(), command.pdu()) {
             (CommandId::SubmitSm, Some(Pdu::SubmitSm(body))) => Seen::Submit {
                 sequence,
+                at: Instant::now(),
                 pdu: Box::new(body.clone()),
             },
             (CommandId::EnquireLink, _) => Seen::EnquireLink(Instant::now()),
@@ -378,17 +430,30 @@ async fn serve(stream: DuplexStream, script: Script, centre: Smsc) {
             _ => continue,
         };
 
+        let response = Command::new(status, sequence, answer);
         let closing = command.id() == CommandId::Unbind;
 
-        if framed
-            .send(Command::new(status, sequence, answer))
-            .await
-            .is_err()
-            || closing
-        {
-            return;
+        // The latency applies to submissions alone. Delaying the keep-alive or
+        // the unbind would be modelling a slow *socket*, which is a different
+        // fault and one milestone 005 already has scripts for.
+        if centre.latency.is_zero() || command.id() != CommandId::SubmitSm {
+            if answers.send(response).await.is_err() || closing {
+                break;
+            }
+        } else {
+            let answers = answers.clone();
+            let latency = centre.latency;
+
+            tokio::spawn(async move {
+                tokio::time::sleep(latency).await;
+
+                let _ignored = answers.send(response).await;
+            });
         }
     }
+
+    drop(answers);
+    let _ignored = writer.await;
 }
 
 /// A `submit_sm_resp` carrying `message_id`.
@@ -609,7 +674,7 @@ pub fn submissions(notes: &[Seen]) -> Vec<(u32, SubmitSm)> {
     notes
         .iter()
         .filter_map(|note| match note {
-            Seen::Submit { sequence, pdu } => Some((*sequence, (**pdu).clone())),
+            Seen::Submit { sequence, pdu, .. } => Some((*sequence, (**pdu).clone())),
             _ => None,
         })
         .collect()

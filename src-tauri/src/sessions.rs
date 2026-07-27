@@ -21,7 +21,7 @@ use tokio::sync::watch;
 
 use crate::commands::session::statuses;
 use crate::error::ErrorDto;
-use crate::events::{EventEmitter, SESSIONS_STATE_INTERVAL};
+use crate::events::{EventEmitter, MetricsTick, METRICS_TICK_INTERVAL, SESSIONS_STATE_INTERVAL};
 
 /// The session half of the application state.
 pub(crate) struct SessionServices {
@@ -78,6 +78,7 @@ impl SessionServices {
         let handle = session.handle.clone();
 
         self.spawn_forwarder(app, &handle);
+        self.spawn_metrics_ticker(app, &handle);
         self.drain_deliveries(session);
 
         Ok(handle)
@@ -146,6 +147,55 @@ impl SessionServices {
         tauri::async_runtime::spawn(forward(watch, SESSIONS_STATE_INTERVAL, publish));
     }
 
+    /// Samples one session's metrics at a fixed cadence and emits them.
+    ///
+    /// # A ticker, not a listener
+    ///
+    /// The task never hears about a submission. It wakes every
+    /// [`METRICS_TICK_INTERVAL`], reads the session's sliding averages — which
+    /// `smpp_session` maintains at full rate — and emits one event. That is
+    /// what makes CA-007-07 a property of the design rather than of a limiter:
+    /// there is no path from a message to an emission, so no load can produce
+    /// more than four events a second.
+    ///
+    /// It has an owner and a defined end, like the state forwarder: when the
+    /// session's `watch` sender drops the session is gone, and the task
+    /// returns rather than ticking against a handle nobody holds.
+    fn spawn_metrics_ticker<R: Runtime>(&self, app: &AppHandle<R>, handle: &SessionHandle) {
+        let events = Arc::clone(&self.events);
+        let registry = Arc::clone(&self.registry);
+        let session_id = handle.session_id();
+        let rendered = session_id.to_string();
+        let app = app.clone();
+
+        // The handle is looked up in the registry on every tick rather than
+        // captured once, and that is not a style choice. A `SessionHandle` is
+        // `Clone` and the last one dropping is what stops the session — a
+        // ticker holding its own copy would keep the session, its supervisor
+        // and its socket alive for as long as it kept ticking, which is
+        // forever. The lookup returning `None` *is* the end condition.
+        let publish = move || {
+            let events = Arc::clone(&events);
+            let registry = Arc::clone(&registry);
+            let rendered = rendered.clone();
+            let app = app.clone();
+
+            async move {
+                let Some(handle) = registry.handle(session_id).await else {
+                    return Ticking::Stop;
+                };
+
+                let payload = MetricsTick::of(&rendered, &handle.metrics().await);
+
+                events.emit_metrics(&app, &payload);
+
+                Ticking::Continue
+            }
+        };
+
+        tauri::async_runtime::spawn(tick(METRICS_TICK_INTERVAL, publish));
+    }
+
     /// Drains the delivery queue of a session, dropping what it holds.
     ///
     /// Milestone 008 is what reads delivery receipts; until then the queue
@@ -189,6 +239,38 @@ where
         // after this if one occurred meanwhile, and the read inside `publish`
         // then picks up the newest state rather than the one that woke us.
         tokio::time::sleep(interval).await;
+    }
+}
+
+/// Whether the ticker has anything left to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ticking {
+    /// The session is still there; keep sampling it.
+    Continue,
+    /// The session is gone; the task ends.
+    Stop,
+}
+
+/// Samples and emits at a fixed cadence, until `publish` says to stop.
+///
+/// Split out of [`SessionServices::spawn_metrics_ticker`] so CA-007-07 can be
+/// stated without a Tauri runtime: **the emission rate is the interval, and
+/// there is no argument, no channel and no code path by which anything else
+/// could raise it.**
+///
+/// The sleep comes first, so a session that ends before the first interval
+/// emits nothing at all.
+async fn tick<P, Fut>(interval: Duration, publish: P)
+where
+    P: Fn() -> Fut,
+    Fut: core::future::Future<Output = Ticking>,
+{
+    loop {
+        tokio::time::sleep(interval).await;
+
+        if publish().await == Ticking::Stop {
+            return;
+        }
     }
 }
 
@@ -298,5 +380,104 @@ mod tests {
             "fifty changes over fifty milliseconds must not be fifty emissions: {seen:?}"
         );
         assert_eq!(seen.last(), Some(&"BOUND"), "and the last one still wins");
+    }
+
+    /// **CA-007-07** — `metrics:tick` never exceeds 4 Hz, whatever the load.
+    ///
+    /// The load is simulated by a "session" recording a thousand submissions a
+    /// second next to the ticker. It changes nothing, and that is the
+    /// assertion: the ticker has no input but the clock, so throughput cannot
+    /// reach it.
+    #[tokio::test(start_paused = true)]
+    async fn ca_007_07_the_metrics_tick_never_exceeds_four_hertz_under_load() {
+        let emitted = Arc::new(tokio::sync::Mutex::new(0_u32));
+        let submissions = Arc::new(tokio::sync::Mutex::new(0_u32));
+
+        let publish = {
+            let emitted = Arc::clone(&emitted);
+
+            move || {
+                let emitted = Arc::clone(&emitted);
+
+                async move {
+                    *emitted.lock().await += 1;
+
+                    Ticking::Continue
+                }
+            }
+        };
+
+        let ticker = tokio::spawn(tick(METRICS_TICK_INTERVAL, publish));
+
+        // Ten seconds of traffic at a thousand messages a second.
+        let load = tokio::spawn({
+            let submissions = Arc::clone(&submissions);
+
+            async move {
+                for _ in 0..10_000_u32 {
+                    *submissions.lock().await += 1;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        });
+
+        load.await.expect("the load ran");
+        ticker.abort();
+
+        let emitted = *emitted.lock().await;
+
+        assert_eq!(*submissions.lock().await, 10_000, "the load really ran");
+        assert!(
+            emitted <= 41,
+            "ten seconds at 4 Hz is at most forty ticks, not {emitted}"
+        );
+        assert!(
+            emitted >= 39,
+            "and it must actually tick: {emitted} emissions in ten seconds"
+        );
+    }
+
+    /// The ticker ends when its session does, rather than sampling a handle
+    /// nobody holds for the life of the process.
+    #[tokio::test(start_paused = true)]
+    async fn the_metrics_ticker_stops_when_its_session_is_gone() {
+        let emitted = Arc::new(tokio::sync::Mutex::new(0_u32));
+        let alive = Arc::new(tokio::sync::Mutex::new(true));
+
+        let publish = {
+            let emitted = Arc::clone(&emitted);
+            let alive = Arc::clone(&alive);
+
+            move || {
+                let emitted = Arc::clone(&emitted);
+                let alive = Arc::clone(&alive);
+
+                async move {
+                    if !*alive.lock().await {
+                        return Ticking::Stop;
+                    }
+
+                    *emitted.lock().await += 1;
+
+                    Ticking::Continue
+                }
+            }
+        };
+
+        let ticker = tokio::spawn(tick(METRICS_TICK_INTERVAL, publish));
+
+        tokio::time::sleep(METRICS_TICK_INTERVAL * 4).await;
+        *alive.lock().await = false;
+
+        ticker.await.expect("the ticker ends on its own");
+
+        let after = *emitted.lock().await;
+        tokio::time::sleep(METRICS_TICK_INTERVAL * 10).await;
+
+        assert_eq!(
+            *emitted.lock().await,
+            after,
+            "a stopped ticker must not emit again"
+        );
     }
 }

@@ -123,6 +123,112 @@ pub(crate) struct MessageUpdate {
     pub(crate) state: String,
 }
 
+/// Interval between two `metrics:tick` emissions.
+///
+/// 250 ms — the 4 Hz ceiling of spec §15.3 and CA-007-07. Four repaints a
+/// second is at the top of what a gauge needs to look live, and it is a
+/// **fixed cadence**, not a rate limit applied to a stream of per-message
+/// events: nothing on the send path can make it emit more often, whatever the
+/// throughput.
+///
+/// # Why the aggregation is in the backend and not here
+///
+/// The payload is a *reading*, not an accumulation of deltas. `smpp_session`
+/// keeps a sliding window at full rate and this tick samples it, so a tick
+/// that is late, or one the interface misses, costs a frame of animation and
+/// nothing else — the next one carries the current truth.
+///
+/// The alternative, emitting per message and averaging in the WebView, makes
+/// the accuracy of every figure depend on this constant: tighten it to protect
+/// the bridge and the throughput reading silently degrades. That is the
+/// dependency the fiche asks to avoid.
+pub(crate) const METRICS_TICK_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Payload of `metrics:tick` — one session's live figures (spec §18.1).
+///
+/// Every counter crosses as a `u32` rather than a `u64`. The bridge carries
+/// JSON, `JSON.stringify` throws on a `BigInt`, and the alternative — a
+/// 64-bit integer as a string — would make the interface parse a number it
+/// only ever displays. Four billion submissions on one session is past what
+/// any campaign reaches; the conversion saturates rather than wrapping, so the
+/// worst case is a counter that stops climbing instead of one that resets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "metrics:tick")]
+pub(crate) struct MetricsTick {
+    /// Which session these figures belong to.
+    pub(crate) session_id: String,
+    /// Submissions per second over the last second (spec §9.6).
+    pub(crate) tps_1s: f64,
+    /// Submissions per second over the last ten seconds.
+    pub(crate) tps_10s: f64,
+    /// Submissions per second since the session was first bound.
+    pub(crate) tps_average: f64,
+    /// The highest one-second rate ever reached on this session.
+    pub(crate) tps_peak: f64,
+    /// The configured target. Zero means unlimited — the gauge then has no
+    /// scale and the interface shows a figure rather than a bar.
+    pub(crate) target_tps: u32,
+    /// Slots the send window has in total (spec §9.2).
+    pub(crate) window_size: u32,
+    /// Slots occupied right now.
+    pub(crate) window_in_use: u32,
+    /// The two above as a fraction, in `0.0..=1.0`.
+    pub(crate) window_occupancy: f64,
+    /// Mean round-trip time of the recent responses, in milliseconds.
+    pub(crate) rtt_ms: f64,
+    /// How many times the session has reconnected.
+    pub(crate) reconnects: u32,
+    /// How long the session has been bound, in seconds.
+    pub(crate) uptime_s: u32,
+    /// Submissions handed to the writer.
+    pub(crate) submitted: u32,
+    /// Submissions the message centre accepted.
+    pub(crate) accepted: u32,
+    /// Submissions it refused.
+    pub(crate) rejected: u32,
+    /// Submissions that never got an answer.
+    pub(crate) timed_out: u32,
+    /// Responses carrying a throttling status (spec §9.4).
+    pub(crate) throttled: u32,
+    /// Whether submissions are held back by a throttling penalty right now.
+    pub(crate) backing_off: bool,
+    /// The adaptive factor in force, in per mille. 1 000 until milestone 012.
+    pub(crate) adaptive_permille: u16,
+}
+
+impl MetricsTick {
+    /// Projects a session's snapshot onto the payload.
+    pub(crate) fn of(session_id: &str, snapshot: &smpp_session::metrics::MetricsSnapshot) -> Self {
+        Self {
+            session_id: session_id.to_owned(),
+            tps_1s: snapshot.tps_1s,
+            tps_10s: snapshot.tps_10s,
+            tps_average: snapshot.tps_average,
+            tps_peak: snapshot.tps_peak,
+            target_tps: snapshot.target_tps,
+            window_size: snapshot.window_size,
+            window_in_use: snapshot.window_in_use,
+            window_occupancy: snapshot.window_occupancy,
+            rtt_ms: snapshot.rtt_ms,
+            reconnects: snapshot.reconnects,
+            uptime_s: narrow(snapshot.uptime_s),
+            submitted: narrow(snapshot.submitted),
+            accepted: narrow(snapshot.accepted),
+            rejected: narrow(snapshot.rejected),
+            timed_out: narrow(snapshot.timed_out),
+            throttled: narrow(snapshot.throttled),
+            backing_off: snapshot.backing_off,
+            adaptive_permille: snapshot.adaptive_permille,
+        }
+    }
+}
+
+/// A counter narrowed for the bridge, saturating rather than wrapping.
+fn narrow(value: u64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 /// Rate limiter for a single event channel.
 ///
 /// The clock is **injected** ([`Throttle::admit`] takes the instant): the
@@ -225,6 +331,20 @@ impl EventEmitter {
     pub(crate) fn emit_sessions<R: Runtime>(&self, app: &AppHandle<R>, payload: &SessionsState) {
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit sessions:state");
+        }
+    }
+
+    /// Emits `metrics:tick`.
+    ///
+    /// Unconditional, for the same reason `sessions:state` is: the caller has
+    /// just read the session, so the payload is current, and the cadence is
+    /// the forwarder's — see [`METRICS_TICK_INTERVAL`]. A throttle here would
+    /// be a second rate limit on a channel that already ticks at a fixed rate,
+    /// and its only possible effect would be to drop a reading nothing
+    /// replays.
+    pub(crate) fn emit_metrics<R: Runtime>(&self, app: &AppHandle<R>, payload: &MetricsTick) {
+        if let Err(error) = payload.clone().emit(app) {
+            tracing::warn!(error = %error, "failed to emit metrics:tick");
         }
     }
 }

@@ -65,7 +65,17 @@ pub struct SessionProfile {
     /// Number of unacknowledged PDUs allowed in flight (spec §9.2).
     pub window_size: u32,
     /// Target throughput in messages per second (spec §9.5).
+    ///
+    /// Zero means unlimited. It is also the **ceiling** of the adaptive band
+    /// of spec §9.4 — the `max_tps` that section names is this value, not a
+    /// column of its own.
     pub throughput_tps: u32,
+    /// Floor of the adaptive throughput band (spec §9.4, §9.5).
+    ///
+    /// The congestion adaptation of milestone 012 may not push the effective
+    /// rate below this. Carried and validated from milestone 007, which
+    /// applies a constant factor of 1.0 and therefore never reaches it.
+    pub min_tps: u32,
     /// `enquire_link` period, in seconds.
     pub enquire_link_s: u32,
     /// How long a response may take before the request is abandoned.
@@ -112,6 +122,7 @@ impl core::fmt::Debug for SessionProfile {
             .field("tls_config", &self.tls_config)
             .field("window_size", &self.window_size)
             .field("throughput_tps", &self.throughput_tps)
+            .field("min_tps", &self.min_tps)
             .field("enquire_link_s", &self.enquire_link_s)
             .field("response_timeout_s", &self.response_timeout_s)
             .field("reconnect_config", &self.reconnect_config)
@@ -282,6 +293,7 @@ mod tests {
             tls_config: None,
             window_size: 50,
             throughput_tps: 100,
+            min_tps: 1,
             enquire_link_s: 30,
             response_timeout_s: 10,
             reconnect_config: None,

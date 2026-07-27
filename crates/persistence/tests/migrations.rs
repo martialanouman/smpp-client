@@ -49,6 +49,15 @@ const SHIPPED_MIGRATIONS: &[(&str, &str)] = &[
         "20260726180000_session_gsm7_layout.up.sql",
         "7d75d2de3b026e5a44738ebd97e56250bba3579caa19e89ac63807d6cd0756e0",
     ),
+    // Milestone 007, spec §9.4: the floor of the adaptive throughput band.
+    (
+        "20260726210000_session_min_tps.down.sql",
+        "6442c8c0b4ad347a0b1696b433e6b59db78b4a1f2753c01be65ad0f4068fad87",
+    ),
+    (
+        "20260726210000_session_min_tps.up.sql",
+        "9caad6209ffdc305a12528c73e90bc613447b6ae173e5829339bc15cd603bf67",
+    ),
 ];
 
 /// The `migrations/` directory, resolved from this crate's manifest.

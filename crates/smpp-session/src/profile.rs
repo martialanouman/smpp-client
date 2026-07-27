@@ -62,6 +62,14 @@ const MAX_RESPONSE_TIMEOUT_S: u32 = 300;
 /// Largest send window accepted (spec §9.2).
 const MAX_WINDOW_SIZE: u32 = 1_000;
 
+/// Largest throughput accepted, in messages per second (spec §9.5).
+///
+/// A hundred thousand: far above what any message centre agreement allows, and
+/// low enough that the pacing interval it implies — ten microseconds — is
+/// still something a timer can express. The point of the bound is to catch a
+/// typed 1000000 that would silently become "as fast as the machine goes".
+const MAX_THROUGHPUT_TPS: u32 = 100_000;
+
 /// Largest number of parallel binds accepted (spec §8.5).
 const MAX_BIND_COUNT: u32 = 16;
 
@@ -152,6 +160,7 @@ pub struct SessionProfile {
     system_type: String,
     window_size: u32,
     throughput_tps: u32,
+    min_tps: u32,
     enquire_link_interval: Duration,
     response_timeout: Duration,
     reconnect: ReconnectPolicy,
@@ -177,6 +186,7 @@ impl SessionProfile {
             system_type: String::new(),
             window_size: 50,
             throughput_tps: 100,
+            min_tps: 1,
             enquire_link_s: 30,
             response_timeout_s: 10,
             reconnect: ReconnectPolicy::default(),
@@ -243,8 +253,6 @@ impl SessionProfile {
     }
 
     /// Unacknowledged PDUs allowed in flight (spec §9.2).
-    ///
-    /// Carried and validated here; enforced at milestone 007.
     #[must_use]
     pub const fn window_size(&self) -> u32 {
         self.window_size
@@ -252,10 +260,22 @@ impl SessionProfile {
 
     /// Target throughput, in messages per second (spec §9.5).
     ///
-    /// Carried and validated here; enforced at milestone 007.
+    /// **Zero means unlimited**, not "never send". It is also the ceiling of
+    /// the adaptive band of spec §9.4 — the `max_tps` that section names is
+    /// this value.
     #[must_use]
     pub const fn throughput_tps(&self) -> u32 {
         self.throughput_tps
+    }
+
+    /// Floor of the adaptive throughput band (spec §9.4, §9.5).
+    ///
+    /// The congestion adaptation of milestone 012 may not push the effective
+    /// rate below this. Milestone 007 applies a constant factor of 1.0, so the
+    /// floor is carried and never reached.
+    #[must_use]
+    pub const fn min_tps(&self) -> u32 {
+        self.min_tps
     }
 
     /// `enquire_link` period (EF-CNX-05).
@@ -339,6 +359,7 @@ impl SessionProfile {
             system_type: record.system_type.clone(),
             window_size: record.window_size,
             throughput_tps: record.throughput_tps,
+            min_tps: record.min_tps,
             enquire_link_s: record.enquire_link_s,
             response_timeout_s: record.response_timeout_s,
             reconnect,
@@ -372,6 +393,7 @@ impl SessionProfile {
             tls_config: None,
             window_size: self.window_size,
             throughput_tps: self.throughput_tps,
+            min_tps: self.min_tps,
             enquire_link_s: seconds_of(self.enquire_link_interval),
             response_timeout_s: seconds_of(self.response_timeout),
             reconnect_config: Some(reconnect_document(self.reconnect)),
@@ -401,6 +423,7 @@ pub struct ProfileBuilder {
     system_type: String,
     window_size: u32,
     throughput_tps: u32,
+    min_tps: u32,
     enquire_link_s: u32,
     response_timeout_s: u32,
     reconnect: ReconnectPolicy,
@@ -447,10 +470,17 @@ impl ProfileBuilder {
         self
     }
 
-    /// Sets the target throughput (spec §9.5).
+    /// Sets the target throughput (spec §9.5). Zero means unlimited.
     #[must_use]
     pub const fn throughput_tps(mut self, throughput_tps: u32) -> Self {
         self.throughput_tps = throughput_tps;
+        self
+    }
+
+    /// Sets the floor of the adaptive band (spec §9.4).
+    #[must_use]
+    pub const fn min_tps(mut self, min_tps: u32) -> Self {
+        self.min_tps = min_tps;
         self
     }
 
@@ -533,6 +563,19 @@ impl ProfileBuilder {
             MAX_RESPONSE_TIMEOUT_S,
         )?;
         check_range("bind_count", self.bind_count, 1, MAX_BIND_COUNT)?;
+        check_range("min_tps", self.min_tps, 1, MAX_THROUGHPUT_TPS)?;
+        check_range("throughput_tps", self.throughput_tps, 0, MAX_THROUGHPUT_TPS)?;
+
+        // Spec §9.4 clamps the effective rate into `min_tps ..= throughput_tps`.
+        // A floor above the ceiling is an empty band, and the adaptation of
+        // milestone 012 would have nowhere to land. Not checked when the target
+        // is zero: "unlimited" has no ceiling to be below.
+        if self.throughput_tps != 0 && self.min_tps > self.throughput_tps {
+            return Err(SessionError::invalid_profile(
+                "min_tps",
+                ProfileRejection::Contradictory,
+            ));
+        }
 
         // ADR 0009 §7 — Latin-1 octets use all eight bits and packing throws
         // the top one away. The pair is not "risky", it is unrecoverable.
@@ -571,6 +614,7 @@ impl ProfileBuilder {
             system_type: self.system_type,
             window_size: self.window_size,
             throughput_tps: self.throughput_tps,
+            min_tps: self.min_tps,
             enquire_link_interval: Duration::from_secs(u64::from(self.enquire_link_s)),
             response_timeout: Duration::from_secs(u64::from(self.response_timeout_s)),
             reconnect: self.reconnect,

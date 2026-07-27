@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT session_id, name, host, port, bind_type, interface_version,\n                      system_id, password_enc, system_type, tls_config,\n                      window_size, throughput_tps, enquire_link_s, response_timeout_s,\n                      reconnect_config, gsm7_packing, gsm7_charset,\n                      bind_count, created_at, updated_at\n               FROM session_profiles\n               WHERE session_id = ?",
+  "query": "SELECT session_id, name, host, port, bind_type, interface_version,\n                      system_id, password_enc, system_type, tls_config,\n                      window_size, throughput_tps, min_tps, enquire_link_s, response_timeout_s,\n                      reconnect_config, gsm7_packing, gsm7_charset,\n                      bind_count, created_at, updated_at\n               FROM session_profiles\n               ORDER BY rowid",
   "describe": {
     "columns": [
       {
@@ -136,8 +136,19 @@
         }
       },
       {
-        "name": "enquire_link_s",
+        "name": "min_tps",
         "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_profiles",
+            "name": "min_tps"
+          }
+        }
+      },
+      {
+        "name": "enquire_link_s",
+        "ordinal": 13,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -148,7 +159,7 @@
       },
       {
         "name": "response_timeout_s",
-        "ordinal": 13,
+        "ordinal": 14,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -159,7 +170,7 @@
       },
       {
         "name": "reconnect_config",
-        "ordinal": 14,
+        "ordinal": 15,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -170,7 +181,7 @@
       },
       {
         "name": "gsm7_packing",
-        "ordinal": 15,
+        "ordinal": 16,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -181,7 +192,7 @@
       },
       {
         "name": "gsm7_charset",
-        "ordinal": 16,
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -192,7 +203,7 @@
       },
       {
         "name": "bind_count",
-        "ordinal": 17,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -203,7 +214,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 18,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -214,7 +225,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 19,
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -225,7 +236,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -242,6 +253,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -250,5 +262,5 @@
       false
     ]
   },
-  "hash": "7e2851b22808e7aafa404ab1145333a6994578a791b5d2afb491ef6c7c3c6018"
+  "hash": "65277c6957cc8a40b48356628f56baea8dcedd5403155b998520b9e0fd80986a"
 }

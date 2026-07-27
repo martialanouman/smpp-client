@@ -58,6 +58,7 @@ use crate::actors::reader::{self, ReaderOutcome};
 use crate::actors::transport::Transport;
 use crate::actors::{connection, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS};
 use crate::error::SessionError;
+use crate::metrics::SessionMetrics;
 use crate::pending::{Pending, ResponseResult, ResponseWaiter};
 use crate::profile::{Password, SessionProfile};
 use crate::reconnect::ReconnectDecision;
@@ -92,6 +93,12 @@ pub(crate) struct SupervisorContext<T: Transport> {
     pub(crate) transport: T,
     /// The correlation table, shared with the handle and the reader.
     pub(crate) pending: Arc<Pending>,
+    /// The meter, shared with the send gate on the handle.
+    ///
+    /// The supervisor is the only actor that knows when a session is bound and
+    /// when it lost its link, so uptime and the reconnection count of spec
+    /// §18.1 can only be recorded here.
+    pub(crate) metrics: Arc<SessionMetrics>,
     /// The receiving half of the outgoing queue. The supervisor is the writer.
     pub(crate) outgoing: mpsc::Receiver<Command>,
     /// A sender onto the same queue, for the reader's responses.
@@ -122,11 +129,18 @@ pub(crate) async fn run<T: Transport>(mut context: SupervisorContext<T>) {
 
         let failure = match attempt_connection(&mut context, &mut attempt).await {
             Ok(Stop::Shutdown { .. }) => {
+                // A deliberate close, so the uptime stops but nothing is
+                // counted as a reconnection (spec §18.1).
+                context.metrics.mark_unbound(false).await;
                 conclude(&context.state);
                 return;
             }
             Ok(Stop::Retry(error)) | Err(error) => error,
         };
+
+        // The link was lost rather than closed: this *is* what the
+        // reconnection counter counts.
+        context.metrics.mark_unbound(true).await;
 
         // Every request that was in flight on the dead connection is lost.
         // Leaving them waiting would hang whatever awaits them.
@@ -244,6 +258,7 @@ async fn attempt_connection<T: Transport>(
     let mode = context.profile.bind_mode();
     tracing::info!(mode = ?mode, version = context.profile.version().label(), "session bound");
     publish(&context.state, SessionState::Bound(mode), None, None);
+    context.metrics.mark_bound().await;
 
     // A successful bind ends the run of failures, so the back-off starts over.
     // Without this the counter only ever grew: six failed attempts while a VPN

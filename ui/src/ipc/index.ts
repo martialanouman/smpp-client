@@ -29,6 +29,7 @@ import type {
   MessageSendInput,
   MessageSendResultDto,
   MessageUpdate,
+  MetricsTick,
   SessionBindInput,
   SessionProfileDto,
   SessionStatusDto,
@@ -53,6 +54,7 @@ export type {
   MessageSendInput,
   MessageSendResultDto,
   MessageUpdate,
+  MetricsTick,
   NpiDto,
   RegisteredDeliveryDto,
   RetentionDays,
@@ -247,4 +249,18 @@ export function messagePreview(input: MessagePreviewInput): Promise<IpcOutcome<M
  */
 export function onMessageUpdate(handler: (payload: MessageUpdate) => void): Promise<UnlistenFn> {
   return events.messageUpdate.listen((event) => handler(event.payload));
+}
+
+/**
+ * Subscribes to `metrics:tick` (spec §9.6, §18.1).
+ *
+ * The backend emits at a fixed 4 Hz per live session, whatever the throughput
+ * — see `METRICS_TICK_INTERVAL` in `events.rs`. Each payload is a **reading**,
+ * not a delta, so a missed one costs a frame of animation and nothing else.
+ *
+ * Returns the unsubscribe function; a component that forgets to call it on
+ * unmount leaks a listener that keeps firing on a dead reducer.
+ */
+export function onMetricsTick(handler: (payload: MetricsTick) => void): Promise<UnlistenFn> {
+  return events.metricsTick.listen((event) => handler(event.payload));
 }

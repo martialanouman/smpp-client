@@ -30,21 +30,26 @@ mod framing;
 mod reader;
 mod supervisor;
 pub mod transport;
+mod writer;
 
 use std::sync::Arc;
 
+use rate_control::ThroughputConfig;
 use smpp_core::codec::{Command, Pdu};
 use smpp_core::types::SessionId;
 use smpp_core::values::{CommandStatus, Gsm7BitCharset, Gsm7BitPacking};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::SessionError;
+use crate::metrics::{MetricsSnapshot, SessionMetrics};
 use crate::pending::Pending;
 use crate::profile::{Password, SessionProfile};
 use crate::state::{BindMode, SessionState};
 use transport::Transport;
+use writer::SendGate;
 
 /// Unanswered `enquire_link`s a session tolerates before declaring the link
 /// dead (CA-005-04).
@@ -55,13 +60,20 @@ use transport::Transport;
 /// reconnection by a whole extra period for no additional certainty.
 pub const MAX_MISSED_ENQUIRE_LINKS: u32 = 2;
 
-/// PDUs the outgoing queue holds before a submitter has to wait.
+/// Slots the outgoing queue keeps beyond the send window.
 ///
-/// Deliberately small. The queue is a hand-off, not a buffer: the place where
-/// pending work belongs is the message journal, which is durable, and not a
-/// `Vec` that a crash loses. Milestone 007 sizes the real in-flight window
-/// from `window_size`.
-const OUTGOING_QUEUE_CAPACITY: usize = 64;
+/// The queue is a hand-off, not a buffer: the place where pending work belongs
+/// is the message journal, which is durable, and not a `Vec` that a crash
+/// loses.
+///
+/// Since milestone 007 nothing reaches this queue without a window slot, so
+/// the message PDUs it can hold are bounded by `window_size` — the queue is
+/// sized from it rather than from a constant that had to be guessed. The
+/// headroom is for the PDUs the gate deliberately does **not** regulate: the
+/// keep-alive, the unbind, and the responses the reader queues. Without it a
+/// full window would leave no room for an `enquire_link`, and the reader would
+/// park on a full queue (see [`writer`] for why that exclusion exists).
+const OUTGOING_QUEUE_HEADROOM: usize = 16;
 
 /// `deliver_sm` PDUs held before the oldest is dropped.
 const DELIVERY_QUEUE_CAPACITY: usize = 256;
@@ -115,6 +127,12 @@ struct HandleInner {
     gsm7_charset: Gsm7BitCharset,
     response_timeout: core::time::Duration,
     pending: Arc<Pending>,
+    /// The two constraints of spec §9.2 and the meter behind them.
+    ///
+    /// On the handle rather than on the supervisor because it is applied
+    /// **before** the PDU is queued — see [`writer`] for why that ordering is
+    /// forced rather than convenient.
+    gate: SendGate,
     outgoing: mpsc::Sender<Command>,
     state: watch::Receiver<SessionSnapshot>,
     token: CancellationToken,
@@ -136,6 +154,11 @@ impl Drop for HandleInner {
     /// system enforces.
     fn drop(&mut self) {
         self.token.cancel();
+
+        // And wake anything parked on a window slot. A sender waiting for a
+        // slot is waiting for a response that is no longer coming; without
+        // this it would wait for ever on a session nobody can reach.
+        self.gate.close();
     }
 }
 
@@ -173,12 +196,24 @@ pub struct Session {
 /// The `password` is moved in and never leaves: it is not persisted, not
 /// logged, and not reachable from the handle.
 pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transport: T) -> Session {
-    let (outgoing_tx, outgoing_rx) = mpsc::channel(OUTGOING_QUEUE_CAPACITY);
+    let window_size = profile.window_size();
+    let capacity = usize::try_from(window_size)
+        .unwrap_or(usize::MAX)
+        .saturating_add(OUTGOING_QUEUE_HEADROOM);
+
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(capacity);
     let (delivery_tx, delivery_rx) = mpsc::channel(DELIVERY_QUEUE_CAPACITY);
     let (state_tx, state_rx) = watch::channel(SessionSnapshot::default());
 
     let pending = Arc::new(Pending::new());
+    let metrics = Arc::new(SessionMetrics::new());
     let token = CancellationToken::new();
+
+    let gate = SendGate::new(
+        ThroughputConfig::at(profile.throughput_tps()).with_min_tps(profile.min_tps()),
+        window_size,
+        Arc::clone(&metrics),
+    );
 
     let inner = Arc::new(HandleInner {
         session_id: profile.session_id(),
@@ -187,6 +222,7 @@ pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transpor
         gsm7_charset: profile.gsm7_charset(),
         response_timeout: profile.response_timeout(),
         pending: Arc::clone(&pending),
+        gate,
         outgoing: outgoing_tx.clone(),
         state: state_rx,
         token: token.clone(),
@@ -198,6 +234,7 @@ pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transpor
         password,
         transport,
         pending,
+        metrics,
         outgoing: outgoing_rx,
         responses: outgoing_tx,
         deliveries: Some(delivery_tx),
@@ -257,6 +294,19 @@ impl SessionHandle {
     /// a value still in flight is never reused and a late response cannot be
     /// attributed to a later request.
     ///
+    /// # The regulated path (spec §9.3)
+    ///
+    /// A message-bearing PDU waits for a rate-limiter token and a window slot
+    /// **before** its `sequence_number` is allocated, and holds the slot until
+    /// its response arrives, times out, or this future is dropped. The order
+    /// is the specification's, and it is not cosmetic — registering first
+    /// would start the response timeout while the message is still queued
+    /// behind the pacing, so a slow session would report timeouts against a
+    /// message centre that answered promptly. See [`writer`].
+    ///
+    /// The keep-alive and the unbind are deliberately **not** regulated: see
+    /// [`writer`] for why a full window must never be able to stop them.
+    ///
     /// # Errors
     ///
     /// * [`SessionError::NotBound`] if the session is not bound right now;
@@ -267,7 +317,8 @@ impl SessionHandle {
     /// * [`SessionError::ResponseTimeout`] if no response arrives in time;
     /// * [`SessionError::Cancelled`] if the session drops while the request is
     ///   in flight;
-    /// * [`SessionError::Closed`] if the session is gone.
+    /// * [`SessionError::Closed`] if the session is gone, or was closed while
+    ///   this request was waiting for a window slot.
     pub async fn request(&self, pdu: Pdu) -> Result<Command, SessionError> {
         let state = self.snapshot().state;
         let Some(mode) = state.bind_mode() else {
@@ -282,6 +333,12 @@ impl SessionHandle {
             return Err(SessionError::OperationNotAllowed { operation, mode });
         }
 
+        // Token, then window slot. `_permit` is never read: its `Drop` gives
+        // the slot back, on every path out of this function including a
+        // cancellation, which is what CA-007-10 rests on.
+        let _permit = self.inner.gate.admit(operation).await?;
+        let started = Instant::now();
+
         let (sequence, waiter) = self
             .inner
             .pending
@@ -294,7 +351,42 @@ impl SessionHandle {
             return Err(SessionError::Closed);
         }
 
-        waiter.await.unwrap_or(Err(SessionError::Cancelled))
+        let outcome = waiter.await.unwrap_or(Err(SessionError::Cancelled));
+
+        self.inner
+            .gate
+            .settle(
+                operation,
+                Instant::now().saturating_duration_since(started),
+                &outcome,
+            )
+            .await;
+
+        outcome
+    }
+
+    /// Everything spec §18.1 lists about this session, read at this instant.
+    ///
+    /// What `metrics:tick` carries. The averages are computed here, at full
+    /// rate, rather than reconstructed by the interface from the events it
+    /// happened to receive — see [`crate::metrics`].
+    pub async fn metrics(&self) -> MetricsSnapshot {
+        self.inner.gate.snapshot().await
+    }
+
+    /// The send window of this session (spec §9.2).
+    ///
+    /// Exposed so a test can observe saturation, and so the interface can show
+    /// the occupancy without a second counter that could disagree with it.
+    #[must_use]
+    pub fn window(&self) -> &rate_control::SendWindow {
+        self.inner.gate.window()
+    }
+
+    /// The target throughput in force (spec §9.5). Zero means unlimited.
+    #[must_use]
+    pub fn target_tps(&self) -> u32 {
+        self.inner.gate.target_tps()
     }
 
     /// How many requests are waiting for a response right now.
@@ -375,7 +467,10 @@ mod tests {
     /// compile time, so a change to either constant fails the build rather
     /// than a test run.
     const _: () = {
-        assert!(OUTGOING_QUEUE_CAPACITY > 0);
+        // The outgoing queue is now `window_size + headroom`, and
+        // `SessionProfile` refuses a window below one — so a positive headroom
+        // is what keeps the capacity positive whatever the profile says.
+        assert!(OUTGOING_QUEUE_HEADROOM > 0);
         assert!(DELIVERY_QUEUE_CAPACITY > 0);
         assert!(MAX_MISSED_ENQUIRE_LINKS >= 1);
     };
