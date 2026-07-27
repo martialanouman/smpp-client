@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { NO_FILTER, useLogs } from "../../store/logs";
+import { NO_FILTER, useLogs, type LogTab } from "../../store/logs";
 import type { LogFilterInput } from "../../ipc";
 
 /** The six states of spec §14.3, in lifecycle order. */
@@ -24,13 +24,24 @@ const STATES = ["QUEUED", "SENT", "ACCEPTED", "DELIVERED", "FAILED", "EXPIRED"] 
  * untrusted, so the backend has to check anyway, and a second copy of the rule
  * here is a second thing to keep in step.
  */
-export function LogFilters() {
+export function LogFilters({ tab }: { readonly tab: LogTab }) {
   const { t } = useTranslation();
   const applied = useLogs((state) => state.filter);
   const setFilter = useLogs((state) => state.setFilter);
-  const tab = useLogs((state) => state.tab);
 
   const [draft, setDraft] = useState<LogFilterInput>(applied);
+
+  // Which criteria the current tab actually sends. The orphan and PDU pages
+  // are keyed by session and by nothing else — they have no state, no
+  // recipient and no body — so the rest of the form is **disabled** rather
+  // than left enabled and ignored. An operator typing a prefix, clicking
+  // Filter and getting the same unfiltered list back has no way to tell
+  // whether the filter ran and matched everything, or was never sent.
+  const supported: readonly (keyof LogFilterInput)[] =
+    tab === "messages"
+      ? ["search", "destPrefix", "state", "dlrErr", "createdFrom", "createdTo"]
+      : [];
+  const allows = (field: keyof LogFilterInput) => supported.includes(field);
 
   const update = (patch: Partial<LogFilterInput>) => {
     setDraft((current) => ({ ...current, ...patch }));
@@ -48,6 +59,7 @@ export function LogFilters() {
       <Field label={t("logs.filters.search")}>
         <input
           type="search"
+          disabled={!allows("search")}
           value={draft.search ?? ""}
           onChange={(event) => {
             update({ search: event.target.value });
@@ -61,6 +73,7 @@ export function LogFilters() {
           type="text"
           inputMode="tel"
           placeholder="+225"
+          disabled={!allows("destPrefix")}
           value={draft.destPrefix ?? ""}
           onChange={(event) => {
             update({ destPrefix: event.target.value });
@@ -72,7 +85,7 @@ export function LogFilters() {
       <Field label={t("logs.filters.state")}>
         <select
           value={draft.state ?? ""}
-          disabled={tab !== "messages"}
+          disabled={!allows("state")}
           onChange={(event) => {
             update({ state: event.target.value === "" ? null : event.target.value });
           }}
@@ -90,6 +103,7 @@ export function LogFilters() {
       <Field label={t("logs.filters.dlrErr")}>
         <input
           type="text"
+          disabled={!allows("dlrErr")}
           value={draft.dlrErr ?? ""}
           onChange={(event) => {
             update({ dlrErr: event.target.value });
@@ -101,6 +115,7 @@ export function LogFilters() {
       <Field label={t("logs.filters.from")}>
         <input
           type="datetime-local"
+          disabled={!allows("createdFrom")}
           value={toLocal(draft.createdFrom)}
           onChange={(event) => {
             update({ createdFrom: fromLocal(event.target.value) });
@@ -112,6 +127,7 @@ export function LogFilters() {
       <Field label={t("logs.filters.to")}>
         <input
           type="datetime-local"
+          disabled={!allows("createdTo")}
           value={toLocal(draft.createdTo)}
           onChange={(event) => {
             update({ createdTo: fromLocal(event.target.value) });
@@ -126,6 +142,10 @@ export function LogFilters() {
       >
         {t("logs.filters.apply")}
       </button>
+
+      {supported.length === 0 ? (
+        <p className="basis-full text-xs opacity-70">{t("logs.filters.unsupported")}</p>
+      ) : null}
 
       <button
         type="button"

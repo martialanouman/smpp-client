@@ -269,7 +269,8 @@
       "from": "Depuis",
       "to": "Jusqu'à",
       "apply": "Filtrer",
-      "clear": "Réinitialiser"
+      "clear": "Réinitialiser",
+      "unsupported": "Ces critères ne s'appliquent qu'aux messages : un accusé orphelin et une PDU n'ont ni état, ni destinataire, ni contenu."
     },
     "column": {
       "createdAt": "Créé le",

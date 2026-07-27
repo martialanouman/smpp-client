@@ -30,6 +30,7 @@
 //! * separator — `submit date:`, `submitdate:`, `submit_date:`;
 //! * spacing — several spaces, a tab, a newline between fields;
 //! * ordering — `stat:` before `id:`;
+//! * spelling of the identifier — `id:`, `msgid:`, `message_id:`;
 //! * absence — no `sub:`, no `dlvrd:`, no `err:`, no `text:` at all;
 //! * junk — vendor fields nobody documents, sitting between two known ones.
 //!
@@ -368,7 +369,12 @@ const KEYS: &[(Field, &[&str])] = &[
     (Field::Stat, &["stat"]),
     (Field::Sub, &["sub"]),
     (Field::Err, &["err"]),
-    (Field::Id, &["id"]),
+    // The identifier last, and its aliases ordered longest-first with it: a
+    // scanner that tried `id` before `msgid` would match the `id` **inside**
+    // `msgid` — but only if `msgid` were not skipped as an unknown token
+    // first, which is what the token-at-a-time scan guarantees. Ordering them
+    // anyway costs nothing and removes the need to reason about it.
+    (Field::Id, &["message_id", "messageid", "msgid", "id"]),
 ];
 
 /// Which field a `key:` introduces.
@@ -855,6 +861,21 @@ mod tests {
         assert_eq!(reordered.smsc_message_id.as_deref(), Some("ABC-123"));
         assert_eq!(reordered.status, Some(DeliveryStatus::Expired));
 
+        // The families that spell the identifier differently. Not exotic: they
+        // are the ones an integration hits on day one and diagnoses as "no
+        // receipt correlates" a week later.
+        for body in [
+            "msgid:MM-7 stat:DELIVRD err:000",
+            "message_id:MM-7 stat:DELIVRD err:000",
+            "messageid:MM-7 stat:DELIVRD err:000",
+            "MsgId:MM-7 Stat:DELIVRD",
+        ] {
+            let receipt = parse_receipt_body(body);
+
+            assert_eq!(receipt.smsc_message_id.as_deref(), Some("MM-7"), "{body:?}");
+            assert_eq!(receipt.status, Some(DeliveryStatus::Delivered), "{body:?}");
+        }
+
         // A centre that inserts undocumented vendor fields between the known
         // ones. `mccmnc:` must not be mistaken for anything.
         let vendor = parse_receipt_body(
@@ -892,6 +913,41 @@ mod tests {
 
         assert_eq!(receipt.smsc_message_id.as_deref(), Some("9"));
         assert_eq!(receipt.status, None);
+    }
+
+    /// **The documented hole, made visible.**
+    ///
+    /// [`body_text`] decodes unconditionally as ISO-8859-1. A message centre
+    /// that sends its receipt in UCS-2 — rare, and legal — therefore produces a
+    /// body where every ASCII character is preceded by a NUL, and none of the
+    /// keys match.
+    ///
+    /// The choice stands: `data_coding` on a `deliver_sm` describes the
+    /// *original message*, not the receipt, so it cannot be trusted to pick a
+    /// decoder, and guessing from the octets would turn a rare miss into a
+    /// frequent mis-parse. What must hold is that the miss is a **clean**
+    /// one — an orphan with its raw body, never a panic and never a wrong
+    /// correlation — and that is what this pins.
+    #[test]
+    fn a_ucs2_receipt_body_is_not_read_and_does_not_pretend_to_be() {
+        // "id:7 stat:DELIVRD" in UCS-2, as the octets would arrive.
+        let ucs2: Vec<u8> = "id:7 stat:DELIVRD"
+            .bytes()
+            .flat_map(|byte| [0x00, byte])
+            .collect();
+        let body: String = ucs2.iter().map(|byte| char::from(*byte)).collect();
+
+        let receipt = parse_receipt_body(&body);
+
+        assert_eq!(
+            receipt.smsc_message_id, None,
+            "a UCS-2 body is not read — the NUL before each character breaks every key"
+        );
+        assert_eq!(receipt.status, None);
+        assert_eq!(
+            receipt.raw, body,
+            "and the raw octets are kept for the orphan"
+        );
     }
 
     /// CA-008-03 — an unreadable body is a receipt with nothing in it, never a

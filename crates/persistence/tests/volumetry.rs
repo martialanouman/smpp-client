@@ -337,4 +337,35 @@ async fn ca_008_07_filtering_two_hundred_thousand_messages_takes_under_a_second(
         elapsed < std::time::Duration::from_secs(1),
         "counting {LARGE} filtered rows took {elapsed:?}"
     );
+
+    // --- and the case the above does NOT measure ---------------------------
+    //
+    // Every row seeded here matches, so `LIMIT 100` stops at the hundredth
+    // `rowid` having scanned a hundred rows. That is the FAVOURABLE shape, and
+    // calling it pessimistic was wrong.
+    //
+    // The shape that hurts is a filter matching a handful of rows at the END of
+    // the table: SQLite has to walk everything before it before it can fill a
+    // page, and there is no index to help. It is also the ordinary case on a
+    // log screen — an operator looks for the few failures among the many sends.
+    let needle = numbered_msisdn(LARGE - 3);
+    let rare = MessageFilter::all().matching(&needle);
+
+    let started = Instant::now();
+    let page = repository
+        .page_messages(&rare, Cursor::start(), 100)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        page.len(),
+        1,
+        "the needle must be found, or the timing measures a query that gave up"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "a filter matching one row at the end of {LARGE} took {elapsed:?}; \
+         CA-008-07 allows under a second"
+    );
 }

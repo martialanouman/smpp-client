@@ -626,6 +626,43 @@ async fn the_full_text_search_covers_the_recipient_the_body_and_the_identifier()
     );
 }
 
+/// **The same `+` mismatch, on the search box.** An operator pastes a number
+/// from the send screen; `Msisdn` stores digits only, and the search found
+/// nothing. The stripping is conditional, so a body search for a `+` still
+/// works.
+#[tokio::test]
+async fn a_pasted_number_is_found_with_or_without_its_plus() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+    let ids = a_journal_to_filter(&repository).await;
+
+    for needle in ["+22505060708", "22505060708"] {
+        assert_eq!(
+            matching(&repository, &MessageFilter::all().matching(needle)).await,
+            vec![ids[2].to_string()],
+            "searching {needle:?}"
+        );
+    }
+}
+
+/// And a `+` that is **not** a number keeps its meaning: it is an ordinary
+/// character of a message body.
+#[tokio::test]
+async fn a_plus_inside_a_body_is_still_searchable() {
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+
+    let client_message_id = ClientMessageId::new();
+    let mut message = a_queued_message(client_message_id, "+2250102030405");
+    message.text = Some(String::from("promo +1 offerte"));
+    repository.insert_message(&message).await.unwrap();
+
+    assert_eq!(
+        matching(&repository, &MessageFilter::all().matching("+1 offerte")).await,
+        vec![client_message_id.to_string()]
+    );
+}
+
 /// Filters combine as a conjunction. The interface offers all of them at once,
 /// and a filter that quietly ignored one of its criteria would show rows the
 /// operator excluded.

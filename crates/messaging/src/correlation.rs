@@ -45,6 +45,29 @@
 //! see that segments 2 and 3 were delivered even though the row's state came
 //! from segment 1. The CHANGELOG records it as a known limitation.
 //!
+//! # KNOWN LIMITATION — an early receipt is a permanent orphan
+//!
+//! [`crate::sender::Sender`] writes `smsc_message_id` in the **final**
+//! `update_states` of a send, after the last `submit_sm_resp`. A message centre
+//! that pushes its `deliver_sm` before that commit lands — a held SQLite write
+//! lock, a slow disk, a centre that delivers in milliseconds — meets a journal
+//! that does not yet know the identifier.
+//!
+//! The receipt then becomes an orphan, and **nothing retries it**. The message
+//! stays `ACCEPTED` for ever, and the operator sees a delivered message
+//! reported as merely accepted, with the receipt sitting in the orphan journal
+//! carrying the identifier that would have matched.
+//!
+//! It is not fixed here because the cheap fix is a periodic sweep of
+//! `dlr_orphans` re-attempting correlation — the table exists and already
+//! carries the identifier — and a sweep is a scheduled task with a retention
+//! interaction, which belongs with the retention work of milestone 014 rather
+//! than bolted on here. The CHANGELOG records it.
+//!
+//! What is **not** a way out: writing `smsc_message_id` earlier. That would put
+//! it in the journal before the send is known to have completed, which is the
+//! write-ahead ordering of CLAUDE.md §4 pointing the other way.
+//!
 //! # Orphans are kept, never dropped
 //!
 //! CA-008-04. A message centre sends receipts for messages this client never

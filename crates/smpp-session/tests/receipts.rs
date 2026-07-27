@@ -158,11 +158,14 @@ async fn ca_008_06_every_delivery_receipt_is_acknowledged_under_load() {
 
     let mut answered = acknowledged(&drain(&mut seen));
     answered.sort_unstable();
-    answered.dedup();
 
     let mut expected = pushed.clone();
     expected.sort_unstable();
 
+    // NOT deduplicated. `dedup` before comparing would let fifty answers to the
+    // same sequence pass, which is a client stuck in a loop rather than one
+    // acknowledging its receipts. The multiset is the property: one answer per
+    // receipt, no more and no fewer.
     assert_eq!(
         answered, expected,
         "every pushed receipt must be acknowledged exactly once, by its own \
@@ -196,12 +199,14 @@ async fn a_receipt_is_acknowledged_even_when_nobody_drains_the_queue() {
 
     let mut answered = acknowledged(&drain(&mut seen));
     answered.sort_unstable();
-    answered.dedup();
+
+    let mut expected = pushed.clone();
+    expected.sort_unstable();
 
     assert_eq!(
-        answered.len(),
-        pushed.len(),
-        "the acknowledgement must not depend on the queue having room"
+        answered, expected,
+        "the acknowledgement must not depend on the queue having room, and must \
+         still be one answer per receipt"
     );
 
     session.handle.shutdown().await.unwrap();

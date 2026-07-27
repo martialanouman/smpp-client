@@ -16,10 +16,24 @@ import { useRowWindow } from "./rowWindow";
  * CA-008-07 asks for 200 000 rows with fluid scrolling. A `<tbody>` holding
  * 200 000 `<tr>` is 200 000 DOM nodes: the WebView spends seconds laying them
  * out and megabytes keeping them. {@link useRowWindow} renders the rows inside
- * the viewport and a small overscan — a few dozen nodes, whatever the total —
- * and the height of the scrollbar comes from the count the backend reported.
+ * the viewport and a small overscan — a few dozen nodes, whatever the total.
  * See `rowWindow.ts` for why that hook is thirty lines here instead of a
  * dependency.
+ *
+ * # The scrollbar is sized from what is LOADED, not from the total
+ *
+ * Which makes this an infinite scroll rather than a pre-sized list, and that is
+ * worth being plain about: reaching row 200 000 means two thousand sequential
+ * page requests. The count beside the tabs is the backend's total, so the
+ * operator always knows how much there is — but the scrollbar tells them how
+ * much they have.
+ *
+ * Sizing it from the total instead would need the pager to seek to an arbitrary
+ * offset, and the cursor pagination this rests on deliberately cannot: a cursor
+ * is a position in a result set, not an index into one (see
+ * `persistence::Cursor`). Offset paging would give the scrollbar and take back
+ * the constant per-page cost that makes 200 000 rows work at all. The filters
+ * are the answer to "I need a row far down", and they are one query.
  *
  * The other half of the criterion is the backend's: the filter runs in SQLite
  * over an index, and the rows arrive one page at a time. Neither half works
@@ -146,7 +160,7 @@ export function LogsView() {
         </button>
       </div>
 
-      <LogFilters />
+      <LogFilters tab={tab} />
 
       {failure === null ? null : (
         <p role="alert" className="text-sm text-[var(--shinobi-danger)]">

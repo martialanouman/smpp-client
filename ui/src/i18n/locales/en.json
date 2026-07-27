@@ -269,7 +269,8 @@
       "from": "From",
       "to": "To",
       "apply": "Filter",
-      "clear": "Reset"
+      "clear": "Reset",
+      "unsupported": "These criteria apply to messages only: an orphaned receipt and a PDU have no state, no recipient and no body."
     },
     "column": {
       "createdAt": "Created",

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import type {
   LogFilterInput,
   LogPageDto,
   LogRowDto,
+  MessageUpdate,
   OrphanPageDto,
   PduPageDto,
 } from "../../ipc";
@@ -38,8 +39,22 @@ vi.mock("../../ipc", async (importOriginal) => ({
   logsOrphans: () => logsOrphans(),
   logsPdus: () => logsPdus(),
   logsSetPduLogging: (enabled: boolean) => logsSetPduLogging(enabled),
-  onMessageUpdate: () => Promise.resolve(() => undefined),
+  // The subscription **keeps the handler**, so a test can deliver a real
+  // payload. Returning a no-op instead — which it did — meant the breaking
+  // change to `message:update` was never exercised with anything: the two
+  // screens read `payload.updates` and no test ever built one.
+  onMessageUpdate: (handler: (payload: MessageUpdate) => void) => {
+    deliverUpdate = handler;
+
+    return Promise.resolve(() => {
+      deliverUpdate = null;
+    });
+  },
 }));
+
+/// The live handler the mocked subscription installed, or `null` when nothing
+/// is subscribed.
+let deliverUpdate: ((payload: MessageUpdate) => void) | null = null;
 
 function aRow(index: number, overrides: Partial<LogRowDto> = {}): LogRowDto {
   return {
@@ -275,6 +290,40 @@ describe("LogsView", () => {
       expect(logsSetPduLogging).toHaveBeenCalledWith(true);
     });
     expect(await screen.findByLabelText(/Enregistrer les PDU/u)).toBeChecked();
+  });
+
+  /**
+   * **The breaking change, exercised with a real payload.**
+   *
+   * `message:update` carries a batch since milestone 008 (CA-008-08). The
+   * screen counts what arrives rather than merging it into its rows — a
+   * message the operator filtered out can be in a batch, and merging it would
+   * show a row the filter excludes.
+   *
+   * Two batches of two, so the badge has to sum them rather than show the last.
+   */
+  it("counts the batched transitions it is told about without merging them", async () => {
+    render(<LogsView />);
+    await screen.findByText("+2250102000000");
+
+    expect(deliverUpdate).not.toBeNull();
+
+    await act(async () => {
+      deliverUpdate?.({
+        updates: [
+          { clientMessageId: "a", state: "DELIVERED", dlrStat: "DELIVRD" },
+          { clientMessageId: "b", state: "FAILED", dlrStat: "UNDELIV" },
+        ],
+      });
+      deliverUpdate?.({
+        updates: [{ clientMessageId: "c", state: "DELIVERED", dlrStat: "DELIVRD" }],
+      });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(/3 mise/u)).toBeInTheDocument();
+    // And the rows are untouched: none of the three identifiers is in the table.
+    expect(screen.queryByText("a")).not.toBeInTheDocument();
   });
 
   /** A backend refusal is shown, translated from its stable code. */

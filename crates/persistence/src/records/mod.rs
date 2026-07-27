@@ -327,9 +327,29 @@ impl MessageFilter {
 
     /// Restricts to rows containing `needle` in their recipient, body or SMSC
     /// identifier.
+    ///
+    /// # A leading `+` on a number is dropped, and only then
+    ///
+    /// Same mismatch as [`Self::with_dest_prefix`]: `Msisdn` stores digits
+    /// only, so a needle pasted from anywhere else in the interface —
+    /// `+2250102030405` — matches no recipient at all. Silently, since an empty
+    /// result is a legitimate answer.
+    ///
+    /// The stripping is **conditional**, unlike the prefix's: this needle is
+    /// also matched against the message body, where a `+` is an ordinary
+    /// character somebody may be looking for. So it is removed only when the
+    /// needle is `+` followed by digits and nothing else — a phone number, and
+    /// nothing a body search would want spelled that way.
     #[must_use]
     pub fn matching(mut self, needle: impl Into<String>) -> Self {
-        self.search = Some(needle.into());
+        let needle: String = needle.into();
+
+        self.search = Some(match needle.strip_prefix('+') {
+            Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+                digits.to_owned()
+            }
+            _ => needle,
+        });
         self
     }
 }

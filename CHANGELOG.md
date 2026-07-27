@@ -98,6 +98,25 @@ dernière fois » et non « quand le combiné a reçu le message » : le `done d
 du SMSC est la seconde chose, il est invérifiable, et il est conservé sur
 l'accusé plutôt que dans cette colonne.
 
+#### Limite connue — un accusé précoce devient un orphelin définitif
+
+Le `sender` n'écrit `smsc_message_id` qu'au `update_states` final, après le
+dernier `submit_sm_resp`. Un SMSC qui pousse son `deliver_sm` avant que ce
+commit ait eu lieu — verrou SQLite tenu, disque lent, centre qui livre en
+quelques millisecondes — rencontre un journal qui ne connaît pas encore
+l'identifiant. L'accusé part en orphelin et **n'est jamais retenté** : le
+message reste `ACCEPTED` pour toujours, alors que son accusé est là, dans le
+journal des orphelins, avec l'identifiant qui aurait correspondu.
+
+Non corrigé ici. Le moins cher serait un balayage périodique de `dlr_orphans`
+retentant la corrélation — la table existe et porte déjà l'identifiant — mais
+un balayage est une tâche planifiée avec une interaction de rétention, ce qui
+appartient au jalon 014 plutôt qu'à un ajout ici.
+
+Ce qui n'est **pas** une issue : écrire `smsc_message_id` plus tôt. Cela le
+mettrait au journal avant que l'envoi soit connu comme abouti, c'est-à-dire
+l'ordre write-ahead de CLAUDE.md §4 pris à l'envers.
+
 ### Corrigé — jalon 008
 
 - **Boucle infinie dans le parseur d'accusés.** Le scanner testait
