@@ -252,6 +252,14 @@ impl DeliveryReceipt {
 
         self.status.as_ref().map(DeliveryStatus::message_state)
     }
+
+    /// The `stat` code as text, for the `dlr_stat` column that stores it.
+    #[must_use]
+    pub fn dlr_stat_text(&self) -> Option<String> {
+        self.status
+            .as_ref()
+            .map(|status| status.as_str().to_owned())
+    }
 }
 
 /// Reads a `deliver_sm` (spec §7.8).

@@ -2165,6 +2165,7 @@ dependencies = [
  "proptest",
  "smpp-core",
  "thiserror 2.0.19",
+ "tokio",
  "tracing",
  "uuid",
 ]

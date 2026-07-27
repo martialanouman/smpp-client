@@ -49,6 +49,7 @@
 //! ```
 
 pub mod addressing;
+pub mod correlation;
 pub mod dlr;
 pub mod encoding;
 mod error;
@@ -58,6 +59,7 @@ pub mod segmentation;
 pub mod sender;
 pub mod submit;
 
+pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
