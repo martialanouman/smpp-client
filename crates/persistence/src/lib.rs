@@ -48,9 +48,15 @@ pub use records::{
     SessionProfile, SmscMessageIdUpdate,
 };
 pub use repositories::{
-    SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
-    SqlitePduLogRepository, SqliteSessionProfileRepository,
+    OrphanJournal, SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
+    SqliteOrphanRepository, SqlitePduLogRepository, SqliteSessionProfileRepository, StoredOrphan,
 };
+
+/// A delivery receipt that correlated to no message (CA-008-04).
+///
+/// Defined in `messaging`, which owns the correlation that produces it, and
+/// re-exported here because this crate's orphan surface speaks in it.
+pub use messaging::correlation::{OrphanReason, OrphanReceipt};
 
 /// The single instant format of every `*_at` and `ts` column.
 ///

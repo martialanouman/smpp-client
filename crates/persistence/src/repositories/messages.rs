@@ -387,6 +387,13 @@ impl MessageJournal for SqliteMessageRepository {
         let session = filter.session_id.map(|id| id.to_string());
         let campaign = filter.campaign_id.map(|id| id.to_string());
         let state = filter.state.map(MessageState::as_str);
+        let Unindexed {
+            created_from,
+            created_to,
+            dest_prefix,
+            dlr_err,
+            search,
+        } = Unindexed::of(filter);
         let after = cursor.into_raw();
         let window = store_u32(limit);
 
@@ -402,6 +409,13 @@ impl MessageJournal for SqliteMessageRepository {
                        FROM messages
                        WHERE campaign_id = ? AND state = ? AND rowid > ?
                          AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')
                        ORDER BY rowid
                        LIMIT ?"#,
                     campaign,
@@ -409,6 +423,18 @@ impl MessageJournal for SqliteMessageRepository {
                     after,
                     session,
                     session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search,
                     window
                 )
                 .fetch_all(self.database.pool())
@@ -425,12 +451,31 @@ impl MessageJournal for SqliteMessageRepository {
                        FROM messages
                        WHERE campaign_id = ? AND rowid > ?
                          AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')
                        ORDER BY rowid
                        LIMIT ?"#,
                     campaign,
                     after,
                     session,
                     session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search,
                     window
                 )
                 .fetch_all(self.database.pool())
@@ -447,12 +492,31 @@ impl MessageJournal for SqliteMessageRepository {
                        FROM messages
                        WHERE state = ? AND rowid > ?
                          AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')
                        ORDER BY rowid
                        LIMIT ?"#,
                     state,
                     after,
                     session,
                     session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search,
                     window
                 )
                 .fetch_all(self.database.pool())
@@ -469,11 +533,30 @@ impl MessageJournal for SqliteMessageRepository {
                        FROM messages
                        WHERE rowid > ?
                          AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')
                        ORDER BY rowid
                        LIMIT ?"#,
                     after,
                     session,
                     session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search,
                     window
                 )
                 .fetch_all(self.database.pool())
@@ -488,17 +571,43 @@ impl MessageJournal for SqliteMessageRepository {
         let session = filter.session_id.map(|id| id.to_string());
         let campaign = filter.campaign_id.map(|id| id.to_string());
         let state = filter.state.map(MessageState::as_str);
+        let Unindexed {
+            created_from,
+            created_to,
+            dest_prefix,
+            dlr_err,
+            search,
+        } = Unindexed::of(filter);
 
         let total = match (campaign.as_deref(), state) {
             (Some(campaign), Some(state)) => {
                 sqlx::query_scalar!(
                     r#"SELECT COUNT(*) AS "total!: i64" FROM messages
                        WHERE campaign_id = ? AND state = ?
-                         AND (? IS NULL OR session_id = ?)"#,
+                         AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')"#,
                     campaign,
                     state,
                     session,
-                    session
+                    session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search
                 )
                 .fetch_one(self.database.pool())
                 .await?
@@ -507,10 +616,29 @@ impl MessageJournal for SqliteMessageRepository {
                 sqlx::query_scalar!(
                     r#"SELECT COUNT(*) AS "total!: i64" FROM messages
                        WHERE campaign_id = ?
-                         AND (? IS NULL OR session_id = ?)"#,
+                         AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')"#,
                     campaign,
                     session,
-                    session
+                    session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search
                 )
                 .fetch_one(self.database.pool())
                 .await?
@@ -519,10 +647,29 @@ impl MessageJournal for SqliteMessageRepository {
                 sqlx::query_scalar!(
                     r#"SELECT COUNT(*) AS "total!: i64" FROM messages
                        WHERE state = ?
-                         AND (? IS NULL OR session_id = ?)"#,
+                         AND (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')"#,
                     state,
                     session,
-                    session
+                    session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search
                 )
                 .fetch_one(self.database.pool())
                 .await?
@@ -530,9 +677,28 @@ impl MessageJournal for SqliteMessageRepository {
             (None, None) => {
                 sqlx::query_scalar!(
                     r#"SELECT COUNT(*) AS "total!: i64" FROM messages
-                       WHERE (? IS NULL OR session_id = ?)"#,
+                       WHERE (? IS NULL OR session_id = ?)
+                         AND (? IS NULL OR created_at >= ?)
+                         AND (? IS NULL OR created_at <= ?)
+                         AND (? IS NULL OR dest_addr LIKE ? || '%')
+                         AND (? IS NULL OR dlr_err = ?)
+                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                              OR text LIKE '%' || ? || '%'
+                                              OR smsc_message_id LIKE '%' || ? || '%')"#,
                     session,
-                    session
+                    session,
+                    created_from,
+                    created_from,
+                    created_to,
+                    created_to,
+                    dest_prefix,
+                    dest_prefix,
+                    dlr_err,
+                    dlr_err,
+                    search,
+                    search,
+                    search,
+                    search
                 )
                 .fetch_one(self.database.pool())
                 .await?
@@ -549,6 +715,13 @@ impl MessageJournal for SqliteMessageRepository {
         let session = filter.session_id.map(|id| id.to_string());
         let campaign = filter.campaign_id.map(|id| id.to_string());
         let state = filter.state.map(MessageState::as_str);
+        let Unindexed {
+            created_from,
+            created_to,
+            dest_prefix,
+            dlr_err,
+            search,
+        } = Unindexed::of(filter);
 
         // `.fetch()` walks the SQLite statement one step at a time: at most one
         // row is materialised, whatever the size of the result set (CA-002-05).
@@ -564,11 +737,30 @@ impl MessageJournal for SqliteMessageRepository {
                    FROM messages
                    WHERE campaign_id = ? AND state = ?
                      AND (? IS NULL OR session_id = ?)
+                     AND (? IS NULL OR created_at >= ?)
+                     AND (? IS NULL OR created_at <= ?)
+                     AND (? IS NULL OR dest_addr LIKE ? || '%')
+                     AND (? IS NULL OR dlr_err = ?)
+                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                          OR text LIKE '%' || ? || '%'
+                                          OR smsc_message_id LIKE '%' || ? || '%')
                    ORDER BY rowid"#,
                 campaign,
                 state,
                 session,
-                session
+                session,
+                created_from,
+                created_from,
+                created_to,
+                created_to,
+                dest_prefix,
+                dest_prefix,
+                dlr_err,
+                dlr_err,
+                search,
+                search,
+                search,
+                search
             )
             .fetch(self.database.pool()),
             (Some(campaign), None) => sqlx::query_as!(
@@ -581,10 +773,29 @@ impl MessageJournal for SqliteMessageRepository {
                    FROM messages
                    WHERE campaign_id = ?
                      AND (? IS NULL OR session_id = ?)
+                     AND (? IS NULL OR created_at >= ?)
+                     AND (? IS NULL OR created_at <= ?)
+                     AND (? IS NULL OR dest_addr LIKE ? || '%')
+                     AND (? IS NULL OR dlr_err = ?)
+                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                          OR text LIKE '%' || ? || '%'
+                                          OR smsc_message_id LIKE '%' || ? || '%')
                    ORDER BY rowid"#,
                 campaign,
                 session,
-                session
+                session,
+                created_from,
+                created_from,
+                created_to,
+                created_to,
+                dest_prefix,
+                dest_prefix,
+                dlr_err,
+                dlr_err,
+                search,
+                search,
+                search,
+                search
             )
             .fetch(self.database.pool()),
             (None, Some(state)) => sqlx::query_as!(
@@ -597,10 +808,29 @@ impl MessageJournal for SqliteMessageRepository {
                    FROM messages
                    WHERE state = ?
                      AND (? IS NULL OR session_id = ?)
+                     AND (? IS NULL OR created_at >= ?)
+                     AND (? IS NULL OR created_at <= ?)
+                     AND (? IS NULL OR dest_addr LIKE ? || '%')
+                     AND (? IS NULL OR dlr_err = ?)
+                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                          OR text LIKE '%' || ? || '%'
+                                          OR smsc_message_id LIKE '%' || ? || '%')
                    ORDER BY rowid"#,
                 state,
                 session,
-                session
+                session,
+                created_from,
+                created_from,
+                created_to,
+                created_to,
+                dest_prefix,
+                dest_prefix,
+                dlr_err,
+                dlr_err,
+                search,
+                search,
+                search,
+                search
             )
             .fetch(self.database.pool()),
             (None, None) => sqlx::query_as!(
@@ -612,9 +842,28 @@ impl MessageJournal for SqliteMessageRepository {
                           dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at
                    FROM messages
                    WHERE (? IS NULL OR session_id = ?)
+                     AND (? IS NULL OR created_at >= ?)
+                     AND (? IS NULL OR created_at <= ?)
+                     AND (? IS NULL OR dest_addr LIKE ? || '%')
+                     AND (? IS NULL OR dlr_err = ?)
+                     AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'
+                                          OR text LIKE '%' || ? || '%'
+                                          OR smsc_message_id LIKE '%' || ? || '%')
                    ORDER BY rowid"#,
                 session,
-                session
+                session,
+                created_from,
+                created_from,
+                created_to,
+                created_to,
+                dest_prefix,
+                dest_prefix,
+                dlr_err,
+                dlr_err,
+                search,
+                search,
+                search,
+                search
             )
             .fetch(self.database.pool()),
         };
@@ -624,6 +873,37 @@ impl MessageJournal for SqliteMessageRepository {
                 .and_then(PagedRow::into_record)
         })
         .boxed()
+    }
+}
+
+/// The filter fields that ride no index, ready to bind.
+///
+/// The three query functions each need the same five values in the same order,
+/// derived the same way. Preparing them in three places is how one of them ends
+/// up passing `dest_prefix` where the statement expects `dlr_err` — the
+/// parameters are positional, they are all `Option<String>`, and the compiler
+/// would have nothing to say about it.
+///
+/// Owned rather than borrowed: the values outlive the `match` that picks a
+/// query, and `Timestamp` has to be rendered to its stored text anyway.
+struct Unindexed {
+    created_from: Option<String>,
+    created_to: Option<String>,
+    dest_prefix: Option<String>,
+    dlr_err: Option<String>,
+    search: Option<String>,
+}
+
+impl Unindexed {
+    /// Reads them off a filter.
+    fn of(filter: &MessageFilter) -> Self {
+        Self {
+            created_from: filter.created_from.map(|at| at.to_storage()),
+            created_to: filter.created_to.map(|at| at.to_storage()),
+            dest_prefix: filter.dest_prefix.clone(),
+            dlr_err: filter.dlr_err.clone(),
+            search: filter.search.clone(),
+        }
     }
 }
 

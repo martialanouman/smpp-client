@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                          client_message_id, campaign_id, session_id, smsc_message_id,\n                          source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                          data_coding, segments, text, state, command_status,\n                          dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                   FROM messages\n                   WHERE (? IS NULL OR session_id = ?)\n                   ORDER BY rowid",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE campaign_id = ? AND rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                         AND (? IS NULL OR created_at >= ?)\n                         AND (? IS NULL OR created_at <= ?)\n                         AND (? IS NULL OR dest_addr LIKE ? || '%')\n                         AND (? IS NULL OR dlr_err = ?)\n                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                              OR text LIKE '%' || ? || '%'\n                                              OR smsc_message_id LIKE '%' || ? || '%')\n                       ORDER BY rowid\n                       LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 17
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "a500ca81e2bcc924949b49d59458d0cffa5a6afe7f8f04e602029ea7728e86af"
+  "hash": "084c7fe3d66a725439453b55cdf69e8a120669100e1dab8424a538873b6a7474"
 }

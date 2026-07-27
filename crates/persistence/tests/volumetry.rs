@@ -269,3 +269,72 @@ async fn paging_to_the_end_of_a_large_table_visits_every_row_once() {
 
     assert_eq!(seen, 10_000);
 }
+
+/// **CA-008-07** — the log screen's filters over 200 000 rows.
+///
+/// The criterion is "a filter applied in under a second"; the measurement here
+/// is the **backend** half of it, which is the half that can degrade silently.
+/// The frontend half — a virtualised table that renders a window rather than
+/// 200 000 rows — is a `vitest` case in `ui/src/views/Logs/`.
+///
+/// Every predicate of the screen is exercised at once, because that is what the
+/// screen sends: a state, a date range, a destination prefix and a full-text
+/// search. The last three ride no index (see [`MessageFilter`]), so this is the
+/// pessimistic shape and not a favourable one.
+///
+/// # Why an elapsed time, in a suite that otherwise refuses wall clocks
+///
+/// CLAUDE.md §7 bans a *dependency* on real time — an assertion whose outcome
+/// changes with the scheduler. This is a performance ceiling: the query is
+/// deterministic, only its duration is measured, and the bound is the
+/// criterion's own. A machine slow enough to fail it is a machine on which the
+/// screen really is unusable.
+#[tokio::test]
+async fn ca_008_07_filtering_two_hundred_thousand_messages_takes_under_a_second() {
+    const LARGE: usize = 200_000;
+
+    let harness = temp_database().await;
+    let repository = SqliteMessageRepository::new(harness.database().clone());
+    fill(&repository, LARGE).await;
+
+    let filter = MessageFilter::all()
+        .in_state(MessageState::Queued)
+        .created_between(
+            Some(persistence::Timestamp::parse("2026-07-01T00:00:00Z").unwrap()),
+            None,
+        )
+        .with_dest_prefix("+225")
+        .matching("Bonjour");
+
+    let started = Instant::now();
+    let page = repository
+        .page_messages(&filter, Cursor::start(), 100)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    // The instrument works: a filter matching nothing would make the timing
+    // meaningless, and a page of a hundred is what the screen asks for.
+    assert_eq!(
+        page.len(),
+        100,
+        "the filter must actually select rows, or the timing means nothing"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "filtering {LARGE} rows took {elapsed:?}; CA-008-07 allows under a second"
+    );
+
+    // The count behind the pager runs the same predicates without the `LIMIT`,
+    // so it is the slower of the two and the one that decides whether the
+    // screen feels responsive.
+    let started = Instant::now();
+    let total = repository.count_messages(&filter).await.unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(total, LARGE as u64);
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "counting {LARGE} filtered rows took {elapsed:?}"
+    );
+}

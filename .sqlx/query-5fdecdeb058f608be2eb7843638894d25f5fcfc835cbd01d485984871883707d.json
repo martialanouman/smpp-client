@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE campaign_id = ? AND state = ? AND rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                       ORDER BY rowid\n                       LIMIT ?",
+  "query": "SELECT rowid AS \"rowid!: i64\",\n                              client_message_id, campaign_id, session_id, smsc_message_id,\n                              source_addr, source_ton, source_npi, dest_addr, dest_ton, dest_npi,\n                              data_coding, segments, text, state, command_status,\n                              dlr_stat, dlr_err, attempts, created_at, sent_at, resp_at, dlr_at\n                       FROM messages\n                       WHERE state = ? AND rowid > ?\n                         AND (? IS NULL OR session_id = ?)\n                         AND (? IS NULL OR created_at >= ?)\n                         AND (? IS NULL OR created_at <= ?)\n                         AND (? IS NULL OR dest_addr LIKE ? || '%')\n                         AND (? IS NULL OR dlr_err = ?)\n                         AND (? IS NULL OR dest_addr LIKE '%' || ? || '%'\n                                              OR text LIKE '%' || ? || '%'\n                                              OR smsc_message_id LIKE '%' || ? || '%')\n                       ORDER BY rowid\n                       LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -258,7 +258,7 @@
       }
     ],
     "parameters": {
-      "Right": 6
+      "Right": 17
     },
     "nullable": [
       false,
@@ -286,5 +286,5 @@
       true
     ]
   },
-  "hash": "d3b15b630fede68f5987d00aa3f0cf478e3ddbf5fd507a867235c7d9296f5869"
+  "hash": "5fdecdeb058f608be2eb7843638894d25f5fcfc835cbd01d485984871883707d"
 }

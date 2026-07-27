@@ -201,6 +201,25 @@ pub struct Campaign {
 /// Every field is a conjunction: `None` means "do not restrict on this
 /// column". An all-`None` filter selects the whole table, which is exactly
 /// what [`crate::ports::MessageJournal::stream_messages`] is for.
+///
+/// # Two families of field, and the difference is the query plan
+///
+/// [`Self::campaign_id`] and [`Self::state`] sit on indexes and are matched at
+/// the Rust level, into the four literal queries an index can serve — see the
+/// header of `repositories::messages` for the measurement that forced it.
+///
+/// Everything below them arrived with the log screen of milestone 008 and has
+/// **no index**: a date range, a destination prefix, an error code, a
+/// full-text search. They are written as `(? IS NULL OR …)`, the form that
+/// prevents an index from being used — which costs nothing here, since there is
+/// none to prevent, and which is what keeps the number of literal queries at
+/// four instead of at sixty-four.
+///
+/// The cost is stated rather than assumed: `search` is a `LIKE '%…%'` over
+/// `text`, `dest_addr` and `smsc_message_id`, so it is a scan of whatever the
+/// indexed predicates left. On the 200 000 rows CA-008-07 measures, that is
+/// tens of milliseconds — the criterion allows a second — and a full-text index
+/// (FTS5) is the answer if the table grows an order of magnitude, not now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MessageFilter {
     /// Restrict to one campaign.
@@ -209,6 +228,26 @@ pub struct MessageFilter {
     pub session_id: Option<SessionId>,
     /// Restrict to one state.
     pub state: Option<MessageState>,
+    /// Restrict to messages created at or after this instant.
+    pub created_from: Option<Timestamp>,
+    /// Restrict to messages created at or before this instant.
+    ///
+    /// Compared on the **stored text**, which is what makes the bound work at
+    /// all: the storage form is RFC 3339 with a `Z` offset, and it sorts
+    /// lexicographically in the same order as chronologically
+    /// ([`Timestamp`]).
+    pub created_to: Option<Timestamp>,
+    /// Restrict to recipients starting with this prefix.
+    ///
+    /// A prefix and not a whole number: an operator filtering a log looks for
+    /// a country or an operator range far more often than for one subscriber,
+    /// and a whole number is a prefix of itself.
+    pub dest_prefix: Option<String>,
+    /// Restrict to messages whose delivery receipt carried this `err` code.
+    pub dlr_err: Option<String>,
+    /// Restrict to messages whose recipient, body or SMSC identifier contains
+    /// this text.
+    pub search: Option<String>,
 }
 
 impl MessageFilter {
@@ -236,6 +275,52 @@ impl MessageFilter {
     #[must_use]
     pub fn in_state(mut self, state: MessageState) -> Self {
         self.state = Some(state);
+        self
+    }
+
+    /// Restricts to a range of creation instants, either end open.
+    #[must_use]
+    pub fn created_between(mut self, from: Option<Timestamp>, to: Option<Timestamp>) -> Self {
+        self.created_from = from;
+        self.created_to = to;
+        self
+    }
+
+    /// Restricts to recipients starting with `prefix`.
+    ///
+    /// # The leading `+` is stripped, and that is not cosmetic
+    ///
+    /// `Msisdn` stores a number as **digits only** — `2250102030405`, no `+`.
+    /// An operator filtering a log types `+225`, because that is how E.164
+    /// numbers are written everywhere else in the interface, and a literal
+    /// `LIKE '+225%'` against that column matches nothing at all. Not an error,
+    /// not an empty state anyone would question: a screen that silently says
+    /// there are no messages.
+    ///
+    /// So the constructor normalises, once, where the two forms meet. Nothing
+    /// else is stripped: a prefix containing a space or a dash is a prefix the
+    /// operator will not find, and inventing a second normalisation here would
+    /// put it out of step with `Msisdn`'s.
+    #[must_use]
+    pub fn with_dest_prefix(mut self, prefix: impl Into<String>) -> Self {
+        let prefix: String = prefix.into();
+
+        self.dest_prefix = Some(prefix.strip_prefix('+').unwrap_or(&prefix).to_owned());
+        self
+    }
+
+    /// Restricts to one delivery-receipt error code.
+    #[must_use]
+    pub fn with_dlr_err(mut self, code: impl Into<String>) -> Self {
+        self.dlr_err = Some(code.into());
+        self
+    }
+
+    /// Restricts to rows containing `needle` in their recipient, body or SMSC
+    /// identifier.
+    #[must_use]
+    pub fn matching(mut self, needle: impl Into<String>) -> Self {
+        self.search = Some(needle.into());
         self
     }
 }

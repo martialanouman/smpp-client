@@ -58,6 +58,15 @@ const SHIPPED_MIGRATIONS: &[(&str, &str)] = &[
         "20260726210000_session_min_tps.up.sql",
         "9caad6209ffdc305a12528c73e90bc613447b6ae173e5829339bc15cd603bf67",
     ),
+    // Milestone 008, CA-008-04: delivery receipts that correlate to nothing.
+    (
+        "20260727090000_dlr_orphans.down.sql",
+        "82454ed9ef82eeae2fba5097d2bfeeaa054be6cca996bf58676d095d83941e8b",
+    ),
+    (
+        "20260727090000_dlr_orphans.up.sql",
+        "edb50001a43100a8f1f1700d8bac6fd2f23e0598668421c7b434c596109e789b",
+    ),
 ];
 
 /// The `migrations/` directory, resolved from this crate's manifest.

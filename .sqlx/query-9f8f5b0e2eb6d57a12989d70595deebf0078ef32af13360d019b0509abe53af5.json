@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: i64\", session_id, smsc_message_id, reason,\n                      dlr_stat, dlr_err, submit_date, done_date, raw, received_at\n               FROM dlr_orphans\n               WHERE id > ? AND (? IS NULL OR session_id = ?)\n               ORDER BY id\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "smsc_message_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "smsc_message_id"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "dlr_stat",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "dlr_stat"
+          }
+        }
+      },
+      {
+        "name": "dlr_err",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "dlr_err"
+          }
+        }
+      },
+      {
+        "name": "submit_date",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "submit_date"
+          }
+        }
+      },
+      {
+        "name": "done_date",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "done_date"
+          }
+        }
+      },
+      {
+        "name": "raw",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "raw"
+          }
+        }
+      },
+      {
+        "name": "received_at",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dlr_orphans",
+            "name": "received_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "9f8f5b0e2eb6d57a12989d70595deebf0078ef32af13360d019b0509abe53af5"
+}
