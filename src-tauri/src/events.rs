@@ -163,6 +163,47 @@ impl MessageUpdate {
     }
 }
 
+/// Payload of `import:progress` — how far a contact import has got.
+///
+/// # Why this channel has no throttle here
+///
+/// It has one, and it is upstream: `contacts::import` computes a progress
+/// reading every `PROGRESS_EVERY_ROWS` rows and offers it with `try_send` on a
+/// bounded channel, so a million-row import produces about a thousand events
+/// and an interface that falls behind loses intermediate ones rather than
+/// slowing the import down (CA-009-11).
+///
+/// A second throttle *here* would be the bug `sessions:state` had: the last
+/// event of an import is the one carrying [`Self::done`], and dropping it would
+/// leave a progress bar running under a finished report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "import:progress")]
+pub(crate) struct ImportProgressEvent {
+    /// Non-blank rows dealt with.
+    pub(crate) processed: u32,
+    /// Contacts accepted so far.
+    pub(crate) imported: u32,
+    /// Rows refused so far.
+    pub(crate) rejected: u32,
+    /// Rows repeating an earlier number.
+    pub(crate) duplicates: u32,
+    /// Whether this is the last event of the import.
+    pub(crate) done: bool,
+}
+
+impl From<contacts::import::ImportProgress> for ImportProgressEvent {
+    fn from(progress: contacts::import::ImportProgress) -> Self {
+        Self {
+            processed: narrow(progress.processed),
+            imported: narrow(progress.imported),
+            rejected: narrow(progress.rejected),
+            duplicates: narrow(progress.duplicates),
+            done: progress.done,
+        }
+    }
+}
+
 /// Interval between two `metrics:tick` emissions.
 ///
 /// 250 ms — the 4 Hz ceiling of spec §15.3 and CA-007-07. Four repaints a

@@ -18,7 +18,7 @@
 //! | Module | Contents |
 //! |--------|----------|
 //! | [`db`] | opening the file, the `PRAGMA`s, the embedded migrations |
-//! | [`ports`] | the four repository traits, for injection and test doubles |
+//! | [`ports`] | the repository traits still declared here, and why |
 //! | [`records`] | the aggregates the repositories read and write |
 //! | [`repositories`] | the SQLx implementations |
 //!
@@ -44,14 +44,20 @@ pub use db::{Database, DatabaseConfig, SchemaObject};
 pub use error::PersistenceError;
 pub use records::{
     BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, IdMatching,
-    ListId, Message, MessageFilter, MessageState, MessageStateUpdate, PduDirection, PduLogEntry,
-    SessionProfile, SmscMessageIdUpdate,
+    ImportProfile, LineType, ListId, Message, MessageFilter, MessageState, MessageStateUpdate,
+    PduDirection, PduLogEntry, ProfileId, SessionProfile, SmscMessageIdUpdate,
 };
 pub use repositories::{
     OrphanJournal, SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
     SqliteOrphanRepository, SqlitePduLogRepository, SqliteSessionProfileRepository, StoredOrphan,
     StoredPduEntry,
 };
+
+/// Which contacts a caller wants, by list (spec §11.7).
+///
+/// Defined in `contacts`, which owns the union/intersection algebra, and
+/// re-exported because this crate's contact queries take one.
+pub use contacts::lists::{Combination, ListSelection};
 
 /// A delivery receipt that correlated to no message (CA-008-04).
 ///

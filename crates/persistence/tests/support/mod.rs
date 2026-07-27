@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use persistence::{
     BindType, Campaign, CampaignId, CampaignStatus, Contact, ContactId, ContactList, Database,
-    DatabaseConfig, ListId, Message, MessageState, SessionProfile, Timestamp,
+    DatabaseConfig, LineType, ListId, Message, MessageState, SessionProfile, Timestamp,
 };
 use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
 use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
@@ -118,7 +118,7 @@ pub(crate) fn a_contact(contact_id: ContactId, msisdn: &str) -> Contact {
         msisdn: Msisdn::parse(msisdn).expect("the fixture number is valid"),
         country: Some(String::from("CI")),
         valid: true,
-        line_type: Some(String::from("mobile")),
+        line_type: Some(LineType::Mobile),
         attributes: Some(String::from(r#"{"prenom":"Awa"}"#)),
         source: Some(String::from("fixture")),
         created_at: instant("2026-07-26T10:00:00Z"),
