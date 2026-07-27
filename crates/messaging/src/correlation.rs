@@ -123,7 +123,7 @@ use crate::ports::{MessageRepository, MessageStoreError};
 /// The escape hatch is per session profile, which is what step-008 §6
 /// anticipates: a centre known to change base gets [`Self::Bases`], and pays
 /// for it with the risk above rather than imposing it on every other centre.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IdMatching {
     /// The identifier as it arrived, and nothing else.
@@ -132,12 +132,28 @@ pub enum IdMatching {
     ///
     /// Both are lossless: they cannot map two distinct identifiers onto each
     /// other.
-    #[default]
     Relaxed,
     /// Everything [`Self::Relaxed`] tries, plus the other base.
     ///
     /// **Lossy.** Read the type's note before turning this on for a session.
     Bases,
+}
+
+impl IdMatching {
+    /// The policy a session uses unless its profile says otherwise.
+    ///
+    /// Single source of truth: `Default` reads it and so does
+    /// [`Correlator::new`], which is `const` and therefore cannot call
+    /// `default()`. Stating the variant in both places would let them drift —
+    /// and a test asserting on the default would stay green while production
+    /// ran the other policy.
+    pub const DEFAULT: Self = Self::Relaxed;
+}
+
+impl Default for IdMatching {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 impl IdMatching {
@@ -348,7 +364,7 @@ where
         Self {
             repository,
             clock,
-            matching: IdMatching::Relaxed,
+            matching: IdMatching::DEFAULT,
         }
     }
 
@@ -1422,8 +1438,11 @@ mod tests {
     /// it is a property rather than a scenario.
     #[test]
     fn the_default_policy_never_proposes_a_different_identifier() {
+        // `default()`, not `Relaxed`: the test guards the policy production
+        // actually uses. Naming the variant would keep this green while the
+        // default moved to the lossy one.
         for received in ["101", "42", "2a", "0042", "ABCDEF", "SMSC-1"] {
-            for candidate in IdMatching::Relaxed.candidates(received) {
+            for candidate in IdMatching::default().candidates(received) {
                 assert!(
                     candidate.eq_ignore_ascii_case(received)
                         || candidate.eq_ignore_ascii_case(received.trim_start_matches('0')),
