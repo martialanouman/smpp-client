@@ -80,7 +80,13 @@ export function SendView() {
     let cancelled = false;
 
     onMessageUpdate((payload) => {
-      adopt(payload.clientMessageId, payload.state);
+      // Since milestone 008 the event carries a BATCH: the receipt pipeline
+      // commits up to two hundred transitions at once, and one event each
+      // would be what CA-008-08 forbids. A unit send still produces batches of
+      // one, so this loop runs once on the path this screen cares about.
+      for (const update of payload.updates) {
+        adopt(update.clientMessageId, update.state);
+      }
     })
       .then((stop) => {
         if (cancelled) {

@@ -47,6 +47,8 @@
     "CONFIG_MALFORMED": "The preferences file could not be parsed.",
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
+    "LOGS_INVALID_FILTER": "A filter criterion could not be read.",
+    "LOGS_UNAVAILABLE": "The journal did not answer.",
     "MESSAGE_DUPLICATE": "A message already exists under this identifier; it was not sent again.",
     "MESSAGE_ENCODING": "The text cannot be written in the chosen encoding.",
     "MESSAGE_INVALID_DESTINATION": "Invalid recipient. Enter a number in international format.",
@@ -230,5 +232,95 @@
       "notJournalled": "The message was sent, but recording it failed. Do not send it again: it would go out a second time."
     },
     "derived": "Derived from the address"
+  },
+  "logs": {
+    "tab": {
+      "messages": "Messages",
+      "orphans": "Orphaned receipts",
+      "pdus": "PDUs"
+    },
+    "count": "{{count}} row(s)",
+    "refresh": "Refresh",
+    "empty": "No row matches the filter.",
+    "failure": "The journal could not be read.",
+    "state": {
+      "QUEUED": "Queued",
+      "SENT": "Sent",
+      "ACCEPTED": "Accepted",
+      "DELIVERED": "Delivered",
+      "FAILED": "Failed",
+      "EXPIRED": "Expired"
+    },
+    "filters": {
+      "label": "Journal filters",
+      "search": "Search",
+      "destPrefix": "Recipient prefix",
+      "state": "State",
+      "anyState": "Any",
+      "dlrErr": "Error code",
+      "from": "From",
+      "to": "To",
+      "apply": "Filter",
+      "clear": "Reset"
+    },
+    "column": {
+      "createdAt": "Created",
+      "dest": "Recipient",
+      "state": "State",
+      "status": "Status",
+      "dlrStat": "Receipt",
+      "dlrErr": "Error",
+      "segments": "Segments",
+      "text": "Message",
+      "receivedAt": "Received",
+      "smscId": "SMSC identifier",
+      "reason": "Reason",
+      "raw": "Raw body",
+      "ts": "Timestamp",
+      "direction": "Direction",
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "sequence": "sequence_number"
+    },
+    "detail": {
+      "label": "Row detail",
+      "title": "Detail",
+      "none": "Select a row to see its detail.",
+      "close": "Close",
+      "pduLogging": "Record PDUs",
+      "pduDisabled": "PDU recording is off: no header, no decoded body and no hexadecimal is kept until it is turned on."
+    },
+    "field": {
+      "clientMessageId": "Client identifier",
+      "smscMessageId": "SMSC identifier",
+      "sessionId": "Session",
+      "source": "Sender",
+      "dest": "Recipient",
+      "state": "State",
+      "commandStatus": "command_status",
+      "dlrStat": "Receipt stat",
+      "dlrErr": "Receipt err",
+      "segments": "Segments",
+      "attempts": "Attempts",
+      "createdAt": "Created",
+      "sentAt": "Sent",
+      "respAt": "Answered",
+      "dlrAt": "Receipt received",
+      "text": "Message",
+      "reason": "Reason",
+      "receivedAt": "Received",
+      "raw": "Raw body",
+      "direction": "Direction",
+      "commandId": "command_id",
+      "sequence": "sequence_number",
+      "ts": "Timestamp",
+      "decoded": "Decoded body",
+      "rawHex": "Raw hexadecimal"
+    },
+    "reason": {
+      "UNKNOWN_ID": "Unknown identifier",
+      "NO_IDENTIFIER": "No readable identifier"
+    },
+    "pending": "{{count}} update(s)"
   }
 }

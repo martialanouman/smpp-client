@@ -25,7 +25,18 @@ src-tauri/gen/
 *.db
 *.db-shm
 *.db-wal
-logs/
+# ANCRÉ À LA RACINE, et ce n'est pas cosmétique.
+#
+# Non ancré, `logs/` correspond à un répertoire nommé « logs » N'IMPORTE OÙ
+# dans l'arbre — et sur macOS et Windows, où le système de fichiers ignore la
+# casse, il correspond aussi à `Logs/`. L'écran Journaux du jalon 008 vit dans
+# `ui/src/views/Logs/` : il a été ajouté, formaté, testé, et `git status` ne le
+# montrait pas. Un `git add -A` l'aurait commité vide, et le défaut ne serait
+# apparu qu'au premier clone.
+#
+# Ce que la règle veut dire est « le répertoire de journaux de l'application,
+# à la racine du dépôt ». La barre oblique de tête le dit.
+/logs/
 *.log
 
 # Systèmes de fichiers

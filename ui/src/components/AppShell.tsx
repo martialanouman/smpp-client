@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { usePreferences } from "../store/preferences";
 import { DashboardView } from "../views/Dashboard/DashboardView";
+import { LogsView } from "../views/Logs/LogsView";
 import { PlaceholderView } from "../views/PlaceholderView";
 import { SendView } from "../views/Send/SendView";
 import { SessionsView } from "../views/Sessions/SessionsView";
@@ -54,10 +55,12 @@ export function AppShell() {
         {screen === "sessions" ? <SessionsView /> : null}
         {screen === "send" ? <SendView /> : null}
         {screen === "dashboard" ? <DashboardView /> : null}
+        {screen === "logs" ? <LogsView /> : null}
         {screen !== "settings" &&
         screen !== "sessions" &&
         screen !== "send" &&
-        screen !== "dashboard" ? (
+        screen !== "dashboard" &&
+        screen !== "logs" ? (
           <PlaceholderView screen={screen} />
         ) : null}
       </main>

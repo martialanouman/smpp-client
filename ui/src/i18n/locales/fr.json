@@ -47,6 +47,8 @@
     "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
+    "LOGS_INVALID_FILTER": "Un critère de filtre est illisible.",
+    "LOGS_UNAVAILABLE": "Le journal n'a pas répondu.",
     "MESSAGE_DUPLICATE": "Un message existe déjà sous cet identifiant ; il n'a pas été réémis.",
     "MESSAGE_ENCODING": "Le texte ne peut pas être écrit dans l'encodage choisi.",
     "MESSAGE_INVALID_DESTINATION": "Destinataire invalide. Saisissez un numéro au format international.",
@@ -230,5 +232,95 @@
       "notJournalled": "Le message est bien parti, mais son enregistrement a échoué. Ne le renvoyez pas : il serait émis une seconde fois."
     },
     "derived": "Déduit de l'adresse"
+  },
+  "logs": {
+    "tab": {
+      "messages": "Messages",
+      "orphans": "Accusés orphelins",
+      "pdus": "PDU"
+    },
+    "count": "{{count}} ligne(s)",
+    "refresh": "Actualiser",
+    "empty": "Aucune ligne ne correspond au filtre.",
+    "failure": "Le journal n'a pas pu être lu.",
+    "state": {
+      "QUEUED": "En file",
+      "SENT": "Émis",
+      "ACCEPTED": "Accepté",
+      "DELIVERED": "Livré",
+      "FAILED": "Échoué",
+      "EXPIRED": "Expiré"
+    },
+    "filters": {
+      "label": "Filtres du journal",
+      "search": "Recherche",
+      "destPrefix": "Préfixe destinataire",
+      "state": "État",
+      "anyState": "Tous",
+      "dlrErr": "Code d'erreur",
+      "from": "Depuis",
+      "to": "Jusqu'à",
+      "apply": "Filtrer",
+      "clear": "Réinitialiser"
+    },
+    "column": {
+      "createdAt": "Créé le",
+      "dest": "Destinataire",
+      "state": "État",
+      "status": "Statut",
+      "dlrStat": "Accusé",
+      "dlrErr": "Erreur",
+      "segments": "Segments",
+      "text": "Message",
+      "receivedAt": "Reçu le",
+      "smscId": "Identifiant SMSC",
+      "reason": "Raison",
+      "raw": "Corps brut",
+      "ts": "Horodatage",
+      "direction": "Sens",
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "sequence": "sequence_number"
+    },
+    "detail": {
+      "label": "Détail de la ligne",
+      "title": "Détail",
+      "none": "Sélectionnez une ligne pour en voir le détail.",
+      "close": "Fermer",
+      "pduLogging": "Enregistrer les PDU",
+      "pduDisabled": "L'enregistrement des PDU est désactivé : aucun en-tête, aucun corps décodé et aucun hexadécimal n'est conservé tant qu'il ne l'est pas."
+    },
+    "field": {
+      "clientMessageId": "Identifiant client",
+      "smscMessageId": "Identifiant SMSC",
+      "sessionId": "Session",
+      "source": "Expéditeur",
+      "dest": "Destinataire",
+      "state": "État",
+      "commandStatus": "command_status",
+      "dlrStat": "stat de l'accusé",
+      "dlrErr": "err de l'accusé",
+      "segments": "Segments",
+      "attempts": "Tentatives",
+      "createdAt": "Créé le",
+      "sentAt": "Émis le",
+      "respAt": "Répondu le",
+      "dlrAt": "Accusé reçu le",
+      "text": "Message",
+      "reason": "Raison",
+      "receivedAt": "Reçu le",
+      "raw": "Corps brut",
+      "direction": "Sens",
+      "commandId": "command_id",
+      "sequence": "sequence_number",
+      "ts": "Horodatage",
+      "decoded": "Corps décodé",
+      "rawHex": "Hexadécimal brut"
+    },
+    "reason": {
+      "UNKNOWN_ID": "Identifiant inconnu",
+      "NO_IDENTIFIER": "Aucun identifiant lisible"
+    },
+    "pending": "{{count}} mise(s) à jour"
   }
 }
