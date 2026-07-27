@@ -30,6 +30,22 @@
 //!
 //! When the recorder is **off**, none of the three is produced: the entry is
 //! not written at all, so there is nothing to leak and nothing to purge.
+//!
+//! # NOT YET CALLED FROM THE SESSION — the gap of milestone 008
+//!
+//! [`PduRecorder::observe`] has **no production call site**. The recorder, its
+//! port, its storage, its batching, its `logs_set_pdu_logging` command and its
+//! detail panel are all in place and tested; what is missing is the hook inside
+//! `smpp-session`'s reader and writer that would hand it each PDU. Turning the
+//! switch on therefore records nothing today.
+//!
+//! It is stated here rather than left to be discovered because a switch that
+//! silently does nothing is worse than an absent one. The remaining work has a
+//! shape, and the shape is the reason it was not rushed: the observer must be
+//! **synchronous and non-blocking** at the call site, pushing onto a bounded
+//! queue that a dedicated task drains into this recorder. Awaiting a database
+//! write inside the reader would pace the whole session from the debug switch,
+//! which is precisely the failure this crate's batching exists to avoid.
 
 use core::future::Future;
 

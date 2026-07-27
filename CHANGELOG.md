@@ -133,6 +133,26 @@ l'accusé plutôt que dans cette colonne.
 - **La file de livraison d'une session n'est plus drainée et jetée** : le
   placeholder du jalon 005 est remplacé par le pipeline d'accusés.
 
+#### Reste à faire — le journal PDU n'est pas encore alimenté
+
+`PduRecorder::observe` n'a **aucun site d'appel en production**. Le
+magnétophone, son port, son stockage, son regroupement par lots, la commande
+`logs_set_pdu_logging` et le panneau de détail sont en place et testés ; ce qui
+manque est le branchement dans le lecteur et l'écrivain de `smpp-session` qui
+lui remettrait chaque PDU. Activer l'interrupteur n'enregistre donc rien
+aujourd'hui.
+
+C'est écrit ici plutôt que laissé à découvrir : un interrupteur qui ne fait
+silencieusement rien est pire qu'un interrupteur absent. La moitié « désactivé
+par défaut » de CA-008-09 tient — rien n'est enregistré, rien ne fuit — la
+moitié « une fois activé, le détail affiche… » ne tient pas encore.
+
+Le travail restant a une forme, et cette forme est la raison pour laquelle il
+n'a pas été bâclé : l'observateur doit être **synchrone et non bloquant** au
+site d'appel, poussant dans une file bornée qu'une tâche dédiée draine vers le
+magnétophone. Attendre une écriture en base dans le lecteur cadencerait toute
+la session depuis l'interrupteur de débogage.
+
 ### Décisions — jalon 008
 
 - **ADR 0011 — virtualisation de la table des journaux.**
