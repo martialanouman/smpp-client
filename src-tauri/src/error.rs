@@ -102,6 +102,15 @@ pub(crate) enum ErrorCode {
     /// a fault the way a full disk is. The interface tells the operator the
     /// message is already there, not that the database broke.
     MessageDuplicate,
+
+    /// A log-screen filter field could not be read.
+    ///
+    /// Its own code rather than a message-domain one: the operator typed a date
+    /// or picked a state, and what the interface has to do is point at the
+    /// offending box — which `details` names.
+    LogsInvalidFilter,
+    /// The business journal or the PDU log could not be read.
+    LogsUnavailable,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -281,6 +290,24 @@ impl ErrorDto {
             ErrorCode::MessageDuplicate,
             &"a message already exists under this client_message_id",
         )
+    }
+
+    /// A log-screen filter field could not be read.
+    ///
+    /// `details` names the field and **not** the value: the rule that no column
+    /// value crosses the boundary (CA-001-06) is only worth anything if it has
+    /// no exceptions, and a date the operator typed is still their data.
+    pub(crate) fn logs_invalid_filter(field: &'static str) -> Self {
+        Self::detailed(
+            ErrorCode::LogsInvalidFilter,
+            &"a log filter field could not be read",
+            [(FIELD, field.to_owned())],
+        )
+    }
+
+    /// The journal would not answer.
+    pub(crate) fn logs_unavailable(error: &impl ToString) -> Self {
+        Self::bare(ErrorCode::LogsUnavailable, error)
     }
 }
 

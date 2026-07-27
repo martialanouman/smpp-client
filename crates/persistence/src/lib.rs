@@ -50,6 +50,7 @@ pub use records::{
 pub use repositories::{
     OrphanJournal, SqliteCampaignRepository, SqliteContactRepository, SqliteMessageRepository,
     SqliteOrphanRepository, SqlitePduLogRepository, SqliteSessionProfileRepository, StoredOrphan,
+    StoredPduEntry,
 };
 
 /// A delivery receipt that correlated to no message (CA-008-04).

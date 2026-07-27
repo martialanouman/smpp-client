@@ -122,20 +122,29 @@ pub const MAX_PAGE: u32 = 500;
 /// Generic over its two stores so the whole of it is testable against doubles,
 /// and so the SQLite types stay on the other side of the port.
 #[derive(Debug, Clone)]
-pub struct Journal<S> {
-    store: S,
+pub struct Journal<M, O> {
+    messages: M,
+    orphans: O,
     visibility: ContentVisibility,
 }
 
-impl<S> Journal<S>
+impl<M, O> Journal<M, O>
 where
-    S: MessageJournal + OrphanJournal,
+    M: MessageJournal,
+    O: OrphanJournal,
 {
-    /// A journal over `store`, hiding message bodies.
+    /// A journal over the two stores, hiding message bodies.
+    ///
+    /// Two type parameters rather than one, because the two halves are two
+    /// SQLite repositories: `messages` and `dlr_orphans` are different tables
+    /// with different row types, and demanding a single type implementing both
+    /// ports would only mean inventing a wrapper whose whole content is these
+    /// two fields.
     #[must_use]
-    pub const fn new(store: S) -> Self {
+    pub const fn new(messages: M, orphans: O) -> Self {
         Self {
-            store,
+            messages,
+            orphans,
             visibility: ContentVisibility::Truncated,
         }
     }
@@ -166,12 +175,12 @@ where
         let limit = limit.clamp(1, MAX_PAGE);
 
         let page: Page<Message> = self
-            .store
+            .messages
             .page_messages(filter, cursor, limit)
             .await
             .map_err(unavailable)?;
         let total = self
-            .store
+            .messages
             .count_messages(filter)
             .await
             .map_err(unavailable)?;
@@ -201,12 +210,12 @@ where
         let limit = limit.clamp(1, MAX_PAGE);
 
         let page = self
-            .store
+            .orphans
             .page_orphans(session_id, cursor, limit)
             .await
             .map_err(unavailable)?;
         let total = self
-            .store
+            .orphans
             .count_orphans(session_id)
             .await
             .map_err(unavailable)?;

@@ -68,6 +68,7 @@ impl SessionServices {
         app: &AppHandle<R>,
         profile: SessionProfile,
         password: Password,
+        logs: &crate::logs::LogServices,
     ) -> Result<SessionHandle, ErrorDto> {
         let session = self
             .registry
@@ -79,7 +80,10 @@ impl SessionServices {
 
         self.spawn_forwarder(app, &handle);
         self.spawn_metrics_ticker(app, &handle);
-        self.drain_deliveries(session);
+        // Milestone 008: the delivery queue is read rather than drained and
+        // dropped. `LogServices` owns the pipeline because it owns the journal
+        // the receipts are correlated against.
+        logs.spawn_receipt_loop(app, session);
 
         Ok(handle)
     }
@@ -194,23 +198,6 @@ impl SessionServices {
         };
 
         tauri::async_runtime::spawn(tick(METRICS_TICK_INTERVAL, publish));
-    }
-
-    /// Drains the delivery queue of a session, dropping what it holds.
-    ///
-    /// Milestone 008 is what reads delivery receipts; until then the queue
-    /// still has to be drained, because a full one makes the reader log a
-    /// warning per PDU. Draining and dropping is the honest placeholder, and
-    /// it says so in the log.
-    fn drain_deliveries(&self, mut session: smpp_session::Session) {
-        tauri::async_runtime::spawn(async move {
-            while let Some(command) = session.deliveries.recv().await {
-                tracing::debug!(
-                    pdu = %smpp_core::debug::redacted(&command),
-                    "incoming PDU dropped: delivery receipts arrive at milestone 008"
-                );
-            }
-        });
     }
 }
 

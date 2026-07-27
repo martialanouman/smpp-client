@@ -38,32 +38,55 @@ struct PduLogRow {
     ts: String,
 }
 
+/// A recorded PDU as it comes back out of storage.
+///
+/// Carries the auto-incremented identifier, which [`PduLogEntry`] does not: an
+/// entry is minted before it has one. The log screen needs it as a stable React
+/// key, and a key built from the header fields would collide — a
+/// `sequence_number` is reused as soon as its request is answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPduEntry {
+    /// Row identifier, and the arrival order.
+    pub id: i64,
+    /// What crossed the socket.
+    pub entry: PduLogEntry,
+}
+
 impl PagedRow for PduLogRow {
-    type Record = PduLogEntry;
+    type Record = StoredPduEntry;
 
     fn cursor(&self) -> i64 {
         self.id
     }
 
-    fn into_record(self) -> Result<PduLogEntry, PersistenceError> {
-        Ok(PduLogEntry {
-            session_id: read_optional_session_id(self.session_id.as_deref(), TABLE, "session_id")?,
-            direction: PduDirection::parse(&self.direction)?,
-            command_id: self
-                .command_id
-                .map(|raw| read_u32(raw, TABLE, "command_id"))
-                .transpose()?,
-            command_status: self
-                .command_status
-                .map(|raw| read_u32(raw, TABLE, "command_status"))
-                .transpose()?,
-            sequence_number: self
-                .sequence_number
-                .map(|raw| read_u32(raw, TABLE, "sequence_number"))
-                .transpose()?,
-            raw_hex: self.raw_hex,
-            decoded: self.decoded,
-            ts: read_timestamp(&self.ts, TABLE, "ts")?,
+    fn into_record(self) -> Result<StoredPduEntry, PersistenceError> {
+        let id = self.id;
+
+        Ok(StoredPduEntry {
+            id,
+            entry: PduLogEntry {
+                session_id: read_optional_session_id(
+                    self.session_id.as_deref(),
+                    TABLE,
+                    "session_id",
+                )?,
+                direction: PduDirection::parse(&self.direction)?,
+                command_id: self
+                    .command_id
+                    .map(|raw| read_u32(raw, TABLE, "command_id"))
+                    .transpose()?,
+                command_status: self
+                    .command_status
+                    .map(|raw| read_u32(raw, TABLE, "command_status"))
+                    .transpose()?,
+                sequence_number: self
+                    .sequence_number
+                    .map(|raw| read_u32(raw, TABLE, "sequence_number"))
+                    .transpose()?,
+                raw_hex: self.raw_hex,
+                decoded: self.decoded,
+                ts: read_timestamp(&self.ts, TABLE, "ts")?,
+            },
         })
     }
 }
@@ -132,7 +155,7 @@ impl PduLogRepository for SqlitePduLogRepository {
         session_id: Option<SessionId>,
         cursor: Cursor,
         limit: u32,
-    ) -> Result<Page<PduLogEntry>, PersistenceError> {
+    ) -> Result<Page<StoredPduEntry>, PersistenceError> {
         let session = session_id.map(|id| id.to_string());
         let after = cursor.into_raw();
         let window = store_u32(limit);

@@ -806,7 +806,13 @@ async fn a_pdu_log_entry_survives_a_round_trip() {
         .await
         .unwrap();
 
-    assert_eq!(page.items, vec![entry]);
+    assert_eq!(
+        page.items
+            .into_iter()
+            .map(|row| row.entry)
+            .collect::<Vec<_>>(),
+        vec![entry]
+    );
 }
 
 #[tokio::test]
@@ -837,5 +843,5 @@ async fn pdu_log_entries_are_filtered_by_session() {
         .unwrap();
 
     assert_eq!(page.len(), 1);
-    assert_eq!(page.items[0].session_id, Some(wanted));
+    assert_eq!(page.items[0].entry.session_id, Some(wanted));
 }

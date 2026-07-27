@@ -525,7 +525,10 @@ pub(crate) async fn session_bind(
     let password =
         Password::parse(input.password.expose()).map_err(|error| ErrorDto::from(&error))?;
 
-    let handle = state.sessions().bind(&app, profile, password).await?;
+    let handle = state
+        .sessions()
+        .bind(&app, profile, password, state.logs())
+        .await?;
     let status = SessionStatusDto::of(session_id, &handle).await;
 
     state.sessions().publish(&app).await;

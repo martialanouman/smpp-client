@@ -347,5 +347,5 @@ pub trait PduLogRepository {
         session_id: Option<SessionId>,
         cursor: Cursor,
         limit: u32,
-    ) -> impl Future<Output = Result<Page<PduLogEntry>, PersistenceError>> + Send;
+    ) -> impl Future<Output = Result<Page<crate::StoredPduEntry>, PersistenceError>> + Send;
 }

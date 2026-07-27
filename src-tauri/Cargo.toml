@@ -73,6 +73,12 @@ smpp-session = { path = "../crates/smpp-session" }
 # belongs to the crate, not to the command (CLAUDE.md §3).
 messaging = { path = "../crates/messaging" }
 
+# The business journal and the PDU recorder of milestone 008. Same rule: the
+# commands hold them and call them, and every decision they appear to make —
+# the page ceiling, the content policy, whether recording is on — belongs to
+# the crate.
+logging-export = { path = "../crates/logging-export" }
+
 # ONLY for `debug::redacted`, the sanctioned way to log a decoded command, and
 # for `types::SessionId`. No PDU is built here.
 smpp-core = { path = "../crates/smpp-core" }

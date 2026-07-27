@@ -48,7 +48,13 @@ uuid.workspace = true
 #
 # No `rt`: this crate spawns nothing. The caller owns the task and drives the
 # future, which is what lets the tests run it under `tokio::time::pause()`.
-tokio = { workspace = true, features = ["sync", "time"] }
+#
+# `macros` is for `tokio::select!`, not for `#[tokio::main]`: the batching loop
+# waits on "a receipt arrives" and "the deadline expires" at once. Without it
+# the crate builds only when a dev-dependency happens to enable the feature —
+# which it did, so `cargo check --workspace --all-targets` stayed green while
+# `cargo check -p logging-export` did not.
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 
 [dev-dependencies]
 proptest.workspace = true

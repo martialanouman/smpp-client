@@ -34,6 +34,10 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::session::session_status,
             crate::commands::message::message_send,
             crate::commands::message::message_preview,
+            crate::commands::logs::logs_query,
+            crate::commands::logs::logs_orphans,
+            crate::commands::logs::logs_pdus,
+            crate::commands::logs::logs_set_pdu_logging,
         ])
         .events(collect_events![
             crate::events::ErrorNotify,
