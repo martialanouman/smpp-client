@@ -135,6 +135,32 @@ l'ordre write-ahead de CLAUDE.md §4 pris à l'envers.
   ancrée, donc elle attrapait `ui/src/views/Logs/` sur un système de fichiers
   insensible à la casse. L'écran entier était invisible pour git, et un
   `git add -A` l'aurait commité vide. Ancrée à la racine.
+- **La conversion de base d'identifiant créditait le mauvais message.** Le
+  défaut relisait l'identifiant d'un accusé dans l'autre base et prenait le
+  premier candidat trouvé ; comme le chemin « identifiant introuvable » est le
+  chemin nominal — un orphelin par segment supplémentaire — un accusé pour un
+  identifiant inconnu atterrissait de façon fiable sur un message sans rapport.
+  La relecture de base est désormais opt-in par profil (`dlr_id_matching`), et
+  le défaut ne tente plus que des différences d'orthographe, qui sont sans
+  perte.
+- **L'interface annonçait des transitions que la base avait refusées.** La
+  barrière `FAILED → DELIVERED` protège le journal, pas l'événement : un
+  UNDELIV tardif laissait la ligne à DELIVERED et affichait FAILED.
+  `update_states` remonte maintenant le nombre de transitions écrites, et seules
+  celles-là sont annoncées.
+- **Le corps brut d'un accusé orphelin était tronqué à 24 caractères**, ce qui
+  amputait le seul diagnostic disponible sur un accusé qui n'a rien corrélé.
+- **`find_message_by_smsc_id` ignorait la session.** `smsc_message_id` n'est
+  unique que par centre : deux fournisseurs séquentiels attribuent tous deux
+  « 1234 », et la ligne la plus ancienne gagnait.
+- **Le filtre de recherche ne trouvait pas un numéro collé avec son `+`**, même
+  cause que le préfixe. Le retrait est conditionnel, pour ne pas casser la
+  recherche d'un `+` dans un corps de message.
+- **Vingt-cinq clés i18n demandées par des composants n'existaient pas** — toute
+  la racine `metrics` du jalon 007, plus cinq clés du formulaire de profil. Le
+  tableau de bord affichait `metrics.throughput` en toutes lettres. Trouvé en
+  lançant l'application ; le correctif durable est le test qui balaie les
+  sources pour les `t("…")` littéraux et vérifie que chacun se résout.
 - **`messaging` ne déclarait pas la fonctionnalité `macros` de Tokio**, alors
   que la boucle de lots utilise `tokio::select!`. La crate ne compilait que
   parce qu'une dev-dépendance activait la fonctionnalité — donc
