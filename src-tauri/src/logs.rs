@@ -21,9 +21,12 @@ use messaging::correlation::{
 };
 use messaging::dlr::{as_deliver_sm, classify, Incoming};
 use persistence::{
-    Database, SqliteMessageRepository, SqliteOrphanRepository, SqlitePduLogRepository,
+    Database, PduDirection, SqliteMessageRepository, SqliteOrphanRepository, SqlitePduLogRepository,
 };
+use smpp_core::codec::Command;
 use smpp_core::time::SystemClock;
+use smpp_core::types::SessionId;
+use smpp_session::{PduFlow, PduObserver};
 use tauri::{AppHandle, Runtime};
 
 use crate::events::{EventEmitter, MessageUpdate, MessageUpdateEntry};
@@ -34,6 +37,14 @@ pub(crate) type AppJournal = Journal<SqliteMessageRepository, SqliteOrphanReposi
 
 /// The PDU recorder this application writes with.
 pub(crate) type AppPduRecorder = PduRecorder<StoredPduLog<SqlitePduLogRepository>, SystemClock>;
+
+/// PDUs held between the socket and the recorder.
+///
+/// **Bounded**, and deliberately small. This is a debug facility: when the
+/// recorder falls behind — a slow disk, a session at a thousand messages a
+/// second — the right answer is to lose debug entries, not to grow a buffer or,
+/// far worse, to make the session wait. A full queue drops with a warning.
+const PDU_QUEUE_CAPACITY: usize = 4_096;
 
 /// Receipts held between the reader and the pipeline.
 ///
@@ -95,6 +106,36 @@ impl LogServices {
     /// The PDU log, for the detail panel that reads it back.
     pub(crate) const fn pdu_log(&self) -> &SqlitePduLogRepository {
         &self.pdu_log
+    }
+
+    /// The observer to hand a session, and the task that drains it.
+    ///
+    /// Returns `None` when nothing would be recorded anyway... which is never:
+    /// the switch can be turned on **while** a session is live (CA-008-09 asks
+    /// for the next PDU to stop, not the next session), so the observer is
+    /// always attached and the recorder decides per PDU. What that costs while
+    /// the switch is off is one atomic read and one bounded-queue push per PDU.
+    ///
+    /// The push is what makes the contract of `smpp_session::PduObserver`
+    /// holdable: `saw` returns immediately, and the database write happens in
+    /// the task started here. Awaiting the write at the call site would let a
+    /// debug switch pace the session.
+    pub(crate) fn pdu_observer(&self) -> Arc<dyn PduObserver> {
+        let (entries, mut inbox) = tokio::sync::mpsc::channel(PDU_QUEUE_CAPACITY);
+        let recorder = Arc::clone(&self.recorder);
+
+        tauri::async_runtime::spawn(async move {
+            while let Some((session_id, direction, command)) = inbox.recv().await {
+                if let Err(error) = recorder
+                    .observe(Some(session_id), direction, &command)
+                    .await
+                {
+                    tracing::warn!(error = %error, "a PDU could not be recorded");
+                }
+            }
+        });
+
+        Arc::new(QueueingObserver { entries })
     }
 
     /// Writes whatever the recorder still holds.
@@ -192,6 +233,41 @@ impl LogServices {
                 }
             }
         });
+    }
+}
+
+/// Hands every PDU to a bounded queue, and never blocks.
+///
+/// The whole implementation of `smpp_session::PduObserver`'s contract: a
+/// `try_send` cannot await, so the reader and the writer are never paced by
+/// what happens to the entry afterwards. A full queue is dropped with a
+/// warning — a lost debug entry must not cost a message.
+struct QueueingObserver {
+    entries: tokio::sync::mpsc::Sender<(SessionId, PduDirection, Command)>,
+}
+
+impl PduObserver for QueueingObserver {
+    fn saw(&self, session_id: SessionId, flow: PduFlow, command: &Command) {
+        let direction = match flow {
+            PduFlow::Inbound => PduDirection::Inbound,
+            PduFlow::Outbound => PduDirection::Outbound,
+        };
+
+        // The command is cloned rather than borrowed: the recorder runs in
+        // another task and the socket's loop moves on. A clone of a PDU is a
+        // few hundred bytes, paid only while somebody is debugging — the queue
+        // is drained by a task that discards everything when the switch is off,
+        // which is the cheap path.
+        if self
+            .entries
+            .try_send((session_id, direction, command.clone()))
+            .is_err()
+        {
+            tracing::warn!(
+                %session_id,
+                "the PDU log queue is full or closed; an entry was dropped"
+            );
+        }
     }
 }
 

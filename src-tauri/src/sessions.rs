@@ -72,9 +72,12 @@ impl SessionServices {
     ) -> Result<SessionHandle, ErrorDto> {
         let matching = profile.dlr_id_matching();
 
+        // The PDU observer is attached at bind time, always: CA-008-09 asks
+        // for the switch to take effect on the NEXT PDU, and a session started
+        // unwatched could only be watched by restarting it.
         let session = self
             .registry
-            .bind(profile, password)
+            .bind_observed(profile, password, Some(logs.pdu_observer()))
             .await
             .map_err(|error| ErrorDto::from(&error))?;
 

@@ -46,7 +46,13 @@ majeur.
   arrive au jalon 015, comme prévu.
 - **Journal PDU activable** (`logging_export::pdu_log`), **désactivé par
   défaut** et sans constructeur qui l'allume (CA-008-09). C'est l'unique site
-  d'appel de `DebugDumpAuthorisation::granted` de l'application.
+  d'appel de `DebugDumpAuthorisation::granted` de l'application. Les PDU y
+  arrivent par `smpp_session::PduObserver`, un port **synchrone** que le lecteur
+  et l'écrivain appellent pour chaque PDU — poignée de main comprise, c'est
+  l'échange qu'on veut quand un bind est refusé. `src-tauri` l'implémente en
+  poussant dans une file bornée qu'une tâche draine : attendre une écriture en
+  base dans le lecteur ferait cadencer la session par l'interrupteur de
+  débogage.
 - **Commandes `logs_query`, `logs_orphans`, `logs_pdus`,
   `logs_set_pdu_logging`** et **écran Journaux** : table fenêtrée, filtres
   combinés, codes couleur par état — la couleur n'est jamais le seul signal, le
@@ -132,26 +138,6 @@ l'accusé plutôt que dans cette colonne.
   `page_entries` renvoie un `StoredPduEntry` porteur de son identifiant.
 - **La file de livraison d'une session n'est plus drainée et jetée** : le
   placeholder du jalon 005 est remplacé par le pipeline d'accusés.
-
-#### Reste à faire — le journal PDU n'est pas encore alimenté
-
-`PduRecorder::observe` n'a **aucun site d'appel en production**. Le
-magnétophone, son port, son stockage, son regroupement par lots, la commande
-`logs_set_pdu_logging` et le panneau de détail sont en place et testés ; ce qui
-manque est le branchement dans le lecteur et l'écrivain de `smpp-session` qui
-lui remettrait chaque PDU. Activer l'interrupteur n'enregistre donc rien
-aujourd'hui.
-
-C'est écrit ici plutôt que laissé à découvrir : un interrupteur qui ne fait
-silencieusement rien est pire qu'un interrupteur absent. La moitié « désactivé
-par défaut » de CA-008-09 tient — rien n'est enregistré, rien ne fuit — la
-moitié « une fois activé, le détail affiche… » ne tient pas encore.
-
-Le travail restant a une forme, et cette forme est la raison pour laquelle il
-n'a pas été bâclé : l'observateur doit être **synchrone et non bloquant** au
-site d'appel, poussant dans une file bornée qu'une tâche dédiée draine vers le
-magnétophone. Attendre une écriture en base dans le lecteur cadencerait toute
-la session depuis l'interrupteur de débogage.
 
 ### Décisions — jalon 008
 

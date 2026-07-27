@@ -34,11 +34,13 @@ use messaging::message::MessageState;
 use messaging::ports::MessageStoreError;
 use messaging::sender::{SendRequest, Sender};
 use messaging::submit::SubmitOptions;
-use smpp_core::types::ClientMessageId;
+use smpp_core::codec::Command;
+use smpp_core::types::{ClientMessageId, SessionId};
+use smpp_core::values::CommandId;
 use smpp_session::testing::{
     acknowledged, drain, wait_until_bound, Script, Seen, Smsc, SubmitReply,
 };
-use smpp_session::Session;
+use smpp_session::{PduFlow, PduObserver, Session};
 
 use support::journal::{FrozenClock, Journal};
 
@@ -505,6 +507,105 @@ async fn a_late_receipt_cannot_resurrect_a_rejected_message() {
         MessageState::Failed,
         "FAILED is terminal; a delivery receipt must not walk it back"
     );
+
+    session.handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// CA-008-09 — the PDU observer really sees the socket
+// ---------------------------------------------------------------------------
+
+/// Every PDU the observer was handed, in order.
+///
+/// `std::sync::Mutex` and not the Tokio one, and that is the point rather than
+/// a shortcut: `PduObserver::saw` is **synchronous** by contract, so no guard
+/// can ever cross an `.await` here — the case `clippy.toml` bans the std lock
+/// for. An async lock would have nothing to offer a callback that cannot await.
+#[derive(Clone, Default)]
+#[allow(clippy::disallowed_types)]
+struct Watched(std::sync::Arc<std::sync::Mutex<Vec<(PduFlow, u32, CommandId)>>>);
+
+impl Watched {
+    fn seen(&self) -> Vec<(PduFlow, u32, CommandId)> {
+        self.0.lock().expect("uncontended").clone()
+    }
+}
+
+impl PduObserver for Watched {
+    fn saw(&self, _session_id: SessionId, flow: PduFlow, command: &Command) {
+        self.0
+            .lock()
+            .expect("uncontended")
+            .push((flow, command.sequence_number(), command.id()));
+    }
+}
+
+/// **CA-008-09, the half that was missing.** The recorder existed, was tested
+/// and was never called. This proves the hook: both directions of the real
+/// socket reach the observer.
+#[tokio::test(start_paused = true)]
+async fn every_pdu_of_both_directions_reaches_the_observer() {
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let watched = Watched::default();
+    let session = smpp_session::spawn_observed(
+        smpp_session::testing::a_profile(),
+        smpp_session::testing::a_password(),
+        smsc.clone(),
+        Some(std::sync::Arc::new(watched.clone())),
+    );
+
+    wait_until_bound(&session.handle).await;
+
+    let pushed = smsc.deliver_receipt("id:SMSC-1 stat:DELIVRD err:000");
+    tokio::time::sleep(SETTLE).await;
+
+    let seen = watched.seen();
+    let outbound: Vec<CommandId> = seen
+        .iter()
+        .filter(|(flow, _, _)| *flow == PduFlow::Outbound)
+        .map(|(_, _, id)| *id)
+        .collect();
+    let inbound: Vec<(u32, CommandId)> = seen
+        .iter()
+        .filter(|(flow, _, _)| *flow == PduFlow::Inbound)
+        .map(|(_, sequence, id)| (*sequence, *id))
+        .collect();
+
+    assert!(
+        outbound.contains(&CommandId::BindTransceiver),
+        "the bind is observed like everything else: {outbound:?}"
+    );
+    assert!(
+        outbound.contains(&CommandId::DeliverSmResp),
+        "the acknowledgement this client sends is observed: {outbound:?}"
+    );
+    assert!(
+        inbound.contains(&(pushed, CommandId::DeliverSm)),
+        "the receipt the centre pushed is observed, by its own sequence: {inbound:?}"
+    );
+    assert!(
+        inbound
+            .iter()
+            .any(|(_, id)| *id == CommandId::BindTransceiverResp),
+        "and so is the bind response: {inbound:?}"
+    );
+
+    session.handle.shutdown().await.unwrap();
+}
+
+/// A session with no observer behaves identically — the hook is one branch, not
+/// a behaviour change.
+#[tokio::test(start_paused = true)]
+async fn a_session_without_an_observer_is_unaffected() {
+    let (smsc, mut seen) = Smsc::always(Script::Accept);
+    let session = smpp_session::testing::start(smpp_session::testing::a_profile(), smsc.clone());
+
+    wait_until_bound(&session.handle).await;
+
+    let pushed = smsc.deliver_receipt("id:SMSC-1 stat:DELIVRD");
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(acknowledged(&drain(&mut seen)), vec![pushed]);
 
     session.handle.shutdown().await.unwrap();
 }

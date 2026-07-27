@@ -196,6 +196,20 @@ pub struct Session {
 /// The `password` is moved in and never leaves: it is not persisted, not
 /// logged, and not reachable from the handle.
 pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transport: T) -> Session {
+    spawn_observed(profile, password, transport, None)
+}
+
+/// The same, with somebody watching every PDU that crosses the socket.
+///
+/// The observer is **synchronous and must not block** — see
+/// [`crate::PduObserver`]. `None` is the ordinary case and costs one branch per
+/// PDU.
+pub fn spawn_observed<T: Transport>(
+    profile: SessionProfile,
+    password: Password,
+    transport: T,
+    observer: Option<Arc<dyn crate::PduObserver>>,
+) -> Session {
     let window_size = profile.window_size();
     let capacity = usize::try_from(window_size)
         .unwrap_or(usize::MAX)
@@ -238,6 +252,7 @@ pub fn spawn<T: Transport>(profile: SessionProfile, password: Password, transpor
         outgoing: outgoing_rx,
         responses: outgoing_tx,
         deliveries: Some(delivery_tx),
+        observer,
         state: state_tx,
         token,
     };

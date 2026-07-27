@@ -25,6 +25,7 @@
 
 mod error;
 mod messaging;
+mod observer;
 mod pending;
 
 pub mod actors;
@@ -38,8 +39,11 @@ pub mod state;
 pub mod testing;
 
 pub use actors::transport::{self as transport, TcpTransport, Transport};
-pub use actors::{spawn, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS};
+pub use actors::{
+    spawn, spawn_observed, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS,
+};
 pub use error::{ProfileRejection, SessionError};
+pub use observer::{PduFlow, PduObserver};
 pub use registry::SessionRegistry;
 
 /// Crate version, as declared in its manifest.

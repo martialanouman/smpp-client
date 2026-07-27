@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use smpp_core::types::SessionId;
 use tokio::sync::Mutex;
 
-use crate::actors::{spawn, Session, SessionHandle, SessionSnapshot};
+use crate::actors::{spawn_observed, Session, SessionHandle, SessionSnapshot};
 use crate::error::SessionError;
 use crate::profile::{Password, SessionProfile};
 use crate::transport::Transport;
@@ -68,6 +68,26 @@ impl<T: Transport + Clone> SessionRegistry<T> {
         profile: SessionProfile,
         password: Password,
     ) -> Result<Session, SessionError> {
+        self.bind_observed(profile, password, None).await
+    }
+
+    /// The same, with somebody watching every PDU that crosses the socket.
+    ///
+    /// The observer must be **synchronous and non-blocking** — see
+    /// [`crate::PduObserver`]. It is passed at bind time rather than set on the
+    /// registry because a session that starts unwatched can never be watched
+    /// afterwards without a second channel into a running actor, and the
+    /// application knows at bind time whether a recorder exists.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::bind`] refuses.
+    pub async fn bind_observed(
+        &self,
+        profile: SessionProfile,
+        password: Password,
+        observer: Option<std::sync::Arc<dyn crate::PduObserver>>,
+    ) -> Result<Session, SessionError> {
         let session_id = profile.session_id();
         let mut live = self.live.lock().await;
 
@@ -81,7 +101,7 @@ impl<T: Transport + Clone> SessionRegistry<T> {
             return Err(SessionError::TooManySessions { live: live.len() });
         }
 
-        let session = spawn(profile, password, self.transport.clone());
+        let session = spawn_observed(profile, password, self.transport.clone(), observer);
 
         live.insert(session_id, session.handle.clone());
 
