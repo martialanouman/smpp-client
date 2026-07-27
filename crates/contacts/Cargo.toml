@@ -10,6 +10,52 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
+
+# The only internal crate this one depends on, and it is a DOWNWARD edge
+# (guide §8.1): `Msisdn` for the normalised number, `Timestamp` for the
+# `created_at` a stored contact carries, `Clock` for the injected clock the
+# import mints instants from (CLAUDE.md §7).
+#
+# There is deliberately NO dependency on `persistence`. That is the whole point
+# of CA-009-13: this crate declares `ContactRepository`, `persistence`
+# implements it, and the import is testable against a double with no database
+# in reach. See ADR 0012.
+smpp-core = { path = "../smpp-core" }
+
+phonenumber.workspace = true
+calamine.workspace = true
+csv.workspace = true
+encoding_rs.workspace = true
+encoding_rs_io.workspace = true
+
+# `BoxStream` in the signature of `stream_contacts` (guide §11.3), and the
+# combinators an implementor builds one with.
+futures-core.workspace = true
+futures-util.workspace = true
+
+# `serde`/`serde_json` for ONE thing: the column mapping of a saved import
+# profile, stored as an opaque JSON document exactly like `contacts.attributes`
+# and `session_profiles.tls_config` (spec §14.2). Nothing else here is
+# serialised — the IPC DTOs live in `src-tauri`.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+# `CancellationToken` for the cancellable import (CA-009-10), `sync` for the
+# bounded progress channel, and `rt` for `spawn_blocking` — parsing a
+# spreadsheet is CPU-bound and must never run on a runtime thread (guide §7.1).
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+# `rt` is what brings `tokio_util::sync::CancellationToken` in — the single
+# shutdown signal of CLAUDE.md §4, and what makes CA-009-10 possible.
+tokio-util = { workspace = true, features = ["rt"] }
+
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
