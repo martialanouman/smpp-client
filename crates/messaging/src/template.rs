@@ -7,44 +7,70 @@
 //!
 //! # The invariant, and why it is checked rather than intended
 //!
-//! CA-010-06: **no text holding an unresolved `{{…}}` is ever emitted.** Three
-//! mechanisms hold it, in that order, and each one exists because the one
-//! before it is not enough:
+//! CA-010-06: **no message holding a `{{…}}` is ever emitted.** Stated over the
+//! finished text, not over the resolution: a recipient reading
+//! `Bonjour {{prenom}}` cannot tell whether a variable failed to resolve, or a
+//! spreadsheet cell happened to hold braces, or the operator escaped them on
+//! purpose — and all three are the same defect from where they are standing.
+//!
+//! Three mechanisms hold it, and each one exists because the one before it is
+//! not enough:
 //!
 //! 1. **Parsing happens once, up front.** A template that opens a placeholder
 //!    it never closes, or names nothing, or nests, is refused by
 //!    [`Template::parse`] — at campaign validation, when a human is looking,
-//!    rather than half-way through 500 000 recipients. What comes out is a
-//!    sequence of literals and named variables in which a placeholder is no
-//!    longer a piece of text that could survive by accident.
-//! 2. **Every variable is resolved or the recipient is rejected.**
-//!    [`MissingVariablePolicy`] is an enum with two arms and no third option,
-//!    so "leave the placeholder in" is not expressible. A value that *itself*
-//!    holds `{{` is refused too ([`RenderError::PlaceholderInValue`]): the
-//!    recipient cannot tell a placeholder that failed to resolve from one that
-//!    arrived inside their own data.
-//! 3. **The rendered text is counted before it is returned.** A `{{` may reach
-//!    the output through exactly one door — the escape `{{{{` the operator
-//!    wrote on purpose — and [`Template::parse`] knows how many times that door
-//!    was used. If the count does not match, [`Template::render`] returns
-//!    [`RenderError::UnresolvedPlaceholder`] instead of the text.
+//!    rather than half-way through 500 000 recipients. So is a template whose
+//!    own text would read as a placeholder once rendered
+//!    ([`TemplateError::WouldReadAsPlaceholder`]): an escaped `{{` with a `}}`
+//!    anywhere after it produces `{{…}}` for every single recipient, and that
+//!    is a mistake to catch on the editor's screen.
+//! 2. **Every variable is resolved or the recipient is rejected, and a value
+//!    may hold no brace at all.** [`MissingVariablePolicy`] is an enum with two
+//!    arms and no third option, so "leave the placeholder in" is not
+//!    expressible. A value carrying `{` or `}` is refused outright
+//!    ([`RenderError::BraceInValue`]) — see below for why that is a single
+//!    character and not the `{{` pair.
+//! 3. **The finished text is read back before it is returned.** If it holds a
+//!    `{{` with a `}}` anywhere after it, [`Template::render`] returns
+//!    [`RenderError::UnresolvedPlaceholder`] instead of the message.
 //!
-//! The third is unreachable as long as the first two are correct, and that is
-//! the point: it is what turns "we resolve every variable" from a claim about
-//! the code into a property of the output. It costs one scan of a text that is
-//! at most a few hundred characters.
+//! The third is unreachable while the first two are correct, and that is the
+//! point: it turns "we resolve every variable" from a claim about the code into
+//! a property of the output. It costs one scan of a text that is at most a few
+//! hundred characters.
+//!
+//! ## Why a value may hold no brace at all, rather than no `{{`
+//!
+//! Refusing only the pair was **wrong**, and a review found the counterexample:
+//!
+//! ```text
+//! template "{{{{{{a}}"   +   a = "ville}}"   ->   "{{ville}}"
+//! ```
+//!
+//! The escape contributes the `{{`, the value contributes the `}}`, neither
+//! half holds a pair, and the recipient reads a placeholder. Any rule that
+//! looks at the two halves separately misses it; any rule that counts `{{`
+//! misses it twice, since the total is exactly what the escape asked for.
+//!
+//! So a substituted value contributes **no brace**, and every brace in a
+//! message comes from the template — where the operator can see it, at
+//! validation time, for every recipient at once. The cost is stated rather than
+//! hidden: a contact whose *ville* is `Yamoussoukro {ancienne capitale}` is
+//! rejected, by name, and the operator fixes the data. That is a rare row; a
+//! message reading `{{ville}}` is a defect in front of a customer.
 //!
 //! # Syntax
 //!
 //! | Source | Renders as |
 //! |--------|------------|
 //! | `{{prenom}}`, `{{ prenom }}` | the value of `prenom` |
-//! | `{{{{` | a literal `{{` |
+//! | `{{{{` | a literal `{{`, provided no `}}` follows |
 //! | `}}` outside a placeholder | a literal `}}` |
 //!
 //! `}}` needs no escape: it only means something after a `{{`, and a closing
 //! pair on its own is ordinary text. `{{` does, and doubling it is the same
-//! convention `format!` uses for its own braces.
+//! convention `format!` uses for its own braces — but the escape lets a message
+//! hold `{{`, never `{{…}}`.
 
 use std::collections::BTreeMap;
 
@@ -54,14 +80,18 @@ const OPENING: &str = "{{";
 /// What closes one.
 const CLOSING: &str = "}}";
 
-/// Characters a variable name may not hold.
+/// The two characters no substituted value may hold, and no variable name
+/// either.
 ///
-/// Braces only, and that is deliberate: attribute keys come from spreadsheet
-/// headers (`contacts::import`), so they hold accents, spaces and punctuation,
-/// and a stricter charset would refuse `{{Nom complet}}` for a column the
-/// operator can see. A brace inside a name, on the other hand, is always a
-/// malformed template — `{{a{{b}}}}` — and never a header.
-const ILLEGAL_IN_NAME: [char; 2] = ['{', '}'];
+/// For a **name**, that is deliberate rather than restrictive: attribute keys
+/// come from spreadsheet headers (`contacts::import`), so they hold accents,
+/// spaces and punctuation, and a stricter charset would refuse `{{Nom complet}}`
+/// for a column the operator can see. A brace inside a name, on the other hand,
+/// is always a malformed template — `{{a{{b}}}}` — and never a header.
+///
+/// For a **value**, see the module header: a single brace is enough to form a
+/// placeholder with what the template put next to it.
+const BRACES: [char; 2] = ['{', '}'];
 
 /// Why a template source could not be parsed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -87,6 +117,18 @@ pub enum TemplateError {
         /// Byte offset of the opening `{{`.
         offset: usize,
     },
+
+    /// The template escapes a `{{` and a `}}` comes after it.
+    ///
+    /// Every message this template produces would hold `{{…}}`, which is what
+    /// CA-010-06 forbids — so it is refused here, once, rather than for each of
+    /// 500 000 recipients. Escaping is still available for a `{{` that no `}}`
+    /// follows.
+    #[error("the escaped braces at byte {offset} would read as a placeholder")]
+    WouldReadAsPlaceholder {
+        /// Byte offset of the escape, in the source.
+        offset: usize,
+    },
 }
 
 /// Why a message could not be built for one recipient.
@@ -104,15 +146,18 @@ pub enum RenderError {
         variable: String,
     },
 
-    /// A value would itself have put a placeholder in the message.
-    #[error("the value of {variable} would put a placeholder in the message")]
-    PlaceholderInValue {
+    /// A value holds a brace, which the template could turn into a placeholder.
+    ///
+    /// A single `{` or `}`, not the pair: see the module header for the
+    /// counterexample that forced it.
+    #[error("the value of {variable} holds a brace")]
+    BraceInValue {
         /// Name of the variable, never its value.
         variable: String,
     },
 
-    /// The rendered text still holds a placeholder.
-    #[error("the rendered message still holds an unresolved placeholder")]
+    /// The rendered text reads as a placeholder.
+    #[error("the rendered message would read as holding a placeholder")]
     UnresolvedPlaceholder,
 }
 
@@ -165,8 +210,9 @@ impl Variables {
         Self::default()
     }
 
-    /// Reads the attributes of a contact (spec §11.1,
-    /// [`contacts::model::Contact::attributes`]).
+    /// Reads the attributes of a contact (spec §11.1, the `attributes` column
+    /// of `contacts::model::Contact` — named rather than linked, since this
+    /// crate does not depend on `contacts` and must not start).
     ///
     /// `None` — a contact imported without attribute columns — is not a
     /// failure: it is a recipient for whom every variable is missing, and the
@@ -247,8 +293,8 @@ impl Variables {
     /// unnecessary.
     ///
     /// Deliberately no `trim()` here, although `{{ prenom }}` is a legal
-    /// placeholder: the trimming belongs to [`Template::parse`] and to
-    /// [`Self::insert`], each of which runs **once** — per campaign and per
+    /// placeholder: the trimming belongs to [`Template::parse`] and to the
+    /// private `insert` below, each of which runs **once** — per campaign and per
     /// attribute — while this runs once per variable per recipient. Trimming
     /// here as well would be a second home for the same rule, and the two
     /// would hide each other's absence: a `parse` that stopped trimming would
@@ -295,18 +341,21 @@ impl Variables {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     segments: Vec<Segment>,
-    /// How many literal `{{` the source asked for, through `{{{{`.
-    ///
-    /// The expected reading of the rendered text: see the module header, third
-    /// mechanism.
-    literal_openings: usize,
 }
 
 /// One piece of a parsed template.
+///
+/// The escape is a **segment of its own** rather than two characters inside a
+/// literal, so the braces the operator asked for are known by position and not
+/// merely by number. Counting them was the bug of the first implementation: the
+/// total said one `{{` was expected, and a `{{` formed somewhere else entirely
+/// spent the allowance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Segment {
-    /// Text to copy as is.
+    /// Text to copy as is. Holds no `{{`, by construction.
     Literal(String),
+    /// An escaped `{{`, written `{{{{` in the source.
+    EscapedOpening,
     /// A variable to resolve.
     Variable(String),
 }
@@ -324,27 +373,41 @@ impl Template {
     /// [`TemplateError::UnterminatedPlaceholder`] when a `{{` is never closed,
     /// [`TemplateError::EmptyVariableName`] when a placeholder names nothing,
     /// [`TemplateError::IllegalVariableName`] when a name holds a brace —
-    /// which is what a nested `{{a{{b}}}}` looks like from here.
+    /// which is what a nested `{{a{{b}}}}` looks like from here — and
+    /// [`TemplateError::WouldReadAsPlaceholder`] when an escaped `{{` has a
+    /// `}}` after it.
     pub fn parse(source: &str) -> Result<Self, TemplateError> {
         let mut segments = Vec::new();
         let mut literal = String::new();
-        let mut literal_openings = 0;
         let mut rest = source;
         // Byte offset of `rest` within `source`, so errors point at the source.
         let mut consumed = 0;
+        // Where the first escape sits, in the source and in the text this
+        // template renders when every value is taken out. Both are needed: the
+        // check below is about the rendered text, the error is about the
+        // source the operator typed.
+        let mut first_escape: Option<(usize, usize)> = None;
+        let mut skeleton = String::new();
 
         while let Some(relative) = rest.find(OPENING) {
             let opening = consumed + relative;
 
             literal.push_str(&rest[..relative]);
+            skeleton.push_str(&rest[..relative]);
 
             // Everything after the `{{`. Slicing on an ASCII marker never
             // splits a character.
             let after_opening = &source[opening + OPENING.len()..];
 
             if after_opening.starts_with(OPENING) {
-                literal.push_str(OPENING);
-                literal_openings += 1;
+                if !literal.is_empty() {
+                    segments.push(Segment::Literal(core::mem::take(&mut literal)));
+                }
+
+                first_escape.get_or_insert((skeleton.len(), opening));
+                skeleton.push_str(OPENING);
+                segments.push(Segment::EscapedOpening);
+
                 consumed = opening + 2 * OPENING.len();
                 rest = &source[consumed..];
                 continue;
@@ -360,7 +423,7 @@ impl Template {
                 return Err(TemplateError::EmptyVariableName { offset: opening });
             }
 
-            if name.contains(ILLEGAL_IN_NAME) {
+            if name.contains(BRACES) {
                 return Err(TemplateError::IllegalVariableName { offset: opening });
             }
 
@@ -375,15 +438,27 @@ impl Template {
         }
 
         literal.push_str(rest);
+        skeleton.push_str(rest);
 
         if !literal.is_empty() {
             segments.push(Segment::Literal(literal));
         }
 
-        Ok(Self {
-            segments,
-            literal_openings,
-        })
+        // Would every message this template produces read as a placeholder?
+        //
+        // `skeleton` is the rendered text with the values taken out, and that
+        // is enough to answer: a value contributes no brace (see the module
+        // header), so a `}}` in a message is a `}}` of the skeleton, and the
+        // only `{{` a message can hold is an escape of the skeleton. Checking
+        // the **first** escape covers the others: a `}}` after any of them is a
+        // `}}` after the first.
+        if let Some((at, offset)) = first_escape {
+            if skeleton[at + OPENING.len()..].contains(CLOSING) {
+                return Err(TemplateError::WouldReadAsPlaceholder { offset });
+            }
+        }
+
+        Ok(Self { segments })
     }
 
     /// The variables this template references, each once, in the order they
@@ -412,11 +487,10 @@ impl Template {
     ///
     /// [`RenderError::MissingVariable`] when a variable has no value and the
     /// policy is [`MissingVariablePolicy::Reject`],
-    /// [`RenderError::PlaceholderInValue`] when a value or a substitute would
-    /// itself put `{{` in the message, and
-    /// [`RenderError::UnresolvedPlaceholder`] if the finished text does not
-    /// read the way the source asked for — the guard of the module header,
-    /// which no correct rendering reaches.
+    /// [`RenderError::BraceInValue`] when a value or a substitute holds a
+    /// brace, and [`RenderError::UnresolvedPlaceholder`] if the finished text
+    /// reads as holding a placeholder — the guard of the module header, which
+    /// no correct rendering reaches.
     pub fn render(
         &self,
         variables: &Variables,
@@ -427,6 +501,7 @@ impl Template {
         for segment in &self.segments {
             match segment {
                 Segment::Literal(text) => rendered.push_str(text),
+                Segment::EscapedOpening => rendered.push_str(OPENING),
                 Segment::Variable(name) => {
                     let value = match variables.get(name) {
                         Some(value) => value,
@@ -440,8 +515,8 @@ impl Template {
                         },
                     };
 
-                    if value.contains(OPENING) {
-                        return Err(RenderError::PlaceholderInValue {
+                    if value.contains(BRACES) {
+                        return Err(RenderError::BraceInValue {
                             variable: name.clone(),
                         });
                     }
@@ -451,17 +526,15 @@ impl Template {
             }
         }
 
-        // THE INVARIANT OF CA-010-06, checked rather than asserted. The only
-        // `{{` a correct rendering can hold are the ones `{{{{` asked for, and
-        // this is where that is established about the text itself rather than
-        // about the code that built it.
+        // THE INVARIANT OF CA-010-06, read back out of the finished text rather
+        // than argued about the code that built it.
         //
-        // A `count_openings` above the expected number also catches the one
-        // case the loop cannot: a literal ending in `{` followed by a value
-        // starting with `{`. That text reads as a placeholder to whoever
-        // receives it, which is what the criterion is about, so refusing it is
-        // the right answer and not an over-reach.
-        if count_openings(&rendered) != self.literal_openings {
+        // Positional, not numerical: it asks what **follows** an opening, so a
+        // `{{` the operator escaped and a `}}` that arrived from anywhere else
+        // are caught together. Counting the openings was the first
+        // implementation and it was wrong — the module header carries the
+        // counterexample.
+        if holds_placeholder_shape(&rendered) {
             return Err(RenderError::UnresolvedPlaceholder);
         }
 
@@ -469,9 +542,14 @@ impl Template {
     }
 }
 
-/// How many non-overlapping `{{` a text holds.
-fn count_openings(text: &str) -> usize {
-    text.matches(OPENING).count()
+/// Whether a text holds a `{{` with a `}}` anywhere after it.
+///
+/// What a recipient reads as an unresolved placeholder, and the whole of the
+/// criterion. Deliberately not "a well-formed placeholder": `{{ }}` and
+/// `{{a{{b}}` are the same defect in front of a customer.
+fn holds_placeholder_shape(text: &str) -> bool {
+    text.find(OPENING)
+        .is_some_and(|opening| text[opening + OPENING.len()..].contains(CLOSING))
 }
 
 #[cfg(test)]
@@ -569,8 +647,34 @@ mod tests {
     #[test]
     fn a_doubled_opening_brace_renders_one_literal_pair() {
         assert_eq!(
-            render("Écrire {{{{prenom}} pour personnaliser.", &Variables::new()),
-            Ok(String::from("Écrire {{prenom}} pour personnaliser."))
+            render("Écrire {{{{ pour ouvrir une variable.", &Variables::new()),
+            Ok(String::from("Écrire {{ pour ouvrir une variable."))
+        );
+    }
+
+    /// The escape emits `{{`; it does not license `{{…}}`. A template that
+    /// would produce one for every recipient is refused where the operator can
+    /// see it, not once per recipient.
+    #[test]
+    fn an_escape_with_a_closing_pair_after_it_is_refused_at_parse_time() {
+        assert_eq!(
+            Template::parse("Écrire {{{{prenom}} pour personnaliser."),
+            Err(TemplateError::WouldReadAsPlaceholder { offset: 8 })
+        );
+        // The `}}` may be anywhere after it, and need not close anything.
+        assert_eq!(
+            Template::parse("{{{{ fin }}"),
+            Err(TemplateError::WouldReadAsPlaceholder { offset: 0 })
+        );
+    }
+
+    /// The other way round is ordinary text: a `}}` **before** the escape
+    /// forms no shape.
+    #[test]
+    fn a_closing_pair_before_an_escape_is_ordinary_text() {
+        assert_eq!(
+            render("}} puis {{{{", &Variables::new()),
+            Ok(String::from("}} puis {{"))
         );
     }
 
@@ -679,19 +783,19 @@ mod tests {
     /// `{{…}}` in front of the recipient just as surely as a resolution
     /// failure would.
     #[test]
-    fn a_value_holding_a_placeholder_rejects_the_recipient() {
+    fn a_value_holding_a_brace_rejects_the_recipient() {
         let variables = Variables::new().with("prenom", "{{ville}}");
 
         assert_eq!(
             render("Bonjour {{prenom}}.", &variables),
-            Err(RenderError::PlaceholderInValue {
+            Err(RenderError::BraceInValue {
                 variable: String::from("prenom"),
             })
         );
     }
 
     #[test]
-    fn a_substitute_holding_a_placeholder_rejects_the_recipient() {
+    fn a_substitute_holding_a_brace_rejects_the_recipient() {
         let rendered = Template::parse("Bonjour {{prenom}}.")
             .expect("the template parses")
             .render(
@@ -701,34 +805,55 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Err(RenderError::PlaceholderInValue {
+            Err(RenderError::BraceInValue {
                 variable: String::from("prenom"),
             })
         );
     }
 
-    /// The guard of the module header, on the one input that reaches it: a
-    /// value ending in `{` against a literal beginning with one. Neither half
-    /// holds a placeholder, their concatenation reads as one, and the
-    /// recipient cannot tell the difference.
+    /// A value ending in `{` against a literal beginning with one: neither
+    /// half holds a pair, their concatenation does. Caught by the value rule —
+    /// a single brace is enough to refuse the row.
     #[test]
-    fn a_placeholder_formed_across_a_join_is_refused() {
+    fn a_brace_formed_across_a_join_is_refused() {
         let variables = Variables::new().with("prenom", "Awa{");
 
         assert_eq!(
             render("{{prenom}}{suite", &variables),
-            Err(RenderError::UnresolvedPlaceholder)
+            Err(RenderError::BraceInValue {
+                variable: String::from("prenom"),
+            })
         );
     }
 
     #[test]
-    fn a_placeholder_formed_between_two_values_is_refused() {
+    fn a_brace_formed_between_two_values_is_refused() {
         let variables = Variables::new().with("a", "x{").with("b", "{y");
 
         assert_eq!(
             render("{{a}}{{b}}", &variables),
-            Err(RenderError::UnresolvedPlaceholder)
+            Err(RenderError::BraceInValue {
+                variable: String::from("a"),
+            })
         );
+    }
+
+    /// A lone brace in a value is refused even when nothing around it could
+    /// form a pair: the rule is the character, not the pair, and a rule that
+    /// tried to be cleverer is what let the review's counterexample through.
+    #[test]
+    fn a_single_brace_in_a_value_is_enough_to_reject_the_recipient() {
+        for value in ["Yamoussoukro {ancienne capitale}", "a{", "}b"] {
+            let variables = Variables::new().with("ville", value);
+
+            assert_eq!(
+                render("Bonjour, à {{ville}}.", &variables),
+                Err(RenderError::BraceInValue {
+                    variable: String::from("ville"),
+                }),
+                "{value} must be refused"
+            );
+        }
     }
 
     /// The escape is the **only** door: an escaped source may hold `{{` in its
@@ -736,8 +861,47 @@ mod tests {
     #[test]
     fn an_escaped_source_may_hold_braces_in_its_output() {
         assert_eq!(
-            render("{{{{}} {{{{{{{{", &Variables::new()),
-            Ok(String::from("{{}} {{{{"))
+            render("{{{{ et {{{{{{{{", &Variables::new()),
+            Ok(String::from("{{ et {{{{"))
+        );
+    }
+
+    /// Regression, found in review: the escape granted a budget of one `{{`,
+    /// and a **value** carrying the matching `}}` spent it somewhere else. The
+    /// recipient read `{{ville}}`, which is exactly what CA-010-06 forbids.
+    ///
+    /// The counting guard could not see it — the total was right — and neither
+    /// could a check for `{{` inside the value, the value holding only `}}`.
+    #[test]
+    fn an_escaped_opening_and_a_value_cannot_form_a_placeholder_between_them() {
+        let variables = Variables::new().with("a", "ville}}");
+
+        assert!(
+            render("{{{{{{a}}", &variables).is_err(),
+            "the recipient would read a placeholder"
+        );
+
+        let variables = Variables::new().with("a", "prenom}}");
+
+        assert!(
+            render("Ex: {{{{{{a}} ok", &variables).is_err(),
+            "the recipient would read a placeholder"
+        );
+    }
+
+    /// The same counterexample, saying **which** mechanism owns it: the value
+    /// rule, at the first pass. The test above asserts only that the message is
+    /// refused, on purpose — it is what shows the final guard catching the case
+    /// when the value rule is weakened back to its old form.
+    #[test]
+    fn the_counterexample_is_refused_by_the_value_rule() {
+        let variables = Variables::new().with("a", "ville}}");
+
+        assert_eq!(
+            render("{{{{{{a}}", &variables),
+            Err(RenderError::BraceInValue {
+                variable: String::from("a"),
+            })
         );
     }
 

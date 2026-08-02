@@ -404,11 +404,11 @@ proptest! {
 /// The whole of CA-010-06, as a property rather than as a list of examples.
 ///
 /// The example-based tests in `messaging::template` pin the cases somebody
-/// thought of. This one pins the invariant *between* them: a source that never
-/// asked for a literal `{{` cannot produce a text holding one, whatever the
-/// template says, whatever the recipient's attributes hold, and under either
-/// policy. That is the criterion, stated about the output rather than about the
-/// code.
+/// thought of. This one pins the invariant *between* them, over **every**
+/// source: a rendered message never holds a `{{` with a `}}` after it. No
+/// exception for the escape — a review found that the earlier form of this
+/// test, which excused any source containing `{{{{`, excluded precisely the
+/// family where the invariant fell over.
 ///
 /// # Why the source is assembled from fragments rather than drawn from an
 /// alphabet
@@ -423,7 +423,9 @@ proptest! {
 ///
 /// The fragments below are the pieces a real template is made of, malformed
 /// ones included, so a draw of a few of them exercises escapes, nesting,
-/// unterminated openings and values holding braces at the same time.
+/// unterminated openings and values holding braces at the same time. Two of
+/// them are multi-byte: every offset in the parser is a **byte** offset, and an
+/// off-by-one on a `é` is a panic, which CLAUDE.md §4 forbids outright.
 const FRAGMENTS: &[&str] = &[
     "{{a}}",
     "{{ b }}",
@@ -436,16 +438,29 @@ const FRAGMENTS: &[&str] = &[
     "}",
     " ",
     "x",
+    "é",
+    "🕴€中",
     "{{a{{b}}}}",
 ];
 
+/// Whether a text reads as holding a placeholder.
+///
+/// Transcribed from the criterion, not from the engine: a `{{` with a `}}`
+/// anywhere after it.
+fn reads_as_a_placeholder(text: &str) -> bool {
+    match text.find("{{") {
+        Some(opening) => text[opening + 2..].contains("}}"),
+        None => false,
+    }
+}
+
 proptest! {
     #[test]
-    fn no_rendered_message_holds_a_placeholder_the_source_did_not_escape(
+    fn no_rendered_message_ever_reads_as_holding_a_placeholder(
         pieces in prop::collection::vec(prop::sample::select(FRAGMENTS), 0..6),
-        first in "[a-c{} ]{0,6}",
-        second in "[a-c{} ]{0,6}",
-        substitute in "[a-c{} ]{0,6}",
+        first in "[a-c{}é€ ]{0,6}",
+        second in "[a-c{}é€ ]{0,6}",
+        substitute in "[a-c{}é€ ]{0,6}",
     ) {
         let source: String = pieces.concat();
         let Ok(template) = Template::parse(&source) else {
@@ -464,12 +479,10 @@ proptest! {
                 continue;
             };
 
-            if !source.contains("{{{{") {
-                prop_assert!(
-                    !rendered.contains("{{"),
-                    "{source:?} rendered as {rendered:?}"
-                );
-            }
+            prop_assert!(
+                !reads_as_a_placeholder(&rendered),
+                "{source:?} rendered as {rendered:?}"
+            );
         }
     }
 }
