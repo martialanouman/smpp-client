@@ -108,10 +108,12 @@ pub mod testing;
 
 pub use campaign::control::{CampaignControl, ControlHandle, Resumption, RunState};
 pub use campaign::feeder::{Fed, FeedItem, FeedRejection, FeedSummary, Feeder};
-pub use campaign::progress::CampaignProgress;
+pub use campaign::progress::{
+    AcceptanceRate, CampaignProgress, CampaignReading, RATE_WINDOW_SECONDS,
+};
 pub use campaign::resume::{message_key, Admission, EmissionGuard, SkipReason, UnansweredPolicy};
 pub use campaign::runner::{
-    CampaignOutcome, CampaignPlan, CampaignRunner, CampaignTally, StartMode,
+    CampaignOutcome, CampaignPlan, CampaignRunner, CampaignSummary, CampaignTally, StartMode,
 };
 pub use campaign::schedule::{DailyWindow, Schedule, ScheduleDecision, ScheduleError};
 pub use campaign::{CampaignStatus, InvalidCampaignTransition};
