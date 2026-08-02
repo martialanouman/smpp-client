@@ -61,9 +61,22 @@
 //! * [`campaign`] holds the lifecycle of spec §10.3 and refuses the transitions
 //!   it does not allow.
 //!
-//! What feeds a campaign from the database, what resumes it after a crash and
-//! what puts a `submit_multi` on the wire (L-010-02, L-010-04, L-010-06) is
-//! built on top of these and is not here yet.
+//! On top of them sits the machinery that actually runs one:
+//!
+//! * [`campaign::feeder`] reads the recipients in **streaming** and fills a
+//!   **bounded** queue, so a message centre that slows down slows the reading
+//!   down rather than filling memory (L-010-02, CA-010-01);
+//! * [`campaign::resume`] holds the invariant of this milestone — *at most one
+//!   accepted message per recipient* — through a write-ahead key derived from
+//!   the campaign and the recipient, and a state check before every emission
+//!   (L-010-04, CA-010-04, CA-010-05);
+//! * [`campaign::control`] carries start, pause, resume and cancel to every task
+//!   of one campaign;
+//! * [`campaign::schedule`] answers when a campaign may send — a deferred start
+//!   and a daily window, midnight crossings and time zones included (CA-010-10);
+//! * [`campaign::runner`] ties them together and counts what happened.
+//!
+//! `submit_multi` and its fallback (L-010-06) are not here yet.
 
 pub mod addressing;
 pub mod campaign;
@@ -79,12 +92,25 @@ pub mod sender;
 pub mod submit;
 pub mod template;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
+
+pub use campaign::control::{CampaignControl, ControlHandle, Resumption, RunState};
+pub use campaign::feeder::{Fed, FeedItem, FeedRejection, FeedSummary, Feeder};
+pub use campaign::resume::{message_key, Admission, EmissionGuard, SkipReason, UnansweredPolicy};
+pub use campaign::runner::{
+    CampaignOutcome, CampaignPlan, CampaignRunner, CampaignTally, StartMode,
+};
+pub use campaign::schedule::{DailyWindow, Schedule, ScheduleDecision, ScheduleError};
 pub use campaign::{CampaignStatus, InvalidCampaignTransition};
 pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
-pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
+pub use ports::{
+    MessageRepository, MessageStoreError, Recipient, RecipientSource, RecipientSourceError,
+    SmscSession, SubmitError,
+};
 pub use retry::{
     GiveUpReason, RetryBackoff, RetryDecision, RetryPolicy, RetryPolicyError, SendFailure,
 };

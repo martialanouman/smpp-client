@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 75b74c98cfb8389dc0e7199ed96ca681214a681b6397cb3bb319a05688bb8c98 # shrinks to history = History { recipient_count: 1, replies: [Accepted, Accepted], commands: [], runs: [LosesVerdicts, None], abandon_unanswered: false }

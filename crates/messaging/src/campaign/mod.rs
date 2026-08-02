@@ -57,6 +57,28 @@
 //! * a **terminal** status has no successor but itself: a cancelled campaign
 //!   that could be resumed would send the messages the operator stopped.
 
+//! # What else is in this module
+//!
+//! The lifecycle above is the *statement*; the modules beside it are what runs
+//! one campaign against it:
+//!
+//! | Module | Deliverable | What it owns |
+//! |---|---|---|
+//! | [`feeder`] | L-010-02 | reading the recipients in streaming into a bounded queue |
+//! | [`resume`] | L-010-04 | **the invariant** — at most one accepted message per recipient — and the arbitration on a crash |
+//! | [`control`] | — | start, pause, resume, cancel, carried to every task of one campaign |
+//! | [`schedule`] | — | when a campaign may send (CA-010-10) |
+//! | [`runner`] | — | the loop that ties them together and counts what happened |
+//!
+//! [`resume`] is the one to read first: it states the invariant this milestone
+//! exists to hold, and everything else is arranged around it.
+
+pub mod control;
+pub mod feeder;
+pub mod resume;
+pub mod runner;
+pub mod schedule;
+
 /// Where a campaign stands in the lifecycle of spec §10.3.
 ///
 /// **No `PartialOrd`/`Ord`**, deliberately, where every other stored enum of

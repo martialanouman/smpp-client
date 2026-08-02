@@ -44,6 +44,21 @@ pub(crate) struct Journal {
     inner: Arc<Mutex<JournalState>>,
     /// When set, the write-ahead insert fails with this.
     insert_failure: Option<MessageStoreError>,
+    /// When set, only the transitions carrying a **verdict** fail.
+    ///
+    /// A verdict is an update carrying `resp_at`: the send path writes one
+    /// exactly once, after the message centre has answered or failed to. The
+    /// transition it writes *before* the socket is untouched.
+    ///
+    /// Needed since milestone 010 made the attempt a commit of its own: a
+    /// journal that refused every transition would refuse that one too, and the
+    /// send would never reach the socket — which is a different scenario from
+    /// the one "the database locks up after the send" is about.
+    verdict_failure: Option<MessageStoreError>,
+
+    /// When set, a transition announces itself here and then never returns.
+    hang_on_transition: Option<tokio::sync::mpsc::Sender<()>>,
+
     /// When set, the final transitions fail with this.
     ///
     /// Separate from [`Self::insert_failure`] on purpose: the two failures
@@ -100,6 +115,36 @@ impl Journal {
             transition_failure: Some(failure),
             ..Self::default()
         }
+    }
+
+    /// A journal that accepts the attempt and refuses the verdict.
+    ///
+    /// The database locking up, or the disk filling, between the last
+    /// `submit_sm_resp` and the commit — the message is out, the outcome is not.
+    pub(crate) fn refusing_verdicts(failure: MessageStoreError) -> Self {
+        Self {
+            verdict_failure: Some(failure),
+            ..Self::default()
+        }
+    }
+
+    /// A journal that never returns from a transition, and says when it was
+    /// reached.
+    ///
+    /// The mirror of `HangingSession` on the other side of the send path: it is
+    /// what lets a test abort a send in the window **between the row and the
+    /// attempt**, which is the one CA-006-03 names and which no timing can hit
+    /// reliably.
+    pub(crate) fn hanging_on_transitions() -> (Self, tokio::sync::mpsc::Receiver<()>) {
+        let (reached, receiver) = tokio::sync::mpsc::channel(1);
+
+        (
+            Self {
+                hang_on_transition: Some(reached),
+                ..Self::default()
+            },
+            receiver,
+        )
     }
 
     /// The same journal, sampling `witness` at insert time.
@@ -286,8 +331,22 @@ impl MessageRepository for Journal {
         &self,
         updates: &[MessageStateUpdate],
     ) -> Result<u64, MessageStoreError> {
+        if let Some(reached) = self.hang_on_transition.clone() {
+            let _ = reached.send(()).await;
+
+            // Never returns. The caller is expected to abort the task, which is
+            // the point: the row exists and the attempt does not.
+            core::future::pending::<()>().await;
+        }
+
         if let Some(failure) = self.transition_failure.clone() {
             return Err(failure);
+        }
+
+        if let Some(failure) = self.verdict_failure.clone() {
+            if updates.iter().any(|update| update.resp_at.is_some()) {
+                return Err(failure);
+            }
         }
 
         let mut state = self.inner.lock().await;

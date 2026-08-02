@@ -49,13 +49,14 @@
 use smpp_core::codec::Pdu;
 use smpp_core::status_codes::{self, StatusClass};
 use smpp_core::time::{Clock, Timestamp};
-use smpp_core::types::{ClientMessageId, SessionId};
+use smpp_core::types::{CampaignId, ClientMessageId, SessionId};
 use smpp_core::values::CommandStatus;
 
 use crate::encoding::EncodingChoice;
 use crate::error::MessagingError;
 use crate::message::{Message, MessageState, MessageStateUpdate};
 use crate::ports::{MessageRepository, SmscSession, SubmitError};
+use crate::retry::SendFailure;
 use crate::segmentation::{
     segment, ConcatenationReferenceCounter, SegmentationMode, SegmentationOptions,
 };
@@ -86,6 +87,40 @@ pub struct SendRequest {
     /// works if the caller says which attempt it is. Milestone 010 passes the
     /// number it read back from the journal.
     pub attempt: u32,
+
+    /// Whether the caller will accept this attempt's verdict as final.
+    ///
+    /// `true` for a unit send, which has no replay policy: its failure is the
+    /// message's failure and the row is written `FAILED`.
+    ///
+    /// # Why a campaign says `false`, and the bug that made it necessary
+    ///
+    /// `FAILED` is **terminal** in the machine of spec §14.3, deliberately: a
+    /// delivery receipt arriving for a message already failed must not
+    /// resurrect it. But spec §10.7 replays a throttled message, and a replay
+    /// that succeeds has to record `ACCEPTED` — which the machine refuses over a
+    /// `FAILED` row.
+    ///
+    /// The result was a campaign whose replay reached the message centre, was
+    /// accepted, and left the journal saying `FAILED` for ever. The runner's
+    /// counters and the database disagreed, which is exactly what CA-010-02 is
+    /// checked against.
+    ///
+    /// So an attempt the caller may replay writes `SENT` instead — the state of
+    /// a message whose `submit_sm` has left and whose verdict is not in — and
+    /// the verdict is written by the attempt that is final. The condition is
+    /// stated in [`Sender::final_transition`], and it is exactly the condition
+    /// under which [`crate::retry::RetryPolicy::decide`] gives up, so the row is
+    /// `FAILED` precisely when the campaign has stopped trying.
+    pub last_attempt: bool,
+
+    /// The campaign this message belongs to, when it belongs to one.
+    ///
+    /// Written onto the row, and it is not decoration: `messages.campaign_id` is
+    /// what CA-010-02 counts against — "total = sent + failed + cancelled,
+    /// checked against the contents of the database" is a query filtered by this
+    /// column — and what the resume of spec §10.5 selects on.
+    pub campaign_id: Option<CampaignId>,
 }
 
 impl SendRequest {
@@ -99,7 +134,36 @@ impl SendRequest {
             encoding: EncodingChoice::Automatic,
             mode: SegmentationMode::default(),
             attempt: 1,
+            last_attempt: true,
+            campaign_id: None,
         }
+    }
+
+    /// The same request, as an attempt the caller may replay.
+    ///
+    /// See [`Self::last_attempt`] for what it changes and why it exists.
+    #[must_use]
+    pub const fn with_more_attempts_allowed(mut self, allowed: bool) -> Self {
+        self.last_attempt = !allowed;
+        self
+    }
+
+    /// The same request, under the write-ahead key the caller chose.
+    ///
+    /// A campaign derives its keys rather than drawing them
+    /// ([`crate::campaign::resume::message_key`]), which is what makes a resumed
+    /// campaign find the row it already wrote instead of inserting a second one.
+    #[must_use]
+    pub const fn keyed(mut self, client_message_id: ClientMessageId) -> Self {
+        self.client_message_id = client_message_id;
+        self
+    }
+
+    /// The same request, as part of a campaign.
+    #[must_use]
+    pub const fn in_campaign(mut self, campaign_id: CampaignId) -> Self {
+        self.campaign_id = Some(campaign_id);
+        self
     }
 
     /// The same request under another encoding choice.
@@ -200,18 +264,23 @@ pub struct SendReport {
     pub command_status: Option<CommandStatus>,
     /// Whether sending the same message again could succeed.
     ///
-    /// Read from the classification of milestone 003: `ESME_RTHROTTLED` and a
-    /// system error say yes, an invalid destination says no. Nothing here acts
-    /// on it — the retry policy is milestone 010's and the pacing milestone
-    /// 007's — but the interface shows it, and a "retry" button that offers
-    /// itself on a fatal status is a button that sends the same rejection
-    /// twice.
+    /// Answered by [`crate::retry::SendFailure::is_retryable`], which reads the
+    /// classification of milestone 003 for a refusal and names the failures that
+    /// carry no status. **One** reading of that question exists in this crate,
+    /// and this is a projection of it.
+    ///
+    /// The interface shows it — a "retry" button that offers itself on a fatal
+    /// status is a button that sends the same rejection twice — and, since
+    /// milestone 010, [`Sender`] reads it too: it is half of the condition under
+    /// which a failed attempt is journalled as `SENT` rather than `FAILED`. See
+    /// [`SendRequest::last_attempt`].
     pub retryable: bool,
     /// Whether the journal recorded the outcome.
     ///
     /// `false` means the message **was** submitted and the message centre
-    /// answered, but the transitions could not be written: the row is still
-    /// `QUEUED`, so a resume would send it again.
+    /// answered, but the verdict could not be written: the row is still `SENT`
+    /// with no `command_status`, which is exactly what a crash in the same
+    /// window leaves, and a resume treats it under the arbitration of ADR 0014.
     ///
     /// It is a field of the report rather than an error because the two say
     /// opposite things. An error means "nothing was sent"; this means
@@ -299,6 +368,16 @@ where
         &self.repository
     }
 
+    /// The clock this sender stamps its rows with.
+    ///
+    /// Exposed for the campaign runner, which has to answer "is the daily send
+    /// window open right now" against the **same** clock the rows are stamped
+    /// with. Two clocks would let a campaign wait on one and record on the
+    /// other, and a test could only ever pin one of them.
+    pub const fn clock(&self) -> &C {
+        &self.clock
+    }
+
     /// Sends one message and reports what became of it.
     ///
     /// # Errors
@@ -324,6 +403,64 @@ where
     /// # Errors
     ///
     /// Same as [`Self::send`].
+    pub async fn send_observed<S: SmscSession, O: SendObserver + ?Sized>(
+        &self,
+        session: &S,
+        request: &SendRequest,
+        observer: &O,
+    ) -> Result<SendReport, MessagingError> {
+        self.dispatch(session, request, observer, WriteAhead::Insert)
+            .await
+    }
+
+    /// Sends a message whose write-ahead row is **already** in the journal.
+    ///
+    /// The one difference with [`Self::send`] is the insert, which is skipped.
+    /// Everything else — the encoding, the segmentation, the transitions, the
+    /// report — is the same path, deliberately: two send paths would drift, and
+    /// the one that drifts is always the one that runs on the day of the
+    /// incident.
+    ///
+    /// # When this is the right call, and when it is not
+    ///
+    /// Only when something has **established** that the row exists and has not
+    /// been accepted. There is exactly one such thing in this crate,
+    /// [`crate::campaign::resume::EmissionGuard`], and calling this without it
+    /// is how a message already accepted goes out a second time (CA-010-05).
+    /// The two cases it serves:
+    ///
+    /// * a **retry** within one run (spec §10.7): the row was inserted by the
+    ///   first attempt, and inserting again would conflict;
+    /// * a **resume** after a restart: the row was written by the process that
+    ///   died.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::send`], minus [`MessagingError::Store`] on the insert,
+    /// which does not happen.
+    pub async fn resend<S: SmscSession>(
+        &self,
+        session: &S,
+        request: &SendRequest,
+    ) -> Result<SendReport, MessagingError> {
+        self.resend_observed(session, request, &()).await
+    }
+
+    /// The same resend, announcing each transition to `observer`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::resend`].
+    pub async fn resend_observed<S: SmscSession, O: SendObserver + ?Sized>(
+        &self,
+        session: &S,
+        request: &SendRequest,
+        observer: &O,
+    ) -> Result<SendReport, MessagingError> {
+        self.dispatch(session, request, observer, WriteAhead::AlreadyWritten)
+            .await
+    }
+
     #[tracing::instrument(
         skip_all,
         fields(
@@ -332,11 +469,12 @@ where
             attempt = request.attempt,
         )
     )]
-    pub async fn send_observed<S: SmscSession, O: SendObserver + ?Sized>(
+    async fn dispatch<S: SmscSession, O: SendObserver + ?Sized>(
         &self,
         session: &S,
         request: &SendRequest,
         observer: &O,
+        write_ahead: WriteAhead,
     ) -> Result<SendReport, MessagingError> {
         // --- 1. Encode and split, under the session's own conventions -------
         //
@@ -367,46 +505,78 @@ where
         let total = u32::try_from(pdus.len()).unwrap_or(u32::MAX);
 
         // --- 3. Write ahead -------------------------------------------------
-        let created_at = self.clock.now();
-        let queued = self.queued_row(request, session.session_id(), &split, total, created_at);
+        //
+        // Skipped, and only skipped, when the caller has established that the
+        // row is already there — a retry or a resume. See `Self::resend`.
+        if write_ahead == WriteAhead::Insert {
+            let created_at = self.clock.now();
+            let queued = self.queued_row(request, session.session_id(), &split, total, created_at);
 
-        self.repository.insert_message(&queued).await?;
+            self.repository.insert_message(&queued).await?;
 
-        tracing::debug!(segments = total, "message persisted before submission");
+            tracing::debug!(segments = total, "message persisted before submission");
 
-        observer.state_changed(request.client_message_id, MessageState::Queued);
+            observer.state_changed(request.client_message_id, MessageState::Queued);
+        }
 
-        // --- 4. Submit, correlating each response with its own request ------
+        // --- 4. Journal the ATTEMPT, before anything reaches the socket -----
+        //
+        // COMMITTED HERE, ON ITS OWN, AND NOT BATCHED WITH THE OUTCOME. This
+        // is the second half of the write-ahead of CLAUDE.md §4 — "a message is
+        // persisted before emission; its state transitions are traceable" — and
+        // it was missing.
+        //
+        // It used to be stacked with the verdict and committed after
+        // `submit_all` returned, which meant a `kill -9` between the
+        // `submit_sm` leaving and that commit left the row `QUEUED`. Every
+        // reader downstream takes `QUEUED` to mean *nothing has left, so
+        // re-sending cannot duplicate* — [`crate::campaign::resume`] says so
+        // and ADR 0014 rests on it. It was false for exactly the window the
+        // arbitration exists to cover, so
+        // `UnansweredPolicy::Abandon` protected nothing and the duplicate-risk
+        // figure read zero at the one moment duplicates were going out.
+        //
+        // The cost is one extra transaction per message, and it is the price of
+        // the row meaning what the rest of the module reads it as.
+        //
+        // A FAILURE HERE STOPS THE SEND, unlike the one below: nothing has been
+        // submitted yet, so propagating it loses nothing and sending on would
+        // put a PDU on the wire that the journal has no record of.
         let sent_at = self.clock.now();
 
-        // Announced before the first PDU leaves, and recorded only after the
-        // last response: the interface follows the message, the journal
-        // records what actually happened. Conflating the two would mean
-        // writing `SENT` before the socket, which is the trade the module
-        // header rules out.
+        self.repository
+            .update_state(
+                &MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
+                    .sent_at(sent_at, request.attempt),
+            )
+            .await?;
+
         observer.state_changed(request.client_message_id, MessageState::Sent);
 
+        // --- 5. Submit, correlating each response with its own request ------
         let Submission { outcomes, emitted } = submit_all(session, pdus).await;
         let responded_at = self.clock.now();
 
-        // --- 5. Record what happened ----------------------------------------
+        // --- 6. Record what happened ----------------------------------------
         let mut report = self.aggregate(request, session.session_id(), total, outcomes);
 
-        // `SENT` is a claim about the wire, so it is only written when
-        // something actually reached it. A submission the session refused —
-        // a receiver bind, a session that went down between the insert and
-        // here — leaves the row `QUEUED` with no `sent_at` and no attempt
-        // consumed, which is the truth and what spec §10.7 budgets against.
-        let mut transitions = Vec::with_capacity(2);
-
-        if emitted {
-            transitions.push(
-                MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
-                    .sent_at(sent_at, request.attempt),
+        // The attempt is already journalled, so what is left is the verdict.
+        //
+        // `emitted` is no longer what decides whether `SENT` is written — it
+        // cannot be, since that decision is now taken before the answer exists.
+        // It is logged instead: a message the session refused before the socket
+        // carries a `sent_at` for a PDU that never left, and a resume reads it
+        // as possibly in flight. That is the residual over-claim of this
+        // ordering, and it is stated rather than hidden — see
+        // [`crate::campaign::resume`], which names the population it affects.
+        if !emitted {
+            tracing::debug!(
+                "the attempt was journalled and the session refused it before the socket; \
+                 the row over-claims until the outcome below narrows it"
             );
         }
 
-        transitions.push(self.final_transition(&report, responded_at));
+        let transitions = [self.final_transition(request, &report, responded_at)];
 
         // ONE transaction: the transitions are a single fact about a single
         // message, and a reader must never see `SENT` for a message whose
@@ -429,8 +599,8 @@ where
                 state = %report.state,
                 segments = total,
                 smsc_message_id = ?report.smsc_message_id,
-                "the message was submitted but its transitions could not be journalled; \
-                 the row stays QUEUED and a resume would send it again"
+                "the message was submitted but its verdict could not be journalled; \
+                 the row stays SENT, and a resume applies the arbitration of ADR 0014 to it"
             );
 
             report.journalled = false;
@@ -466,7 +636,7 @@ where
 
         Message {
             client_message_id: request.client_message_id,
-            campaign_id: None,
+            campaign_id: request.campaign_id,
             session_id: Some(session_id),
             smsc_message_id: None,
             source_addr: submit
@@ -563,18 +733,26 @@ where
             MessageState::Failed
         };
 
-        // A missing response is retryable in the same sense a `Recoverable`
-        // status is: nothing says the message was refused, only that the
-        // answer did not arrive (spec §10.7).
-        let retryable = match command_status {
-            Some(CommandStatus::EsmeRok) => false,
-            Some(status) => status_codes::classify(status).is_retryable(),
-            None => matches!(
-                first_failure,
-                Some(SegmentOutcome::Unanswered {
-                    failure: SubmitError::ResponseTimeout | SubmitError::Closed,
-                })
-            ),
+        // Asked of `SendFailure` rather than answered again here.
+        //
+        // It used to be a second reading — the status classification for a
+        // refusal, and a hand-written `ResponseTimeout | Closed` for the rest —
+        // and the two disagreed: `SubmitError::Transport` and `NotBound` are
+        // replayed by the policy of spec §10.7 and were reported here as final.
+        // That mattered once `final_transition` started asking this field which
+        // state to write, since it made the row terminal for a message the
+        // campaign was about to replay.
+        let retryable = match first_failure {
+            None => false,
+            Some(SegmentOutcome::Answered { status, .. }) => {
+                SendFailure::Rejected(*status).is_retryable()
+            }
+            Some(SegmentOutcome::Unanswered { failure }) => {
+                SendFailure::NoResponse(failure.clone()).is_retryable()
+            }
+            // Unreachable: `NotAttempted` only ever follows a failure, so it is
+            // never the *first* one.
+            Some(SegmentOutcome::NotAttempted) => false,
         };
 
         // Only on a whole message. See the note above.
@@ -597,9 +775,39 @@ where
     }
 
     /// The transition that closes the send.
-    fn final_transition(&self, report: &SendReport, responded_at: Timestamp) -> MessageStateUpdate {
-        let mut update = MessageStateUpdate::new(report.client_message_id, report.state)
-            .responded_at(responded_at);
+    ///
+    /// # The state written is not always the state reported
+    ///
+    /// [`SendReport::state`] is about **this attempt**: it says `FAILED` the
+    /// moment a segment was not accepted, which is what the caller has to read
+    /// to decide whether to replay.
+    ///
+    /// The **row** is another matter. `FAILED` is terminal, so writing it ends
+    /// the message: a later replay that the message centre accepts could not be
+    /// recorded, and the journal would say `FAILED` for a message that went out.
+    /// So a failure the caller may replay — `last_attempt == false` and a
+    /// classification that says trying again may work — is written `SENT`, the
+    /// state of a message whose `submit_sm` has left and whose verdict is not
+    /// in, and the `command_status` of the refusal is recorded beside it.
+    ///
+    /// The two halves of the condition are exactly the two ways
+    /// [`crate::retry::RetryPolicy::decide`] gives up, so the row reaches
+    /// `FAILED` on the attempt the campaign stops at, and on no other.
+    fn final_transition(
+        &self,
+        request: &SendRequest,
+        report: &SendReport,
+        responded_at: Timestamp,
+    ) -> MessageStateUpdate {
+        let state =
+            if report.state == MessageState::Failed && !request.last_attempt && report.retryable {
+                MessageState::Sent
+            } else {
+                report.state
+            };
+
+        let mut update =
+            MessageStateUpdate::new(report.client_message_id, state).responded_at(responded_at);
 
         if let Some(status) = report.command_status {
             update = update.with_command_status(status);
@@ -611,6 +819,19 @@ where
 
         update
     }
+}
+
+/// Whether the send path writes the journal row or expects to find one.
+///
+/// A two-arm enum rather than a `bool`, because `send(session, request, false)`
+/// at a call site says nothing about which half of the write-ahead contract is
+/// being suspended — and this is the contract of CLAUDE.md §4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteAhead {
+    /// Persist before submitting. The ordinary path.
+    Insert,
+    /// The row is already there: a retry, or a resume.
+    AlreadyWritten,
 }
 
 /// What one pass over the segments produced.
@@ -702,4 +923,331 @@ fn submitted_identifier(response: &smpp_core::codec::Command) -> Option<String> 
 #[must_use]
 pub fn requires_slowdown(status: CommandStatus) -> bool {
     status_codes::classify(status) == StatusClass::Throttling
+}
+
+#[cfg(test)]
+mod tests {
+    // `#[tokio::test]` expands to `Runtime::block_on`, which `clippy.toml`
+    // reserves for "the binary entry point". A test harness is one.
+    #![allow(clippy::disallowed_methods)]
+
+    use super::{SendRequest, Sender};
+    use crate::addressing::Destination;
+    use crate::message::{MessageState, MessageStateUpdate};
+    use crate::ports::{MessageRepository as _, MessageStoreError};
+    use crate::submit::SubmitOptions;
+    use crate::testing::{journal_row, FakeSmsc, FixedClock, MemoryJournal, Reply};
+    use crate::MessagingError;
+    use smpp_core::types::{CampaignId, ClientMessageId};
+    use smpp_core::values::CommandStatus;
+
+    fn campaign() -> CampaignId {
+        CampaignId::parse("3f8d0a2e-0000-4000-8000-000000000001").expect("a valid UUID")
+    }
+
+    fn request() -> SendRequest {
+        SendRequest::new(
+            "Bonjour",
+            SubmitOptions::to(
+                Destination::parse("+2250700000001").expect("the fixture is a valid number"),
+            ),
+        )
+    }
+
+    /// CA-010-02 is checked against the database, and a campaign message with a
+    /// null `campaign_id` is invisible to the query that checks it.
+    #[tokio::test]
+    async fn a_campaign_message_is_persisted_under_its_campaign() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let request = request().in_campaign(campaign());
+
+        sender
+            .send(&FakeSmsc::accepting(), &request)
+            .await
+            .expect("the send succeeds");
+
+        let row = journal
+            .row(request.client_message_id)
+            .await
+            .expect("the message was persisted");
+
+        assert_eq!(row.campaign_id, Some(campaign()));
+    }
+
+    #[tokio::test]
+    async fn a_unit_message_belongs_to_no_campaign() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let request = request();
+
+        sender
+            .send(&FakeSmsc::accepting(), &request)
+            .await
+            .expect("the send succeeds");
+
+        let row = journal
+            .row(request.client_message_id)
+            .await
+            .expect("the message was persisted");
+
+        assert_eq!(row.campaign_id, None);
+    }
+
+    /// The write-ahead key is the caller's, so a resumed campaign re-derives the
+    /// one it used before instead of minting a second identifier for the same
+    /// recipient.
+    #[tokio::test]
+    async fn the_write_ahead_key_may_be_chosen_by_the_caller() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let chosen = ClientMessageId::new();
+
+        sender
+            .send(&FakeSmsc::accepting(), &request().keyed(chosen))
+            .await
+            .expect("the send succeeds");
+
+        assert!(journal.row(chosen).await.is_some());
+    }
+
+    /// The primary guard of the emission invariant: a second write-ahead insert
+    /// under the same key is refused, and **nothing is submitted**.
+    #[tokio::test]
+    async fn a_second_send_under_the_same_key_is_refused_before_anything_is_sent() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
+        let request = request();
+
+        sender.send(&smsc, &request).await.expect("the first send");
+
+        let refusal = sender
+            .send(&smsc, &request)
+            .await
+            .expect_err("the second send conflicts");
+
+        assert!(matches!(
+            refusal,
+            MessagingError::Store(MessageStoreError::Conflict)
+        ));
+        assert_eq!(smsc.submitted(), 1, "nothing was sent for the second call");
+        assert_eq!(journal.inserted().await, 1);
+    }
+
+    /// A resend writes no row: the retry of spec §10.7 and the resume of §10.5
+    /// both reuse the one that is already there, which is what keeps the number
+    /// of distinct `client_message_id`s equal to the number of recipients
+    /// (CA-010-04).
+    #[tokio::test]
+    async fn a_resend_reuses_the_row_instead_of_writing_a_second_one() {
+        let journal = MemoryJournal::new();
+        let identifier = ClientMessageId::new();
+
+        journal
+            .force_row(journal_row(identifier, MessageState::Queued))
+            .await;
+
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
+
+        let report = sender
+            .resend(&smsc, &request().keyed(identifier).as_attempt(2))
+            .await
+            .expect("the resend succeeds");
+
+        assert!(report.is_accepted());
+        assert_eq!(smsc.submitted(), 1);
+        assert_eq!(journal.inserted().await, 0, "no second row");
+
+        let row = journal
+            .row(identifier)
+            .await
+            .expect("the row is still there");
+
+        assert_eq!(row.state, MessageState::Accepted);
+        assert_eq!(row.attempts, 2);
+    }
+
+    /// The two paths differ by the insert and by nothing else.
+    #[tokio::test]
+    async fn a_resend_journals_its_outcome_exactly_as_a_send_does() {
+        let journal = MemoryJournal::new();
+        let identifier = ClientMessageId::new();
+
+        journal
+            .force_row(journal_row(identifier, MessageState::Queued))
+            .await;
+
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+
+        sender
+            .resend(&FakeSmsc::accepting(), &request().keyed(identifier))
+            .await
+            .expect("the resend succeeds");
+
+        let row = journal.row(identifier).await.expect("the row is there");
+
+        assert!(row.sent_at.is_some());
+        assert!(row.resp_at.is_some());
+        assert!(row.smsc_message_id.is_some());
+    }
+
+    /// A resend of a message the journal does not hold is a caller mistake, and
+    /// **nothing goes on the wire** for it.
+    ///
+    /// It used to submit and report `journalled: false`, because the only write
+    /// was after the answer. Journalling the attempt first closes that: a PDU
+    /// with no row behind it is precisely what the write-ahead of CLAUDE.md §4
+    /// forbids, and a resume would have no way to know it went out.
+    #[tokio::test]
+    async fn a_resend_of_an_unknown_message_sends_nothing_at_all() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
+
+        let refusal = sender
+            .resend(&smsc, &request())
+            .await
+            .expect_err("there is no row to attach the attempt to");
+
+        assert!(matches!(
+            refusal,
+            MessagingError::Store(MessageStoreError::NotFound)
+        ));
+        assert_eq!(smsc.submitted(), 0);
+        assert_eq!(journal.inserted().await, 0);
+    }
+
+    /// The attempt is committed **before** the socket, on its own.
+    ///
+    /// Not an implementation detail: it is what makes a `kill -9` between the
+    /// two recoverable, and the whole of ADR 0014 reads the row it leaves. The
+    /// double samples the message centre's counter from inside the journal, so
+    /// this asserts on an **order** across two components rather than on a final
+    /// state, which no final state could show.
+    #[tokio::test]
+    async fn the_attempt_is_journalled_before_any_pdu_reaches_the_message_centre() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
+        let request = request();
+
+        journal.witness_transitions(smsc.clone()).await;
+
+        sender
+            .send(&smsc, &request)
+            .await
+            .expect("the send happens");
+
+        assert_eq!(
+            journal.submissions_at_first_transition().await,
+            Some(0),
+            "a submit_sm crossed the wire before the attempt was journalled"
+        );
+    }
+
+    /// A campaign that will replay this attempt must not have it journalled
+    /// `FAILED`: that state is terminal, and the replay's acceptance could then
+    /// never be recorded. See [`SendRequest::last_attempt`].
+    #[tokio::test]
+    async fn a_replayable_failure_is_journalled_as_sent_rather_than_failed() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::scripted([Reply::Rejected(CommandStatus::EsmeRthrottled)]);
+        let request = request().with_more_attempts_allowed(true);
+
+        let report = sender
+            .send(&smsc, &request)
+            .await
+            .expect("the send happens");
+
+        assert_eq!(report.state, MessageState::Failed, "the attempt failed");
+        assert!(report.retryable);
+
+        let row = journal
+            .row(request.client_message_id)
+            .await
+            .expect("the row is there");
+
+        assert_eq!(row.state, MessageState::Sent, "the verdict is not in yet");
+        assert_eq!(row.command_status, Some(CommandStatus::EsmeRthrottled));
+    }
+
+    /// The other half of the condition: a failure nothing can replay is written
+    /// down at once, however many attempts the caller has left.
+    #[tokio::test]
+    async fn a_fatal_failure_is_journalled_failed_even_with_attempts_left() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::scripted([Reply::Rejected(CommandStatus::EsmeRinvdstadr)]);
+        let request = request().with_more_attempts_allowed(true);
+
+        sender
+            .send(&smsc, &request)
+            .await
+            .expect("the send happens");
+
+        assert_eq!(
+            journal
+                .row(request.client_message_id)
+                .await
+                .expect("the row is there")
+                .state,
+            MessageState::Failed
+        );
+    }
+
+    /// A unit send has no replay policy, so its failure is the message's.
+    #[tokio::test]
+    async fn a_unit_send_journals_its_failure_at_once() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::scripted([Reply::Rejected(CommandStatus::EsmeRthrottled)]);
+        let request = request();
+
+        assert!(request.last_attempt, "a unit send is its own last attempt");
+
+        sender
+            .send(&smsc, &request)
+            .await
+            .expect("the send happens");
+
+        assert_eq!(
+            journal
+                .row(request.client_message_id)
+                .await
+                .expect("the row is there")
+                .state,
+            MessageState::Failed
+        );
+    }
+
+    /// The state machine is the last barrier under the guard of CA-010-05: even
+    /// reached by something that bypassed the guard, an `ACCEPTED` row is not
+    /// walked back to `SENT`.
+    #[tokio::test]
+    async fn an_accepted_row_is_never_walked_back_by_a_later_transition() {
+        let journal = MemoryJournal::new();
+        let identifier = ClientMessageId::new();
+
+        journal
+            .force_row(journal_row(identifier, MessageState::Accepted))
+            .await;
+
+        let written = journal
+            .update_states(&[MessageStateUpdate::new(identifier, MessageState::Sent)])
+            .await
+            .expect("the journal answers");
+
+        assert_eq!(written, 0);
+        assert_eq!(
+            journal
+                .row(identifier)
+                .await
+                .expect("the row is there")
+                .state,
+            MessageState::Accepted
+        );
+    }
 }
