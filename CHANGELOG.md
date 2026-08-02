@@ -9,6 +9,81 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 010, campagnes : exécution (alimentation, reprise, contrôle)
+
+- **Alimentation en flux avec back-pressure de bout en bout**
+  (`messaging::campaign::feeder`) : les destinataires sont lus depuis un
+  `RecipientSource` (port déclaré ici, implémenté au-dessus de `contacts`) et
+  poussés un par un dans une file **bornée** à 256 messages rendus. Aucun tampon
+  intermédiaire sur ce chemin : si le SMSC ralentit, la fenêtre d'émission se
+  remplit, la file se remplit, et la lecture de la base s'arrête. Mesuré, pas
+  supposé — voir plus bas.
+- **Le lecteur est asynchrone, et c'est ce qui évite l'interblocage du jalon
+  009** : la poussée dans la file est une branche de `select!` dont l'autre est
+  le jeton d'annulation, là où l'import du jalon 009 utilise `blocking_send`
+  depuis `spawn_blocking` — un appel qui n'observe pas le jeton et qui a rendu
+  nécessaire un `receiver.close()` avant la jointure. Test de non-régression
+  dédié : annuler une campagne dont la file est pleine libère le lecteur.
+- **Invariant central, écrit noir sur blanc**
+  (`messaging::campaign::resume`) : *une campagne émet au plus un message
+  accepté par destinataire*, à travers les pauses, les rejeux, les erreurs et
+  les redémarrages à froid. Il repose sur deux mécanismes : un
+  `client_message_id` **dérivé** (UUID v5 de `campaign_id` + MSISDN normalisé),
+  donc la clé primaire de `messages` refuse la seconde ligne d'un même
+  destinataire ; et une vérification d'état avant chaque émission. Test de
+  propriété (`tests/campaign_invariant.rs`) sur des historiques arbitraires —
+  réponses du SMSC, pause/reprise/annulation, jusqu'à trois redémarrages.
+- **Arbitrage produit sur le message `SENT` sans réponse au moment du crash** :
+  par défaut il est **réémis** (spec §10.5 le nomme, ENF-FIA-01 demande de ne
+  perdre aucun message, et un doublon est visible et compté là où une
+  sous-livraison est invisible). Le risque est chiffré dans le rapport de
+  campagne (`reemitted_unanswered`) et journalisé. La politique inverse
+  (`UnansweredPolicy::Abandon`) est disponible sans rien changer d'autre.
+- **Contrôles démarrer / pause / reprise / annulation**
+  (`messaging::campaign::control`) : un `watch` pour l'état, un
+  `CancellationToken` pour l'arrêt, et une campagne peut être fille du jeton
+  d'arrêt de l'application. La pause suspend l'alimentation ; les messages déjà
+  dans la fenêtre se terminent et sont journalisés (CA-010-03). L'annulation
+  interrompt aussi les attentes — délai de rejeu, démarrage différé — qui
+  seraient sinon ce qui retient le plus longtemps une campagne (CA-010-09).
+- **Planning différé et plage horaire** (`messaging::campaign::schedule`) :
+  passage de minuit et fuseaux traités, horloge injectée, fonction pure. La
+  plage est vérifiée **avant chaque message** et non une fois au départ, sans
+  quoi une campagne lancée à 19 h 59 tournerait toute la nuit.
+- **Exécuteur de campagne** (`messaging::campaign::runner`) : alimentation et
+  émission dans **une seule tâche** (`tokio::join!`), aucune tâche orpheline,
+  compteurs exacts. Les cinq compteurs partitionnent les destinataires, et
+  l'égalité vérifiée est `total == file` — deux compteurs incrémentés par deux
+  boucles différentes, non un contrôle du total contre lui-même.
+- **CA-010-01 est mesuré** (`tests/campaign_volume.rs`) : la RSS du processus
+  est échantillonnée *pendant* la campagne, tous les 5 000 messages. 3 520 kio
+  de crête pour 5 000 destinataires, 3 584 kio pour 500 000 — 64 kio d'écart,
+  soit 0,13 octet par destinataire supplémentaire. Vérifié par mutation :
+  accumuler le texte de chaque message fait passer l'écart à 36 Mio et le test
+  au rouge. Ce que la mesure **n'inclut pas** est écrit dans l'en-tête du test
+  (la base de données, et une source qui matérialiserait ses lignes).
+
+### Modifié — jalon 010
+
+- **`FAILED` n'est plus écrit sur une tentative que la campagne va rejouer.**
+  `FAILED` est terminal (spec §14.3), donc un rejeu accepté ne pouvait pas être
+  enregistré : le journal restait `FAILED` pour un message effectivement parti,
+  et les compteurs contredisaient la base — exactement ce que CA-010-02 vérifie.
+  Une tentative rejouable écrit désormais `SENT`, et le verdict est écrit par la
+  tentative finale ; la condition est exactement celle sous laquelle
+  `RetryPolicy::decide` abandonne. Nouveau champ `SendRequest::last_attempt`.
+- **`SendReport::retryable` a une seule source de vérité.** Il lisait la
+  classification pour un refus et une liste écrite à la main
+  (`ResponseTimeout | Closed`) pour le reste, en désaccord avec la politique de
+  rejeu qui rejoue aussi `Transport` et `NotBound`. Il délègue maintenant à
+  `SendFailure::is_retryable`.
+- **`SendRequest` porte son `campaign_id`** et accepte une clé write-ahead
+  choisie par l'appelant ; `Sender::resend` envoie un message dont la ligne
+  existe déjà (rejeu, reprise) sans insérer une seconde.
+- **`Timestamp::from_offset_date_time`** (`smpp-core`) : contrepartie de
+  `as_offset_date_time`, tronquée à la seconde, pour les calculs de plage
+  horaire.
+
 ### Ajouté — jalon 010, campagnes : fondations (modèles, rejeu, cycle de vie)
 
 - **Moteur de modèles à variables** (`messaging::template`) : `{{prenom}}` et
