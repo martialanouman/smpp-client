@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dbb100f21c2fcffd691c56c186856405b5ef3397c50d6c41d1675be5dbdd59d5 # shrinks to scenario = Scenario { size: 2, answer: RefuseUnrecognisably(0), enabled: true, last_attempt: false, long_text: false, taken: [] }
