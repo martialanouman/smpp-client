@@ -273,31 +273,37 @@ impl CampaignServices {
             total: campaign.total_count,
         });
 
-        {
-            let mut table = self.inner.running.lock().await;
+        // The table lock is held ACROSS the status write, and that is not a
+        // convenience. `CampaignInner::settle` takes the same lock to remove a
+        // finished campaign and write its terminal status; releasing here would
+        // leave a window in which a campaign that has just been started reads
+        // `RUNNING`, the finishing task reads it back and writes `COMPLETED`
+        // over it, and a campaign that is sending shows as finished.
+        //
+        // Holding a `tokio::sync::Mutex` across an `.await` is the sanctioned
+        // shape (CLAUDE.md §4 bans the `std` one, precisely so this is
+        // available); the write is one SQLite statement.
+        let mut table = self.inner.running.lock().await;
 
-            // `contains_key`, and NOT "contains a key whose control is not
-            // cancelled". A cancelled campaign is still running: it drains its
-            // queue and journals what is in flight before its task returns.
-            // Letting a second run start in that window would put two runners
-            // on the same campaign — and although the derived write-ahead key
-            // would stop them duplicating a message, they would fight over the
-            // status and report half a campaign each.
-            if table.contains_key(&campaign_id) {
-                return Err(ErrorDto::campaign_busy());
-            }
-
-            table.insert(campaign_id, Arc::clone(&running));
+        // `contains_key`, and NOT "contains a key whose control is not
+        // cancelled". A cancelled campaign is still running: it drains its
+        // queue and journals what is in flight before its task returns. Letting
+        // a second run start in that window would put two runners on the same
+        // campaign — and although the derived write-ahead key would stop them
+        // duplicating a message, they would fight over the status and report
+        // half a campaign each.
+        if table.contains_key(&campaign_id) {
+            return Err(ErrorDto::campaign_busy());
         }
 
-        // The status is written BEFORE the task is spawned, and a refusal
-        // leaves the table clean: a campaign whose row could not be moved to
-        // RUNNING must not be sending.
-        if let Err(error) = self.write_status(campaign, CampaignStatus::Running).await {
-            self.inner.running.lock().await.remove(&campaign_id);
+        // The status is written BEFORE the campaign is registered and before
+        // the task is spawned: a campaign whose row could not be moved to
+        // `RUNNING` must not be sending, and must not be left in the table.
+        self.write_status(campaign_id, CampaignStatus::Running)
+            .await?;
 
-            return Err(error);
-        }
+        table.insert(campaign_id, Arc::clone(&running));
+        drop(table);
 
         let inner = Arc::clone(&self.inner);
         let app = app.clone();
@@ -317,10 +323,13 @@ impl CampaignServices {
     ///
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` if the lifecycle refuses
     /// it, or `CAMPAIGN_STORAGE` if the status cannot be written.
-    pub(crate) async fn pause(&self, campaign: &Campaign) -> Result<(), ErrorDto> {
-        self.write_status(campaign, CampaignStatus::Paused).await?;
+    pub(crate) async fn pause(&self, campaign_id: CampaignId) -> Result<(), ErrorDto> {
+        let table = self.inner.running.lock().await;
 
-        if let Some(running) = self.inner.running.lock().await.get(&campaign.campaign_id) {
+        self.write_status(campaign_id, CampaignStatus::Paused)
+            .await?;
+
+        if let Some(running) = table.get(&campaign_id) {
             running.control.pause();
         }
 
@@ -336,19 +345,15 @@ impl CampaignServices {
     /// # Errors
     ///
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
-    pub(crate) async fn resume_in_place(&self, campaign: &Campaign) -> Result<bool, ErrorDto> {
-        let Some(running) = self
-            .inner
-            .running
-            .lock()
-            .await
-            .get(&campaign.campaign_id)
-            .map(Arc::clone)
-        else {
+    pub(crate) async fn resume_in_place(&self, campaign_id: CampaignId) -> Result<bool, ErrorDto> {
+        let table = self.inner.running.lock().await;
+
+        let Some(running) = table.get(&campaign_id).map(Arc::clone) else {
             return Ok(false);
         };
 
-        self.write_status(campaign, CampaignStatus::Running).await?;
+        self.write_status(campaign_id, CampaignStatus::Running)
+            .await?;
         running.control.resume();
 
         Ok(true)
@@ -363,23 +368,19 @@ impl CampaignServices {
     /// # Errors
     ///
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
-    pub(crate) async fn cancel(&self, campaign: &Campaign) -> Result<(), ErrorDto> {
-        let running = self
-            .inner
-            .running
-            .lock()
-            .await
-            .get(&campaign.campaign_id)
-            .map(Arc::clone);
+    pub(crate) async fn cancel(&self, campaign_id: CampaignId) -> Result<(), ErrorDto> {
+        let table = self.inner.running.lock().await;
 
-        match running {
+        match table.get(&campaign_id).map(Arc::clone) {
             Some(running) => {
                 // The status is NOT written here: the task is about to end and
                 // will write CANCELLED with the final counters. Writing it now
-                // would be overwritten a moment later by the same value, and
-                // the transition check has already happened — the control's own
-                // cancellation is terminal.
-                campaign
+                // would be overwritten a moment later by the same value. The
+                // transition is still checked — against the row as it stands —
+                // so cancelling a campaign that has just completed is refused
+                // rather than silently ignored.
+                self.read(campaign_id)
+                    .await?
                     .status
                     .try_move_to(CampaignStatus::Cancelled)
                     .map_err(|rejection| ErrorDto::campaign_invalid_transition(&rejection))?;
@@ -387,7 +388,7 @@ impl CampaignServices {
                 running.control.cancel();
             }
             None => {
-                self.write_status(campaign, CampaignStatus::Cancelled)
+                self.write_status(campaign_id, CampaignStatus::Cancelled)
                     .await?;
             }
         }
@@ -406,12 +407,40 @@ impl CampaignServices {
         }
     }
 
+    /// Reads one campaign, without the table lock.
+    ///
+    /// Private twin of [`Self::find`], which takes no lock either — the
+    /// distinction is that this one is only ever called by a caller that
+    /// **already holds** it.
+    async fn read(&self, campaign_id: CampaignId) -> Result<Campaign, ErrorDto> {
+        self.inner
+            .campaigns
+            .find_campaign(campaign_id)
+            .await
+            .map_err(|error| ErrorDto::campaign_storage(&error))?
+            .ok_or_else(ErrorDto::campaign_not_found)
+    }
+
     /// Applies one lifecycle transition and writes the row.
+    ///
+    /// # Read-modify-write, and why the caller's copy is not used
+    ///
+    /// The row is **re-read here**, although every caller has just fetched one.
+    /// The copy a command holds was read before the table lock was taken, and a
+    /// campaign can finish in that interval: the stale copy would say `RUNNING`,
+    /// `RUNNING → PAUSED` is a legal move, and a campaign that had completed
+    /// would be written back to `PAUSED`.
+    ///
+    /// Every caller holds the table lock, so the read, the transition and the
+    /// write are one step with respect to the finishing task, which takes the
+    /// same lock.
     async fn write_status(
         &self,
-        campaign: &Campaign,
+        campaign_id: CampaignId,
         next: CampaignStatus,
     ) -> Result<(), ErrorDto> {
+        let campaign = self.read(campaign_id).await?;
+
         // THE MACHINE DECIDES, not this layer. `messaging::CampaignStatus`
         // enumerates the transitions of spec §10.3 and refuses the rest; a
         // second reading of the same rules here would be a second reading to
@@ -421,7 +450,7 @@ impl CampaignServices {
             .try_move_to(next)
             .map_err(|rejection| ErrorDto::campaign_invalid_transition(&rejection))?;
 
-        let mut updated = campaign.clone();
+        let mut updated = campaign;
 
         updated.status = status;
 
@@ -484,12 +513,6 @@ impl CampaignInner {
         )
         .await;
 
-        // Out of the table BEFORE the terminal status is written: a `pause`
-        // arriving in this window would otherwise write PAUSED over a campaign
-        // that has completed, and the machine would let it — PAUSED is a legal
-        // successor of RUNNING, and the row still said RUNNING.
-        self.running.lock().await.remove(&campaign_id);
-
         let (status, tally) = match outcome {
             Ok(outcome) => (outcome.status, outcome.tally),
             Err(error) => {
@@ -502,7 +525,17 @@ impl CampaignInner {
             }
         };
 
-        self.settle(campaign_id, status, &tally).await;
+        // Leaving the table and writing the terminal status are ONE step, under
+        // the lock `CampaignServices::start` also holds while it writes
+        // `RUNNING`. Split in two, the two writers interleave: a campaign
+        // restarted in the gap reads `RUNNING`, and this task writes
+        // `COMPLETED` over a campaign that is sending.
+        {
+            let mut table = self.running.lock().await;
+
+            table.remove(&campaign_id);
+            self.settle(campaign_id, status, &tally).await;
+        }
 
         // THE LAST EVENT, and it is unconditional. The sampler has returned, so
         // nothing can arrive after it; the emitter applies no throttle, so

@@ -622,9 +622,7 @@ pub(crate) async fn campaign_pause(
     state: State<'_, AppState>,
     campaign_id: String,
 ) -> Result<(), ErrorDto> {
-    let campaign = state.campaigns().find(parse_id(&campaign_id)?).await?;
-
-    state.campaigns().pause(&campaign).await
+    state.campaigns().pause(parse_id(&campaign_id)?).await
 }
 
 /// Resumes a campaign (spec §10.3, CA-010-03).
@@ -648,9 +646,11 @@ pub(crate) async fn campaign_resume(
     state: State<'_, AppState>,
     campaign_id: String,
 ) -> Result<(), ErrorDto> {
-    let campaign = state.campaigns().find(parse_id(&campaign_id)?).await?;
-
-    if state.campaigns().resume_in_place(&campaign).await? {
+    if state
+        .campaigns()
+        .resume_in_place(parse_id(&campaign_id)?)
+        .await?
+    {
         return Ok(());
     }
 
@@ -672,9 +672,7 @@ pub(crate) async fn campaign_cancel(
     state: State<'_, AppState>,
     campaign_id: String,
 ) -> Result<(), ErrorDto> {
-    let campaign = state.campaigns().find(parse_id(&campaign_id)?).await?;
-
-    state.campaigns().cancel(&campaign).await
+    state.campaigns().cancel(parse_id(&campaign_id)?).await
 }
 
 /// Reads a campaign identifier.
