@@ -79,12 +79,18 @@ pub mod sender;
 pub mod submit;
 pub mod template;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
+
 pub use campaign::{CampaignStatus, InvalidCampaignTransition};
 pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
-pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
+pub use ports::{
+    MessageRepository, MessageStoreError, Recipient, RecipientSource, RecipientSourceError,
+    SmscSession, SubmitError,
+};
 pub use retry::{
     GiveUpReason, RetryBackoff, RetryDecision, RetryPolicy, RetryPolicyError, SendFailure,
 };

@@ -32,12 +32,44 @@ smpp-core = { path = "../smpp-core" }
 # `.await`.
 tracing = { workspace = true, features = ["attributes"] }
 
-# Only for the random seed of the concatenation reference counter: a
+# Two uses, and the second is what adds the `v5` feature.
+#
+# `v4` — the random seed of the concatenation reference counter: a
 # deterministic start would hand a restarting session a reference that may
 # still be in flight. A v4 UUID is platform entropy, and `uuid` is already in
 # the graph — adding a random-number crate for two octets would not pass
 # CLAUDE.md §2.
-uuid.workspace = true
+#
+# `v5` — milestone 010. The write-ahead key of a campaign message is a **pure
+# function** of the campaign and the recipient (`campaign::resume::message_key`),
+# which is what makes "at most one emission per recipient" survive a cold
+# restart: a resumed campaign re-derives the identifier it used before rather
+# than minting a second one for the same person. v5 is name-based and
+# deterministic; v3 would be the same thing over MD5, and v8 would mean
+# choosing a hash by hand. The feature costs `sha1_smol`, which has no
+# dependencies of its own.
+uuid = { workspace = true, features = ["v5"] }
+
+# `BoxStream` in the signature of `ports::RecipientSource` (guide §11.3), and
+# the `StreamExt::next` the feeder drives one with. The same pair, for the same
+# reason, as `contacts::ports::ContactRepository`: reading 500 000 recipients
+# without materialising them (CA-010-01) is a stream, and a stream in a port
+# signature has to be boxed to stay object-safe across the crate boundary.
+futures-core.workspace = true
+futures-util.workspace = true
+
+# `CancellationToken`, the one shutdown signal every long-running task of this
+# workspace watches (CLAUDE.md §4). CA-010-09 makes it load-bearing here: a
+# campaign parked in a retry delay or blocked pushing into a full queue has to
+# stop on cancellation, and `rt` is the feature that brings `tokio_util::sync`
+# in.
+tokio-util = { workspace = true, features = ["rt"] }
+
+# The daily send window of CA-010-10 is a wall-clock question — "is 23:30 in
+# Abidjan inside 08:00–20:00?" — and answering it needs date arithmetic on the
+# instant `smpp_core::time::Timestamp` already carries. `time` is what that
+# type is built on, so this is the same calendar rather than a second one.
+time.workspace = true
 
 # Milestone 008. The delivery-receipt pipeline is a task fed by a bounded
 # channel that commits a batch of transitions every N receipts or every T
@@ -69,7 +101,20 @@ tokio = { workspace = true, features = ["macros", "sync", "time"] }
 # shape is whatever the import wrote.
 serde_json.workspace = true
 
+[features]
+# The doubles of `src/testing.rs` — an in-memory journal, a scripted message
+# centre, two recipient sources. Off by default, so nothing of it reaches the
+# application binary; this crate's own integration and property tests enable it
+# as a dev-dependency, the same arrangement `smpp-session` uses for its message
+# centre.
+test-support = []
+
 [dev-dependencies]
+# The crate's own integration tests drive the doubles, so they need the feature
+# its own `[features]` gates. A self dev-dependency is the sanctioned way to say
+# that.
+messaging = { path = ".", features = ["test-support"] }
+
 proptest.workspace = true
 criterion.workspace = true
 

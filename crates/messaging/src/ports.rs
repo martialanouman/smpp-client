@@ -9,6 +9,7 @@
 //! |------|----------------|-------------------|
 //! | [`MessageRepository`] | `persistence` | the durable message journal |
 //! | [`SmscSession`] | `smpp-session` | one live, bound SMPP session |
+//! | [`RecipientSource`] | the IPC layer, over `contacts` | the recipients of one campaign |
 //!
 //! Both are consequences of the same rule and neither is optional. Without the
 //! first, the write-ahead of CLAUDE.md §4 could only be tested against a real
@@ -27,8 +28,9 @@
 
 use core::future::Future;
 
+use futures_core::stream::BoxStream;
 use smpp_core::codec::{Command, Pdu};
-use smpp_core::types::{ClientMessageId, SessionId};
+use smpp_core::types::{ClientMessageId, Msisdn, SessionId};
 use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking};
 
 use crate::message::{Message, MessageStateUpdate};
@@ -177,6 +179,76 @@ pub trait MessageRepository: Send + Sync {
         &self,
         updates: &[MessageStateUpdate],
     ) -> impl Future<Output = Result<u64, MessageStoreError>> + Send;
+}
+
+/// One recipient of a campaign, as the feeder reads them (spec §10.2).
+///
+/// Deliberately **not** `contacts::model::Contact`: this crate does not depend
+/// on `contacts` and must not start (ADR 0010 for the shape of the graph). A
+/// campaign needs two things of a recipient — where to send, and what to
+/// substitute into the template — and everything else a contact carries (its
+/// identifier, its country, its line type, its lists) is the importer's
+/// business.
+///
+/// The recipient sources spec §10.2 lists are three — an imported list,
+/// generated numbers, a hand-typed paste — and only the first is a contact.
+/// A port shaped like a contact would have made the other two adapters that
+/// fabricate the fields they do not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    /// Where the message goes.
+    pub destination: Msisdn,
+
+    /// The recipient's attributes, as the JSON object of spec §11.1.
+    ///
+    /// Raw text rather than a decoded map, because that is exactly what the
+    /// column holds and [`crate::template::Variables::from_attributes`] is what
+    /// decides what a usable value is. Decoding it in the adapter would put
+    /// that decision in a layer CLAUDE.md §3 keeps free of business logic.
+    ///
+    /// `None` is a recipient with no attributes at all, and is not a failure:
+    /// every variable is missing and the campaign's
+    /// [`crate::template::MissingVariablePolicy`] decides what that means.
+    pub attributes: Option<String>,
+}
+
+/// Why the recipients could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum RecipientSourceError {
+    /// The source could not be read.
+    ///
+    /// `reason` is the implementor's own rendering, without its source chain
+    /// and without a filesystem path (CA-001-06).
+    #[error("the recipients could not be read: {reason}")]
+    Unavailable {
+        /// Short, path-free summary of the underlying failure.
+        reason: String,
+    },
+}
+
+/// Where the recipients of one campaign come from.
+///
+/// # Why this is a stream and not a page, a batch or a `Vec`
+///
+/// CA-010-01: a campaign of 500 000 recipients runs with a **stable** memory
+/// footprint. A method returning the recipients would have to hold all of them,
+/// and a paged one would put the paging state — and the "did the underlying set
+/// change between page 3 and page 4" question — in the feeder. A stream lets the
+/// implementor keep one row in flight and nothing else, which is what
+/// `contacts::ports::ContactRepository::stream_contacts` already does over
+/// SQLite.
+///
+/// # Ordering
+///
+/// An implementor **must** traverse the recipients in a stable order: a resumed
+/// campaign re-reads the source from the beginning, and a source that reordered
+/// itself between two runs would not lose the invariant — the write-ahead key is
+/// derived from the recipient, not from its position — but it would make the
+/// progress figures meaningless. `stream_contacts` orders by `rowid`.
+pub trait RecipientSource: Send + Sync {
+    /// Traverses every recipient of the campaign, one at a time.
+    fn stream_recipients(&self) -> BoxStream<'_, Result<Recipient, RecipientSourceError>>;
 }
 
 /// Why a submission did not produce a response.
