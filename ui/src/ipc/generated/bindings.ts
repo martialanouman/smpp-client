@@ -275,6 +275,19 @@ export const commands = {
 	 */
 	contactsLists: () => typedError<ContactListDto[], ErrorDto>(__TAURI_INVOKE("contacts_lists")),
 	/**
+	 *  Creates a contact list (CA-009-12).
+	 * 
+	 *  Returns its identifier, which is what the import assistant then sends as
+	 *  `listId`. Without this the list selector would be permanently empty and no
+	 *  import could enrol anything.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a blank name,
+	 *  `CONTACTS_DUPLICATE` if a list already carries that name.
+	 */
+	contactsCreateList: (name: string) => typedError<string, ErrorDto>(__TAURI_INVOKE("contacts_create_list", { name })),
+	/**
 	 *  Every saved mapping profile, oldest first (CA-009-09).
 	 * 
 	 *  # Errors
@@ -430,7 +443,13 @@ export type ContactPageDto = {
 export type ContactRowDto = {
 	/**  Primary key, and the row's React key. */
 	contactId: string,
-	/**  The number, normalised to E.164 (CA-009-04). */
+	/**
+	 *  The number in international form, digits only (CA-009-04).
+	 * 
+	 *  Without the leading `+`: `Msisdn` holds the digits, and the log screen
+	 *  renders them the same way. Adding one here alone would make the same
+	 *  contact look different on two screens.
+	 */
 	msisdn: string,
 	/**  The country the number resolved to. */
 	country: string | null,

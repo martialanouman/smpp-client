@@ -36,10 +36,18 @@ pub struct RawRow {
 }
 
 impl RawRow {
-    /// Whether every cell of the row is empty.
+    /// Whether the row held nothing at all.
+    ///
+    /// A cell the reader could not render — a spreadsheet error value, a date
+    /// where a number was expected — leaves an empty string in
+    /// [`Self::values`] and its position in [`Self::unreadable`]. Such a row
+    /// is **not** blank: something was there, and the operator has to be told
+    /// so with `UNREADABLE_CELL` (CA-009-03). Judging on `values` alone would
+    /// count it as blank, which is neither imported, nor rejected, nor
+    /// anywhere in the report.
     #[must_use]
     pub fn is_blank(&self) -> bool {
-        self.values.iter().all(|value| value.trim().is_empty())
+        self.unreadable.is_empty() && self.values.iter().all(|value| value.trim().is_empty())
     }
 }
 
@@ -63,4 +71,36 @@ pub trait RowSource {
     /// parsed. The error carries the line it happened on and never a cell
     /// value.
     fn next_row(&mut self) -> Result<Option<RawRow>, ContactsError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RawRow;
+
+    #[test]
+    fn a_row_of_empty_cells_is_blank() {
+        let row = RawRow {
+            line: 4,
+            values: vec![String::new(), String::from("  ")],
+            unreadable: Vec::new(),
+        };
+
+        assert!(row.is_blank());
+    }
+
+    /// CA-009-03. A spreadsheet row whose only filled cell is an error value
+    /// renders as empty strings, so judging on `values` alone calls it blank —
+    /// and a blank row is counted apart from the total, which means the row
+    /// vanishes from the report instead of being rejected with a reason the
+    /// operator can act on.
+    #[test]
+    fn a_row_whose_only_cell_is_unreadable_is_not_blank() {
+        let row = RawRow {
+            line: 4,
+            values: vec![String::new(), String::new()],
+            unreadable: vec![1],
+        };
+
+        assert!(!row.is_blank());
+    }
 }

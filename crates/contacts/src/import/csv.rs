@@ -15,8 +15,14 @@
 //! Detection reads a bounded [`SAMPLE_BYTES`] prefix, then hands the reader
 //! back **unconsumed** by chaining the sample in front of the rest. The `csv`
 //! reader that follows holds one record at a time. A one-million-row file
-//! therefore costs the same resident memory as a ten-row one, and the test that
-//! proves it measures the allocator rather than trusting the shape of the code.
+//! therefore costs the same resident memory as a ten-row one.
+//!
+//! **Not measured.** CA-009-01 asks for that claim to be verified by
+//! measurement, and no such test exists at this milestone: what is here is an
+//! argument from the shape of the code, which is weaker. The claim also has a
+//! known exception — [`crate::import::Deduplication::FirstWins`] keeps eight
+//! bytes per distinct number for the life of the import, which does grow with
+//! the file. Recorded as debt rather than presented as verified.
 
 use std::io::{BufReader, Read};
 use std::path::Path;

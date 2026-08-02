@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import {
   contactsCancelImport,
+  contactsCreateList,
   contactsImport,
   contactsLists,
   contactsPage,
@@ -102,6 +103,8 @@ interface ContactsState {
   readonly applyProgress: (progress: ImportProgressEvent) => void;
   /** Saves a mapping profile and refreshes the list. */
   readonly saveProfile: (profile: ImportProfileDto) => Promise<void>;
+  /** Creates a contact list and refreshes the selector. */
+  readonly createList: (name: string) => Promise<string | null>;
   /** Clears the report panel. */
   readonly dismissReport: () => void;
 }
@@ -241,6 +244,19 @@ export const useContacts = create<ContactsState>((set, get) => ({
     if (outcome.ok) {
       await get().loadReferences();
     }
+  },
+
+  createList: async (name) => {
+    const outcome = await contactsCreateList(name);
+
+    if (!outcome.ok) return null;
+
+    await get().loadReferences();
+
+    // Handed back so the assistant can select the list it has just created —
+    // otherwise the operator makes a list and then has to find it in a
+    // selector that was empty a moment ago.
+    return outcome.value;
   },
 
   dismissReport: () => set({ report: null }),

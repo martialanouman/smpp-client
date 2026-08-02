@@ -413,6 +413,16 @@ export function contactsPage(
   return call(() => commands.contactsPage(selection, search, cursor, limit));
 }
 
+/**
+ * Creates a contact list (CA-009-12).
+ *
+ * Resolves to its identifier, which the import assistant then sends as
+ * `listId`.
+ */
+export function contactsCreateList(name: string): Promise<IpcOutcome<string>> {
+  return call(() => commands.contactsCreateList(name));
+}
+
 /** Every contact list, oldest first (CA-009-12). Unpaginated by design. */
 export function contactsLists(): Promise<IpcOutcome<ContactListDto[]>> {
   return call(() => commands.contactsLists());

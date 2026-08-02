@@ -35,8 +35,11 @@ export function ImportWizard() {
   const importing = useContacts((state) => state.importing);
   const progress = useContacts((state) => state.progress);
   const lists = useContacts((state) => state.lists);
+  const profiles = useContacts((state) => state.profiles);
   const runImport = useContacts((state) => state.runImport);
   const cancelImport = useContacts((state) => state.cancelImport);
+  const saveProfile = useContacts((state) => state.saveProfile);
+  const createList = useContacts((state) => state.createList);
 
   const [path, setPath] = useState<string | null>(null);
   const [sheet, setSheet] = useState("");
@@ -47,6 +50,9 @@ export function ImportWizard() {
   const [mobilesOnly, setMobilesOnly] = useState(false);
   const [deduplication, setDeduplication] = useState<DeduplicationInput>("firstWins");
   const [listId, setListId] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [newListName, setNewListName] = useState("");
 
   const isWorkbook = path !== null && /\.xlsx?$/i.test(path);
 
@@ -55,6 +61,52 @@ export function ImportWizard() {
 
     if (outcome.ok && outcome.value !== null) {
       setPath(outcome.value);
+    }
+  };
+
+  /**
+   * Loads a saved mapping into the form (CA-009-09).
+   *
+   * The whole point of the criterion is "without retyping", so this fills the
+   * fields rather than importing straight away: the operator still chooses the
+   * file, and still sees what the profile is about to do.
+   */
+  const applyProfile = (identifier: string) => {
+    setProfileId(identifier);
+
+    const profile = profiles.find((held) => held.profileId === identifier);
+    if (profile === undefined) return;
+
+    setProfileName(profile.name);
+    setMsisdnColumn(renderColumn(profile.mapping.msisdn));
+    setCountryColumn(profile.mapping.country === null ? "" : renderColumn(profile.mapping.country));
+  };
+
+  const storeProfile = async () => {
+    if (profileName.trim() === "" || msisdnColumn === "") return;
+
+    await saveProfile({
+      // The identifier in force, so saving twice under the same name updates
+      // the profile instead of leaving two of them in the selector.
+      profileId: profileId === "" ? null : profileId,
+      name: profileName.trim(),
+      mapping: {
+        msisdn: columnRef(msisdnColumn),
+        country: countryColumn === "" ? null : columnRef(countryColumn),
+        attributes: [],
+      },
+      createdAt: null,
+    });
+  };
+
+  const addList = async () => {
+    if (newListName.trim() === "") return;
+
+    const created = await createList(newListName.trim());
+
+    if (created !== null) {
+      setListId(created);
+      setNewListName("");
     }
   };
 
@@ -184,6 +236,59 @@ export function ImportWizard() {
             ))}
           </select>
         </Field>
+
+        <Field label={t("contacts.import.newList")} hint={t("contacts.import.newListHint")}>
+          <span className="flex gap-2">
+            <input
+              type="text"
+              value={newListName}
+              onChange={(event) => setNewListName(event.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
+            />
+            <button
+              type="button"
+              onClick={() => void addList()}
+              disabled={newListName.trim() === ""}
+              className="shrink-0 rounded-md border border-[var(--shinobi-border)] px-3 py-2 text-sm hover:bg-[var(--shinobi-hover)] disabled:opacity-50"
+            >
+              {t("contacts.import.createList")}
+            </button>
+          </span>
+        </Field>
+
+        <Field label={t("contacts.import.profile")} hint={t("contacts.import.profileHint")}>
+          <select
+            value={profileId}
+            onChange={(event) => applyProfile(event.target.value)}
+            className="rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
+          >
+            <option value="">{t("contacts.import.noProfile")}</option>
+            {profiles.map((profile) => (
+              <option key={profile.profileId ?? profile.name} value={profile.profileId ?? ""}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label={t("contacts.import.profileName")}>
+          <span className="flex gap-2">
+            <input
+              type="text"
+              value={profileName}
+              onChange={(event) => setProfileName(event.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
+            />
+            <button
+              type="button"
+              onClick={() => void storeProfile()}
+              disabled={profileName.trim() === "" || msisdnColumn === ""}
+              className="shrink-0 rounded-md border border-[var(--shinobi-border)] px-3 py-2 text-sm hover:bg-[var(--shinobi-hover)] disabled:opacity-50"
+            >
+              {t("contacts.import.saveProfile")}
+            </button>
+          </span>
+        </Field>
       </div>
 
       <label className="flex items-center gap-2 text-sm">
@@ -246,6 +351,17 @@ function columnRef(raw: string): ColumnRefInput {
   return /^\d+$/.test(trimmed)
     ? { by: "index", value: Number.parseInt(trimmed, 10) }
     : { by: "name", value: trimmed };
+}
+
+/**
+ * Renders a column designation back into the text the form holds.
+ *
+ * The inverse of {@link columnRef}, and it has to be: a profile saved from
+ * `0` comes back as an index, and rendering it as anything else would make
+ * reloading a profile change the mapping it stands for.
+ */
+function renderColumn(column: ColumnRefInput): string {
+  return column.by === "index" ? String(column.value) : column.value;
 }
 
 interface FieldProps {

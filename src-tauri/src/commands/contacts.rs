@@ -448,7 +448,11 @@ impl From<ImportReport> for ImportReportDto {
 pub(crate) struct ContactRowDto {
     /// Primary key, and the row's React key.
     pub(crate) contact_id: String,
-    /// The number, normalised to E.164 (CA-009-04).
+    /// The number in international form, digits only (CA-009-04).
+    ///
+    /// Without the leading `+`: `Msisdn` holds the digits, and the log screen
+    /// renders them the same way. Adding one here alone would make the same
+    /// contact look different on two screens.
     pub(crate) msisdn: String,
     /// The country the number resolved to.
     pub(crate) country: Option<String>,
@@ -764,6 +768,46 @@ pub(crate) async fn contacts_lists(
         .await
         .map(|lists| lists.into_iter().map(ContactListDto::from).collect())
         .map_err(|error| ErrorDto::from(&error))
+}
+
+/// Creates a contact list (CA-009-12).
+///
+/// Returns its identifier, which is what the import assistant then sends as
+/// `listId`. Without this the list selector would be permanently empty and no
+/// import could enrol anything.
+///
+/// # Errors
+///
+/// [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a blank name,
+/// `CONTACTS_DUPLICATE` if a list already carries that name.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn contacts_create_list(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, ErrorDto> {
+    let name = name.trim();
+
+    // Validated here and not in the form: the WebView is untrusted, and a list
+    // with no name is one an operator can never pick out of a selector again.
+    if name.is_empty() {
+        return Err(ErrorDto::contacts_invalid_input("name"));
+    }
+
+    let list = ContactList {
+        list_id: ListId::new(),
+        name: name.to_owned(),
+        created_at: Timestamp::now(),
+    };
+
+    state
+        .contacts()
+        .repository()
+        .insert_contact_list(&list)
+        .await
+        .map_err(|error| ErrorDto::from(&error))?;
+
+    Ok(list.list_id.to_string())
 }
 
 /// Every saved mapping profile, oldest first (CA-009-09).

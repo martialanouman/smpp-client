@@ -33,6 +33,9 @@ export function ContactsView() {
   const reload = useContacts((state) => state.reload);
   const loadMore = useContacts((state) => state.loadMore);
   const setSearch = useContacts((state) => state.setSearch);
+  const setSelection = useContacts((state) => state.setSelection);
+  const lists = useContacts((state) => state.lists);
+  const selection = useContacts((state) => state.selection);
   const loadReferences = useContacts((state) => state.loadReferences);
   const applyProgress = useContacts((state) => state.applyProgress);
   const notify = usePreferences((state) => state.notify);
@@ -91,16 +94,43 @@ export function ContactsView() {
           </p>
         </div>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span>{t("contacts.table.search")}</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => void setSearch(event.target.value)}
-            placeholder={t("contacts.table.searchPlaceholder")}
-            className="rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
-          />
-        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm">
+            <span>{t("contacts.table.search")}</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => void setSearch(event.target.value)}
+              placeholder={t("contacts.table.searchPlaceholder")}
+              className="rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span>{t("contacts.table.list")}</span>
+            <select
+              value={selection.lists?.[0] ?? ""}
+              onChange={(event) =>
+                void setSelection(
+                  // An empty choice is "everything", not "the union of no
+                  // list" — the latter selects nothing, which would blank the
+                  // table the moment the operator cleared the filter.
+                  event.target.value === ""
+                    ? { combination: "everything", lists: [], excluded: [] }
+                    : { combination: "union", lists: [event.target.value], excluded: [] },
+                )
+              }
+              className="rounded-md border border-[var(--shinobi-border)] bg-transparent px-3 py-2"
+            >
+              <option value="">{t("contacts.table.allLists")}</option>
+              {lists.map((list) => (
+                <option key={list.listId} value={list.listId}>
+                  {list.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         <ContactTable
           rows={rows}

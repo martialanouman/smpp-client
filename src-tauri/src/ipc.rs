@@ -43,6 +43,7 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::contacts::contacts_cancel_import,
             crate::commands::contacts::contacts_page,
             crate::commands::contacts::contacts_lists,
+            crate::commands::contacts::contacts_create_list,
             crate::commands::contacts::contacts_profiles,
             crate::commands::contacts::contacts_save_profile,
         ])
