@@ -8,11 +8,13 @@ import type {
   CampaignSendConfigInput,
   ContactListDto,
   EncodingDto,
+  NpiDto,
   RegisteredDeliveryDto,
   RetryBackoffInput,
   SegmentationModeDto,
   SessionProfileDto,
   SessionStatusDto,
+  TonDto,
 } from "../../../ipc";
 
 /** The encodings the DCS selector offers, automatic first. */
@@ -42,8 +44,12 @@ interface FormState {
   sessionId: string;
   listId: string;
   source: string;
-  destTon: CampaignSendConfigInput["destTon"];
-  destNpi: CampaignSendConfigInput["destNpi"];
+  // The generated `CampaignSendConfigInput` makes every field optional, because
+  // the Rust type carries `#[serde(default)]` so an older stored document still
+  // reads. The FORM always fills them, so it holds the non-optional types —
+  // otherwise `undefined` would leak into a selector that has no such state.
+  destTon: TonDto;
+  destNpi: NpiDto;
   encoding: EncodingDto;
   segmentationMode: SegmentationModeDto;
   registeredDelivery: RegisteredDeliveryDto;

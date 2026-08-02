@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import "../../../i18n";
-import type { CampaignProgressEvent, CampaignRowDto, MetricsTick } from "../../../ipc";
+import type { CampaignProgressEvent, CampaignRowDto } from "../../../ipc";
 import { CampaignPanel } from "./CampaignPanel";
 
 function aRow(overrides: Partial<CampaignRowDto> = {}): CampaignRowDto {
@@ -40,32 +40,8 @@ function aReading(overrides: Partial<CampaignProgressEvent> = {}): CampaignProgr
     retried: 0,
     reemittedUnanswered: 0,
     notJournalled: 0,
+    acceptedPerSecond: 42.5,
     done: false,
-    ...overrides,
-  };
-}
-
-function aTick(overrides: Partial<MetricsTick> = {}): MetricsTick {
-  return {
-    sessionId: "session-1",
-    tps1s: 42.5,
-    tps10s: 40,
-    tpsAverage: 39,
-    tpsPeak: 55,
-    targetTps: 100,
-    windowSize: 50,
-    windowInUse: 12,
-    windowOccupancy: 0.24,
-    rttMs: 18,
-    reconnects: 0,
-    uptimeS: 300,
-    submitted: 100,
-    accepted: 98,
-    rejected: 2,
-    timedOut: 0,
-    throttled: 0,
-    backingOff: false,
-    adaptivePermille: 1000,
     ...overrides,
   };
 }
@@ -78,15 +54,7 @@ function panel(props: Partial<Parameters<typeof CampaignPanel>[0]> = {}) {
     onCancel: vi.fn(),
   };
 
-  render(
-    <CampaignPanel
-      campaign={aRow()}
-      progress={undefined}
-      metrics={undefined}
-      {...handlers}
-      {...props}
-    />,
-  );
+  render(<CampaignPanel campaign={aRow()} progress={undefined} {...handlers} {...props} />);
 
   return handlers;
 }
@@ -102,21 +70,24 @@ describe("the campaign panel", () => {
   });
 
   /**
-   * **Where the throughput comes from.** The reading carries counters and no
-   * rate; the figure is the `metrics:tick` of the session it names. A panel
-   * that derived one from `accepted` over time would show a different number
-   * from the gauges on the Sessions and Dashboard screens.
+   * **Where the throughput comes from.** The reading carries the campaign's own
+   * rate, measured in the backend from its acceptances. The panel shows that
+   * and nothing else — a figure taken from `metrics:tick` would count every
+   * submission on the link, including a unit send made beside the campaign
+   * (spec §15.3, ADR 0015).
    */
-  it("shows the throughput measured by the session, not one of its own", () => {
-    panel({ progress: aReading({ accepted: 48 }), metrics: aTick({ tps1s: 42.5 }) });
+  it("shows the throughput the campaign itself reported", () => {
+    panel({ progress: aReading({ accepted: 48, acceptedPerSecond: 42.5 }) });
 
     expect(screen.getByText("42.5")).toBeInTheDocument();
   });
 
-  /** No tick yet is not a throughput of zero: a stalled link and an idle one
-   * must not read the same. */
-  it("shows no throughput at all when the session has not been measured", () => {
-    panel({ progress: aReading(), metrics: undefined });
+  /**
+   * No reading is not a throughput of zero: a campaign nobody has heard from
+   * and one that has stalled must not read the same.
+   */
+  it("shows no throughput at all before the first reading", () => {
+    panel({ progress: undefined });
 
     expect(screen.getByText("—")).toBeInTheDocument();
   });
@@ -150,6 +121,56 @@ describe("the campaign panel", () => {
   });
 
   /**
+   * **The blocker, seen from the screen.** A paused campaign keeps receiving
+   * readings four times a second, and each of them carries `PAUSED` now that
+   * the backend reads the control. The resume button has to survive them —
+   * when the readings said `RUNNING`, it appeared for under 250 ms and the
+   * operator was left with cancellation as the only way out of a pause.
+   */
+  it("keeps offering Resume while a paused campaign goes on reporting", async () => {
+    const handlers = panel({
+      campaign: aRow({ status: "PAUSED", live: true }),
+      progress: aReading({ status: "PAUSED", processed: 120 }),
+    });
+
+    expect(screen.queryByRole("button", { name: "Mettre en pause" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reprendre" }));
+
+    expect(handlers.onResume).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A campaign the operator has just cancelled is still **live** — it drains
+   * its queue before its task returns — and its readings carry `CANCELLED`
+   * from that moment. There is nothing left to offer, and offering *Mettre en
+   * pause* would offer to suspend something already stopping.
+   */
+  it("offers nothing on a campaign that is draining after a cancellation", () => {
+    panel({
+      campaign: aRow({ status: "CANCELLED", live: true }),
+      progress: aReading({ status: "CANCELLED" }),
+    });
+
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  /**
+   * `campaigns.delivered_count` is fed by nothing in this workspace. Rendered
+   * beside five exact counters it read as "the message centre took 200 000 and
+   * none arrived", which is an incident opened against an operator who did
+   * nothing wrong.
+   */
+  it("shows no delivery counter, because nothing feeds one yet", () => {
+    panel({
+      campaign: aRow({ sent: 200, delivered: 0 }),
+      progress: aReading({ accepted: 200 }),
+    });
+
+    expect(screen.queryByText("Délivrés")).not.toBeInTheDocument();
+  });
+
+  /**
    * **The case the status alone cannot express.** A process killed
    * mid-campaign leaves a row reading `RUNNING` with nothing running. Offering
    * Pause there would offer to suspend something that has already stopped;
@@ -173,7 +194,6 @@ describe("the campaign panel", () => {
         <CampaignPanel
           campaign={aRow({ status, live: false })}
           progress={undefined}
-          metrics={undefined}
           onStart={vi.fn()}
           onPause={vi.fn()}
           onResume={vi.fn()}

@@ -63,6 +63,7 @@ function aReading(
     retried: 0,
     reemittedUnanswered: 0,
     notJournalled: 0,
+    acceptedPerSecond: 0,
     done: false,
     ...overrides,
   };
@@ -90,6 +91,56 @@ describe("the campaign store", () => {
     await useCampaigns.getState().reload();
 
     expect(useCampaigns.getState().rows.map((row) => row.campaignId)).toEqual(["a", "b"]);
+  });
+
+  /**
+   * **The list has to be complete.** `campaign_list` is paginated, and a store
+   * that asked for the first page only stopped at fifty campaigns for good:
+   * with sixty, one of the ten oldest left `RUNNING` by a crash was never
+   * listed, so neither *Reprendre* nor *Annuler* could ever reach it.
+   */
+  it("follows the cursor until the last page", async () => {
+    campaignList
+      .mockResolvedValueOnce({ ok: true, value: { rows: [aRow("a")], next: "50" } })
+      .mockResolvedValueOnce({ ok: true, value: { rows: [aRow("b")], next: "100" } })
+      .mockResolvedValueOnce({ ok: true, value: { rows: [aRow("c")], next: null } });
+
+    await useCampaigns.getState().reload();
+
+    expect(useCampaigns.getState().rows.map((row) => row.campaignId)).toEqual(["a", "b", "c"]);
+    expect(campaignList).toHaveBeenNthCalledWith(2, "50", expect.any(Number));
+    expect(campaignList).toHaveBeenNthCalledWith(3, "100", expect.any(Number));
+  });
+
+  /**
+   * A backend that kept handing back a cursor would spin here for ever, in the
+   * WebView, holding the interface. The walk is bounded and says so.
+   */
+  it("stops walking rather than looping on a cursor that never ends", async () => {
+    campaignList.mockResolvedValue({ ok: true, value: { rows: [aRow("a")], next: "50" } });
+
+    await useCampaigns.getState().reload();
+
+    expect(campaignList.mock.calls.length).toBeLessThanOrEqual(20);
+    expect(useCampaigns.getState().loading).toBe(false);
+  });
+
+  /** A page that fails mid-walk keeps what was already read. */
+  it("keeps the pages it read when a later one fails", async () => {
+    campaignList
+      .mockResolvedValueOnce({ ok: true, value: { rows: [aRow("a")], next: "50" } })
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: {
+          kind: "backend",
+          error: { code: "CAMPAIGN_STORAGE", message: "", details: null },
+        },
+      });
+
+    await useCampaigns.getState().reload();
+
+    expect(useCampaigns.getState().rows.map((row) => row.campaignId)).toEqual(["a"]);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it("reports a failed list rather than blanking the table", async () => {

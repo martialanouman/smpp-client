@@ -28,7 +28,7 @@
     "empty": "No campaign yet.",
     "progress": "Progress",
     "progressSpoken": "{{processed}} recipients dealt with out of {{total}}",
-    "throughput": "Session throughput (msg/s)",
+    "throughput": "Campaign throughput (msg/s)",
     "detailHint": "The message-by-message detail is on the Logs screen, filtered on the campaign.",
     "interrupted": "This campaign was interrupted (the application stopped, or the machine did). Resume it: messages already accepted will not be sent again.",
     "duplicateRisk": "{{count}} message(s) left in flight by a previous run were sent again; their recipients may receive them twice.",
@@ -52,8 +52,7 @@
       "rejected": "Rejected",
       "skipped": "Skipped",
       "cancelled": "Cancelled",
-      "retried": "Replays",
-      "delivered": "Delivered"
+      "retried": "Replays"
     },
     "missing": {
       "legend": "Missing variable",

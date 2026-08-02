@@ -39,15 +39,30 @@ import { report } from "./bridge";
  * and a second figure for the same thing would disagree with the gauges on the
  * Sessions and Dashboard screens.
  *
- * # The list is not paginated in this store
+ * # The list is walked to its end, not sampled
  *
- * Campaigns are units to hundreds, created by hand one at a time; the backend
- * pages them and this asks for the first page. What needs virtualising is the
- * **messages** of a campaign, and that is the Journaux screen.
+ * `campaign_list` is paginated and `reload` follows the cursor until there is
+ * none. Asking for the first page alone was a ceiling nobody could see past:
+ * with sixty campaigns, one of the ten oldest left `RUNNING` by a crash was
+ * simply not listed, and neither Reprendre nor Annuler could reach it.
+ *
+ * Campaigns are units to hundreds — created by hand, one at a time — so the
+ * walk is a handful of calls. What needs virtualising is the **messages** of a
+ * campaign, and that is the Journaux screen.
  */
 
 /** Campaigns a page holds. Matches the backend's default. */
 const PAGE = 50;
+
+/**
+ * How many pages one reload will walk.
+ *
+ * A bound and not a hint: a backend that kept handing back a cursor would spin
+ * this loop for ever inside the WebView, holding the whole interface. A
+ * thousand campaigns is far past what this screen is for, and stopping short is
+ * a visibly incomplete list rather than a frozen application.
+ */
+const MAX_PAGES = 20;
 
 interface CampaignsState {
   /** Every campaign, oldest first. */
@@ -84,17 +99,39 @@ export const useCampaigns = create<CampaignsState>((set, get) => ({
   reload: async () => {
     set({ loading: true });
 
-    const outcome = await campaignList(null, PAGE);
+    const collected: CampaignRowDto[] = [];
+    let cursor: string | null = null;
 
-    if (outcome.ok) {
-      set({ rows: outcome.value.rows, loading: false });
-    } else {
-      // The rows already held are NOT cleared: a store that stopped answering
-      // is a reason to show stale campaigns with an error beside them, not to
-      // show an empty screen that reads as "you have no campaigns".
-      report(outcome.failure);
-      set({ loading: false });
+    // The WHOLE list, page after page. Asking for the first page only was a
+    // silent ceiling: with sixty campaigns, one of the ten oldest left
+    // `RUNNING` by a crash was never listed, and neither Reprendre nor Annuler
+    // could ever reach it. Campaigns are units to hundreds — created by hand,
+    // one at a time — so the walk is short; what needs virtualising is the
+    // *messages* of a campaign, and that is the Journaux screen.
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const outcome: Awaited<ReturnType<typeof campaignList>> = await campaignList(cursor, PAGE);
+
+      if (!outcome.ok) {
+        // The pages already read are kept, and so are the rows held before
+        // this call: a store that stopped answering is a reason to show what
+        // is known with an error beside it, not to blank a screen into
+        // something that reads as "you have no campaigns".
+        report(outcome.failure);
+
+        if (collected.length > 0) set({ rows: collected });
+
+        set({ loading: false });
+
+        return;
+      }
+
+      collected.push(...outcome.value.rows);
+      cursor = outcome.value.next;
+
+      if (cursor === null) break;
     }
+
+    set({ rows: collected, loading: false });
   },
 
   create: async (input) => {

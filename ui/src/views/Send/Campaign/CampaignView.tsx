@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { onCampaignProgress } from "../../../ipc";
 import { useCampaigns } from "../../../store/campaign";
 import { useContacts } from "../../../store/contacts";
-import { useMetrics } from "../../../store/metrics";
 import { usePreferences } from "../../../store/preferences";
 import { useSessions } from "../../../store/sessions";
 import { CampaignForm } from "./CampaignForm";
@@ -18,19 +17,21 @@ import { CampaignPanel } from "./CampaignPanel";
  *
  * # Three stores, and none of them duplicates another
  *
- * * `useCampaigns` — the campaigns and their live counters;
- * * `useMetrics` — the throughput, measured by the backend at full rate and
- *   published on `metrics:tick` (milestone 007). **Nothing here computes a
- *   rate**: `campaign:progress` deliberately carries none, so there is one
- *   measurement of one thing;
+ * * `useCampaigns` — the campaigns, their live counters **and their
+ *   throughput**, all three arriving on `campaign:progress`;
  * * `useContacts` — the lists the form selects a recipient set from.
+ *
+ * `useMetrics` is deliberately absent. It carries the **session's** rate, which
+ * counts every submission on the link — a unit send made while a campaign runs
+ * is inside it — so beside a campaign's counters it would be a second number
+ * describing something else. It belongs on the Sessions and Dashboard screens,
+ * where it is labelled as the session's (spec §15.3, ADR 0015).
  */
 export function CampaignView() {
   const { t } = useTranslation();
 
   const profiles = useSessions((state) => state.profiles);
   const statuses = useSessions((state) => state.statuses);
-  const latest = useMetrics((state) => state.latest);
 
   const rows = useCampaigns((state) => state.rows);
   const progress = useCampaigns((state) => state.progress);
@@ -103,20 +104,11 @@ export function CampaignView() {
           <p className="text-sm text-[var(--shinobi-muted)]">{t("campaign.empty")}</p>
         ) : (
           rows.map((campaign) => {
-            const reading = progress[campaign.campaignId];
-
             return (
               <CampaignPanel
                 key={campaign.campaignId}
                 campaign={campaign}
-                progress={reading}
-                metrics={
-                  reading === undefined
-                    ? campaign.config === null
-                      ? undefined
-                      : latest[campaign.config.sessionId]
-                    : latest[reading.sessionId]
-                }
+                progress={progress[campaign.campaignId]}
                 onStart={() => void start(campaign.campaignId)}
                 onPause={() => void pause(campaign.campaignId)}
                 onResume={() => void resume(campaign.campaignId)}

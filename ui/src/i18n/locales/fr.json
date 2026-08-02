@@ -28,7 +28,7 @@
     "empty": "Aucune campagne pour l'instant.",
     "progress": "Progression",
     "progressSpoken": "{{processed}} destinataires traités sur {{total}}",
-    "throughput": "Débit session (msg/s)",
+    "throughput": "Débit campagne (msg/s)",
     "detailHint": "Le détail message par message se consulte dans l'écran Journaux, filtré sur la campagne.",
     "interrupted": "Cette campagne a été interrompue (arrêt de l'application ou coupure). Reprenez-la : les messages déjà acceptés ne seront pas réémis.",
     "duplicateRisk": "{{count}} message(s) laissé(s) en vol par une exécution précédente ont été réémis ; leurs destinataires peuvent les recevoir deux fois.",
@@ -52,8 +52,7 @@
       "rejected": "Rejetés",
       "skipped": "Ignorés",
       "cancelled": "Annulés",
-      "retried": "Rejeux",
-      "delivered": "Délivrés"
+      "retried": "Rejeux"
     },
     "missing": {
       "legend": "Variable manquante",

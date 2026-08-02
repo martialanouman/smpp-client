@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import { Gauge } from "../../../components/Gauge";
-import type { CampaignProgressEvent, CampaignRowDto, MetricsTick } from "../../../ipc";
+import type { CampaignProgressEvent, CampaignRowDto } from "../../../ipc";
 
 /** Statuses from which a campaign can be started for the first time. */
 const STARTABLE = ["VALIDATED", "CREATED"];
@@ -13,21 +13,6 @@ interface Props {
   readonly campaign: CampaignRowDto;
   /** The latest reading, or `undefined` before the first one. */
   readonly progress: CampaignProgressEvent | undefined;
-  /**
-   * The live figures of the session this campaign sends on.
-   *
-   * **Where the throughput comes from.** `metrics:tick`, milestone 007, which
-   * measures the session's sliding rate at full speed. Nothing here derives a
-   * rate from the campaign's counters: four readings a second are enough to
-   * draw a bar and not enough to measure a rate, and a second figure would
-   * disagree with the gauges on the Sessions and Dashboard screens.
-   *
-   * The honest caveat, and it is shown next to the figure: this is the rate of
-   * the **session**, so a unit send made on the same session while a campaign
-   * runs is counted in it. At this milestone a campaign owns its session for
-   * the length of its run, so that is a corner rather than the normal case.
-   */
-  readonly metrics: MetricsTick | undefined;
   readonly onStart: () => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
@@ -63,17 +48,11 @@ function rate(value: number | null | undefined): string {
  *
  * `campaign:progress` stops when the campaign does, and its last event carries
  * the final figures. Before the first reading — a campaign listed after a
- * restart — the row's own counters are what there is.
+ * restart — the row's own counters are what there is. The throughput has no
+ * such fallback and reads as unknown, which is what it is: a rate is a
+ * measurement over a window, and a campaign nobody is watching has none.
  */
-export function CampaignPanel({
-  campaign,
-  progress,
-  metrics,
-  onStart,
-  onPause,
-  onResume,
-  onCancel,
-}: Props) {
+export function CampaignPanel({ campaign, progress, onStart, onPause, onResume, onCancel }: Props) {
   const { t } = useTranslation();
 
   const total = progress?.total ?? campaign.total;
@@ -112,10 +91,31 @@ export function CampaignPanel({
         <Figure label={t("campaign.counters.skipped")} value={progress?.skipped ?? 0} />
         <Figure label={t("campaign.counters.cancelled")} value={progress?.cancelled ?? 0} />
         <Figure label={t("campaign.counters.retried")} value={progress?.retried ?? 0} />
-        <Figure label={t("campaign.counters.delivered")} value={campaign.delivered} />
+        {/*
+          NO "Délivrés" counter, although `campaigns.delivered_count` exists and
+          `CampaignRowDto` carries it.
+
+          Nothing in this workspace feeds that column: a delivery receipt is
+          correlated to one message (milestone 008) and nobody aggregates
+          receipts back onto the campaign. Shown here it read as a permanent
+          zero in the same grid as five exact figures — "Acceptés 200 000 ·
+          Échecs 0 · Délivrés 0" says the message centre took everything and
+          nothing arrived, which is an incident report waiting to be opened
+          against an operator who did nothing wrong.
+
+          A figure that means "not measured" beside figures that are measured is
+          worse than no figure. It comes back with the statistics of milestone
+          014, which is what will make it true.
+        */}
         <div className="flex flex-col">
           <dt className="opacity-70">{t("campaign.throughput")}</dt>
-          <dd className="font-mono tabular-nums">{rate(metrics?.tps1s)}</dd>
+          {/*
+            The CAMPAIGN's rate, measured in the backend from its own
+            acceptances — not `metrics:tick`, which measures the whole session
+            and would fold a unit send made beside the campaign into the figure
+            shown next to that campaign's counters (spec §15.3, ADR 0015).
+          */}
+          <dd className="font-mono tabular-nums">{rate(progress?.acceptedPerSecond)}</dd>
         </div>
       </dl>
 
@@ -133,8 +133,16 @@ export function CampaignPanel({
 
       <p className="text-xs opacity-60">{t("campaign.detailHint")}</p>
 
+      {/*
+        The terminal status is checked FIRST, before `live`. A campaign the
+        operator has just cancelled is still live — it drains its queue and
+        journals what is in flight before its task returns — and its readings
+        carry `CANCELLED` from the moment the cancellation lands. Testing `live`
+        first would offer *Mettre en pause* and *Annuler* on a campaign that is
+        already stopping.
+      */}
       <footer className="flex flex-wrap gap-2">
-        {campaign.live ? (
+        {terminal ? null : campaign.live ? (
           <>
             {campaign.status === "PAUSED" ? (
               <Action label={t("campaign.resume")} onClick={onResume} />
@@ -143,7 +151,7 @@ export function CampaignPanel({
             )}
             <Action label={t("campaign.cancel")} onClick={onCancel} />
           </>
-        ) : terminal ? null : interrupted ? (
+        ) : interrupted ? (
           <>
             <Action label={t("campaign.resume")} onClick={onResume} />
             <Action label={t("campaign.cancel")} onClick={onCancel} />
