@@ -15,7 +15,7 @@ correspondante, dans le dernier commit de cette PR. La fiche passe alors de
 | ☑ | [006](../tasks-done/step-006.md) | Envoi simple de bout en bout — **M1** | 004, 005 | [#8](https://github.com/martialanouman/smpp-client/pull/8) |
 | ☑ | [007](../tasks-done/step-007.md) | Fenêtrage, contrôle de débit et métriques temps réel | 006 | [#9](https://github.com/martialanouman/smpp-client/pull/9) |
 | ☑ | [008](../tasks-done/step-008.md) | Accusés de livraison, journal métier et vue temps réel — **M2** | 007 | [#10](https://github.com/martialanouman/smpp-client/pull/10) |
-| ☑ | [009](../tasks-done/step-009.md) | Contacts : import CSV/XLSX, validation E.164 et listes | 002 | [#11](https://github.com/martialanouman/smpp-client/pull/11) |
+| ☑ | [009](../tasks-done/step-009.md) | Contacts : import CSV/XLSX, validation E.164 et listes | 002 | [#12](https://github.com/martialanouman/smpp-client/pull/12) |
 | ☐ | [010](step-010.md) | Campagnes : envoi en masse, reprise et rejeu — **M3** | 008, 009 | |
 | ☐ | [011](step-011.md) | Sessions multiples, multi-bind et routage | 010 | |
 | ☐ | [012](step-012.md) | SMPP v5.0 complet et adaptation dynamique du débit — **M4** | 011 | |
