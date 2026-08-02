@@ -336,6 +336,75 @@ async fn streaming_without_a_list_yields_every_contact() {
     assert_eq!(streamed.len(), batch.len());
 }
 
+/// **The traversal order is part of the contract, and nothing was holding it.**
+///
+/// `messaging::ports::RecipientSource` requires a *stable* order of its
+/// implementor, because a resumed campaign re-reads its source from the
+/// beginning and a source that reordered itself between two runs makes the
+/// progress figures meaningless. `stream_contacts` is that implementor's
+/// query, and its `ORDER BY contacts.rowid` was the only thing enforcing it —
+/// with no test anywhere: the five streaming tests above assert *membership*,
+/// never sequence, so deleting the clause left the whole suite green.
+///
+/// This asserts insertion order against a traversal that has every reason not
+/// to produce it: the numbers descend while the rows ascend, and the membership
+/// rows are written back to front, so a plan driven by `contact_list_members`
+/// or a sort on any natural key comes out differently.
+///
+/// # What it catches, measured rather than assumed
+///
+/// Changing the clause to `ORDER BY contacts.msisdn` — the plausible
+/// "improvement" — turns this red. **Deleting it does not**: SQLite's chosen
+/// plan for this query scans `contacts` in rowid order anyway, and every test
+/// here stays green with no `ORDER BY` at all. That was verified against a live
+/// database, not assumed, and it is the honest limit of this test: it pins the
+/// order the contract names, and it cannot make the query state it.
+#[tokio::test]
+async fn streaming_traverses_contacts_in_insertion_order() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    // Numbers DESCEND as the rows are inserted, so "sorted by number" and
+    // "insertion order" are opposites rather than coincidences.
+    let batch: Vec<_> = (0..20)
+        .map(|index| a_contact(ContactId::new(), numbered_msisdn(100 - index).as_str()))
+        .collect();
+    repository.insert_contacts(&batch).await.unwrap();
+
+    let list = a_contact_list(ListId::new(), "juillet");
+    repository.insert_contact_list(&list).await.unwrap();
+
+    // …and the memberships are written back to front, so a join driven by
+    // `contact_list_members` would hand them back reversed.
+    let members: Vec<_> = batch
+        .iter()
+        .rev()
+        .map(|contact| contact.contact_id)
+        .collect();
+    repository
+        .add_contacts_to_list(list.list_id, &members)
+        .await
+        .unwrap();
+
+    let expected: Vec<_> = batch.iter().map(|contact| contact.contact_id).collect();
+
+    for selection in [
+        ListSelection::everything(),
+        ListSelection::union([list.list_id]),
+    ] {
+        let streamed: Vec<_> = repository
+            .stream_contacts(&selection)
+            .map(|contact| contact.unwrap().contact_id)
+            .collect()
+            .await;
+
+        assert_eq!(
+            streamed, expected,
+            "the traversal order is not the insertion order"
+        );
+    }
+}
+
 /// CA-009-12, against the real SQL rather than against the algebra alone: a
 /// union is "in either", an intersection is "in both", and the two give
 /// different answers on the same data.
