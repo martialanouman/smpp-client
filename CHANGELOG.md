@@ -9,6 +9,30 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 010, campagnes : fondations (modèles, rejeu, cycle de vie)
+
+- **Moteur de modèles à variables** (`messaging::template`) : `{{prenom}}` et
+  `{{ville}}` résolues par destinataire depuis les attributs JSON du contact.
+  L'invariant de CA-010-06 — aucun texte porteur d'un `{{…}}` non résolu ne sort
+  du moteur — est **vérifié sur le texte produit**, pas seulement voulu : le
+  nombre de `{{` de la sortie doit être exactement celui que les échappements
+  `{{{{` ont demandé. Politique de variable manquante explicite (valeur de
+  remplacement ou rejet de la ligne, rejet par défaut) ; une valeur vide compte
+  comme absente, sans quoi la politique de rejet serait inatteignable pour les
+  cellules vides que l'import écrit en `""`.
+- **Politique de rejeu par code d'erreur** (`messaging::retry`) : s'appuie sur la
+  classification du jalon 003 et ne reclasse rien. `ESME_RINVDSTADR` jamais
+  rejoué, `ESME_RTHROTTLED` et `ESME_RMSGQFUL` rejoués après délai, timeout
+  rejoué (CA-010-07). Le délai est une fonction pure du numéro de tentative —
+  l'attente appartient à l'exécuteur, qui détient le jeton d'annulation.
+- **Machine d'états de campagne** (`messaging::campaign`) : le cycle de la spec
+  §10.3, transitions énumérées et refus explicite des invalides, avec les deux
+  propriétés héritées de la machine des messages — transition vers soi-même
+  autorisée, statut terminal sans successeur.
+- **`CampaignStatus` déplacé de `persistence` vers `messaging`** (ADR 0013) : la
+  crate qui possède le cycle de vie possède le type qui le porte. Format stocké
+  inchangé, aucune migration, `persistence::CampaignStatus` résout toujours.
+
 ### Ajouté — jalon 009, contacts : import CSV/XLSX, E.164 et listes
 
 - **Lecture en flux** (`contacts::import`) : le lecteur tourne sur
