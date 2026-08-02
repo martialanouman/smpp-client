@@ -4,4 +4,4 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 2e0d62e50082f65675c75e6cb2e8e9bf1d58bad7b2d55f2987063e5b116bd2b6 # shrinks to recipient_count = 1, replies = [Accepted, Accepted], commands = [], runs = 2, abandon_unanswered = false
+cc 75b74c98cfb8389dc0e7199ed96ca681214a681b6397cb3bb319a05688bb8c98 # shrinks to history = History { recipient_count: 1, replies: [Accepted, Accepted], commands: [], runs: [LosesVerdicts, None], abandon_unanswered: false }
