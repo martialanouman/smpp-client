@@ -12,7 +12,9 @@ use smpp_core::values::{
     CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
 };
 
-use crate::records::{CampaignId, ContactId, LineType, ListId, MessageState, ProfileId};
+use crate::records::{
+    CampaignId, CampaignStatus, ContactId, LineType, ListId, MessageState, ProfileId,
+};
 use crate::{PersistenceError, Timestamp};
 
 /// Widens an unsigned count to the signed integer SQLite stores.
@@ -189,6 +191,20 @@ pub(crate) fn read_message_state(raw: &str) -> Result<MessageState, PersistenceE
         table: "messages",
         column: "state",
         expected: "one of QUEUED, SENT, ACCEPTED, DELIVERED, FAILED, EXPIRED",
+    })
+}
+
+/// Reads the `campaigns.status` column.
+///
+/// `CampaignStatus` moved to `messaging` at milestone 010 (ADR 0013), for the
+/// reason `MessageState` did at milestone 006: the crate that owns the
+/// lifecycle owns the type carrying it. Same shape as above — an `Option` from
+/// the owner, the column context restored here.
+pub(crate) fn read_campaign_status(raw: &str) -> Result<CampaignStatus, PersistenceError> {
+    CampaignStatus::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "campaigns",
+        column: "status",
+        expected: "one of CREATED, VALIDATED, RUNNING, PAUSED, COMPLETED, CANCELLED, FAILED",
     })
 }
 

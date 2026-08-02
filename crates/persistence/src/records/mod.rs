@@ -9,8 +9,17 @@
 
 mod enums;
 
-pub use enums::{BindType, CampaignStatus, PduDirection};
+pub use enums::{BindType, PduDirection};
 pub use smpp_core::types::CampaignId;
+
+/// The campaign lifecycle of spec §10.3.
+///
+/// Defined in `messaging` since milestone 010 (ADR 0013): the crate that owns
+/// the lifecycle owns the type that carries it, and the state machine could not
+/// live anywhere else — `messaging` sits above this crate and cannot depend on
+/// it. Re-exported because [`Campaign`] speaks in it, so
+/// `persistence::CampaignStatus` still resolves.
+pub use messaging::campaign::CampaignStatus;
 
 /// The contact aggregate, its identifiers and its lists.
 ///

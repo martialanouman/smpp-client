@@ -49,6 +49,7 @@
 //! ```
 
 pub mod addressing;
+pub mod campaign;
 pub mod correlation;
 pub mod dlr;
 pub mod encoding;
@@ -61,6 +62,7 @@ pub mod sender;
 pub mod submit;
 pub mod template;
 
+pub use campaign::{CampaignStatus, InvalidCampaignTransition};
 pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
