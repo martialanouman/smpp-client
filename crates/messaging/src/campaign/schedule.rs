@@ -50,6 +50,24 @@ pub enum ScheduleError {
     /// to write one is the pair this refuses.
     #[error("a daily window opens and closes at the same time of day")]
     EmptyWindow,
+
+    /// One of the two ends is not an `HH:MM` time of day.
+    ///
+    /// Refused here rather than in the layer that reads the form, so the
+    /// interface has nothing to get out of step with (CLAUDE.md §4: *parse,
+    /// don't validate*, at the one point where the outside gets in).
+    #[error("a daily window is bounded by two HH:MM times of day")]
+    MalformedTime,
+
+    /// The zone offset is not one a time zone can have.
+    ///
+    /// The real range is `-12:00` (Baker Island) to `+14:00` (Kiribati), and
+    /// the bound is the real one rather than what the underlying type happens
+    /// to accept: `time` would take `+18:00` without complaint, and an operator
+    /// who meant `+08:00` and typed minutes instead of hours would get a window
+    /// silently ten hours out.
+    #[error("a time-zone offset lies between -720 and +840 minutes")]
+    OffsetOutOfRange,
 }
 
 /// What a campaign is allowed to do at a given instant.
@@ -105,6 +123,49 @@ impl DailyWindow {
             offset,
         })
     }
+
+    /// Builds a window from two `HH:MM` times and a zone offset in minutes.
+    ///
+    /// What the campaign form sends: two text fields and a signed number of
+    /// minutes east of UTC (`0` for Abidjan, `60` for Lagos, `-300` for New
+    /// York). Seconds are deliberately not accepted — a send window is an hour
+    /// policy, and `08:00:30` is a typing accident, not an intention.
+    ///
+    /// # Errors
+    ///
+    /// [`ScheduleError::MalformedTime`] when an end is not `HH:MM` or names an
+    /// hour or a minute that does not exist, [`ScheduleError::OffsetOutOfRange`]
+    /// when the offset is not one a zone can have, and
+    /// [`ScheduleError::EmptyWindow`] when the two ends are the same.
+    pub fn parse(open: &str, close: &str, offset_minutes: i32) -> Result<Self, ScheduleError> {
+        if !(Self::MIN_OFFSET_MINUTES..=Self::MAX_OFFSET_MINUTES).contains(&offset_minutes) {
+            return Err(ScheduleError::OffsetOutOfRange);
+        }
+
+        // TRUNCATING division, not Euclidean. `UtcOffset::from_hms` refuses a
+        // pair whose parts disagree in sign, and `-270` is `-04:30`: Euclidean
+        // arithmetic yields `(-5, 30)`, which is both refused and, read
+        // literally, a different offset.
+        let hours = offset_minutes / 60;
+        let minutes = offset_minutes % 60;
+
+        // INVARIANT: the range check above bounds `hours` to -12..=14 and
+        // `minutes` to -59..=59, both of which fit an `i8`, and `from_hms`
+        // accepts up to ±25:59:59.
+        let offset = i8::try_from(hours)
+            .ok()
+            .zip(i8::try_from(minutes).ok())
+            .and_then(|(hours, minutes)| UtcOffset::from_hms(hours, minutes, 0).ok())
+            .ok_or(ScheduleError::OffsetOutOfRange)?;
+
+        Self::new(parse_time(open)?, parse_time(close)?, offset)
+    }
+
+    /// Westernmost zone offset, in minutes: `-12:00`, Baker Island.
+    pub const MIN_OFFSET_MINUTES: i32 = -720;
+
+    /// Easternmost zone offset, in minutes: `+14:00`, Kiribati.
+    pub const MAX_OFFSET_MINUTES: i32 = 840;
 
     /// The time of day sending starts.
     #[must_use]
@@ -167,6 +228,25 @@ impl DailyWindow {
     fn local_time(&self, instant: Timestamp) -> Time {
         instant.as_offset_date_time().to_offset(self.offset).time()
     }
+}
+
+/// Reads one `HH:MM` end of a window.
+///
+/// Hand-written rather than a `time` format description, because the rejections
+/// have to be exactly as narrow as the doc above claims: `8:00`, `08:00:00` and
+/// `08h00` are all refused, and a two-field split over `:` says so in four
+/// lines.
+fn parse_time(raw: &str) -> Result<Time, ScheduleError> {
+    let (hours, minutes) = raw.split_once(':').ok_or(ScheduleError::MalformedTime)?;
+
+    if hours.len() != 2 || minutes.len() != 2 {
+        return Err(ScheduleError::MalformedTime);
+    }
+
+    let hours: u8 = hours.parse().map_err(|_| ScheduleError::MalformedTime)?;
+    let minutes: u8 = minutes.parse().map_err(|_| ScheduleError::MalformedTime)?;
+
+    Time::from_hms(hours, minutes, 0).map_err(|_| ScheduleError::MalformedTime)
 }
 
 /// The optional planning of a campaign (spec §10.2).
@@ -517,5 +597,98 @@ mod tests {
                 assert!(instant > now, "at {now}, waiting until {instant}");
             }
         }
+    }
+
+    // --- reading a window off the campaign form (L-010-07) ------------------
+
+    #[test]
+    fn a_window_is_read_from_two_hh_mm_ends_and_an_offset() {
+        let window = DailyWindow::parse("08:00", "20:00", 60).expect("a valid window");
+
+        assert_eq!(window.open(), Time::from_hms(8, 0, 0).expect("valid"));
+        assert_eq!(window.close(), Time::from_hms(20, 0, 0).expect("valid"));
+        assert_eq!(
+            window.offset(),
+            UtcOffset::from_hms(1, 0, 0).expect("a valid offset")
+        );
+    }
+
+    /// A zone west of Greenwich is a NEGATIVE offset in both its parts, and
+    /// `-300` minutes is `-05:00` and not `-4:-60`. Written because the obvious
+    /// `(m / 60, m % 60)` gives `(-5, 0)` here but `(0, -30)` for `-00:30`,
+    /// and `time` refuses a pair whose signs disagree.
+    #[test]
+    fn a_window_west_of_greenwich_keeps_both_parts_negative() {
+        let window = DailyWindow::parse("08:00", "20:00", -270).expect("a valid window");
+
+        assert_eq!(
+            window.offset(),
+            UtcOffset::from_hms(-4, -30, 0).expect("a valid offset")
+        );
+        assert_eq!(window.offset().whole_minutes(), -270);
+    }
+
+    #[test]
+    fn a_window_at_utc_reads_as_utc() {
+        let window = DailyWindow::parse("22:00", "06:00", 0).expect("a valid window");
+
+        assert_eq!(window.offset(), UtcOffset::UTC);
+        assert!(
+            window.contains(at("2026-07-26T23:30:00Z")),
+            "the night window"
+        );
+    }
+
+    #[test]
+    fn a_malformed_end_is_refused_rather_than_guessed() {
+        for (open, close) in [
+            ("8:00", "20:00"),
+            ("08:00:00", "20:00"),
+            ("08h00", "20:00"),
+            ("08:00", ""),
+            ("25:00", "20:00"),
+            ("08:60", "20:00"),
+            ("ab:cd", "20:00"),
+            ("08:0", "20:00"),
+        ] {
+            assert_eq!(
+                DailyWindow::parse(open, close, 0),
+                Err(ScheduleError::MalformedTime),
+                "{open:?}-{close:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_impossible_zone_offset_is_refused() {
+        for minutes in [841, -721, 100_000, -100_000] {
+            assert_eq!(
+                DailyWindow::parse("08:00", "20:00", minutes),
+                Err(ScheduleError::OffsetOutOfRange),
+                "{minutes}"
+            );
+        }
+    }
+
+    /// The extremes that DO exist: Baker Island at `-12:00`, Kiribati at
+    /// `+14:00`. A bound that refused them would refuse a real operator.
+    #[test]
+    fn the_real_extremes_of_the_zone_range_are_accepted() {
+        for minutes in [-720, 840, 345] {
+            assert!(
+                DailyWindow::parse("08:00", "20:00", minutes).is_ok(),
+                "{minutes}"
+            );
+        }
+    }
+
+    /// The ambiguity `DailyWindow::new` refuses survives the text form: an
+    /// operator who typed the same time twice meant one of two opposite things.
+    #[test]
+    fn two_identical_ends_are_still_refused_when_they_come_as_text() {
+        assert_eq!(
+            DailyWindow::parse("08:00", "08:00", 0),
+            Err(ScheduleError::EmptyWindow)
+        );
     }
 }
