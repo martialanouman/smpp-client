@@ -74,6 +74,7 @@ use crate::campaign::schedule::Schedule;
 use crate::campaign::CampaignStatus;
 use crate::encoding::EncodingChoice;
 use crate::error::MessagingError;
+use crate::message::{MessageState, MessageStateUpdate};
 use crate::ports::{MessageRepository, MessageStoreError, RecipientSource, SmscSession};
 use crate::retry::{RetryDecision, RetryPolicy, SendFailure};
 use crate::segmentation::SegmentationMode;
@@ -535,8 +536,27 @@ impl<R: MessageRepository, C: Clock> CampaignRunner<R, C> {
                     Err(error) => self.absorb(error, tally),
                 }
             }
-            // Unreachable: the branch above replaced it or returned.
-            Admission::Fresh => Ok(()),
+            // Reachable, and it took a review to see it: the insert conflicted
+            // — so a row exists — and the read that followed found none. With
+            // SQLite that is two runs of the same campaign racing, one deleting
+            // or rolling back between the other's insert and read.
+            //
+            // Counted as a skip, which is what it is: another writer holds this
+            // recipient. Not silently dropped, which is what the previous
+            // `Ok(())` did — the message fell out of every bucket and the
+            // `total == queued` balance of CA-010-02 broke with nothing to show
+            // for it.
+            Admission::Fresh => {
+                tracing::warn!(
+                    "the write-ahead key conflicted and its row could not be read back; \
+                     another run of this campaign is writing to the same journal"
+                );
+                debug_assert!(false, "a conflicting key with no row behind it");
+
+                tally.skipped += 1;
+
+                Ok(())
+            }
         }
     }
 
@@ -579,7 +599,16 @@ impl<R: MessageRepository, C: Clock> CampaignRunner<R, C> {
                     // pressing on with the next recipient while one is waiting
                     // would answer "slow down" with more traffic.
                     if !sleep_unless_cancelled(delay, control).await {
-                        tally.cancelled += 1;
+                        // CA-010-09: nothing is left undecided. The campaign is
+                        // over, so this message will never be retried — its
+                        // last attempt is its verdict, and a row left `SENT`
+                        // would stay non-terminal for ever.
+                        //
+                        // Counted as `failed` and not as `cancelled`: the
+                        // recipient WAS emitted to and the message centre
+                        // refused. `cancelled` is for the recipients nothing
+                        // was ever sent to.
+                        self.give_up(&report, tally).await;
 
                         return Ok(());
                     }
@@ -596,6 +625,34 @@ impl<R: MessageRepository, C: Clock> CampaignRunner<R, C> {
                 }
             }
         }
+    }
+
+    /// Writes the verdict of a message the campaign will not retry.
+    ///
+    /// Reached only on a cancellation, which is why a journal failure here is
+    /// logged rather than propagated: the campaign is already stopping, and
+    /// turning a cancellation into an error would hide the outcome the caller
+    /// asked for. The row then stays `SENT` and a resume — of a *different*
+    /// campaign run, since a cancelled one is terminal — would read it under
+    /// the arbitration, which is the safe direction.
+    async fn give_up(&self, report: &SendReport, tally: &mut CampaignTally) {
+        let mut verdict = MessageStateUpdate::new(report.client_message_id, MessageState::Failed)
+            .responded_at(self.sender.clock().now());
+
+        if let Some(status) = report.command_status {
+            verdict = verdict.with_command_status(status);
+        }
+
+        if let Err(error) = self.sender.repository().update_state(&verdict).await {
+            tracing::error!(
+                error = ?error,
+                "the cancelled message could not be given its verdict"
+            );
+
+            tally.not_journalled += 1;
+        }
+
+        tally.failed += 1;
     }
 
     /// The write-ahead request for one queued item.
@@ -1033,6 +1090,132 @@ mod tests {
         assert_eq!(outcome.tally.reemitted_unanswered, 0);
     }
 
+    /// **The window ADR 0014 is about, exercised end to end.**
+    ///
+    /// A `kill -9` between the `submit_sm` leaving and the outcome being
+    /// committed: the message centre took five messages and the journal recorded
+    /// none of their verdicts. What the resume must find is five rows saying *an
+    /// emission was attempted* — not five rows saying *nothing has left*, which
+    /// is what a journal written only after the answer would leave behind.
+    ///
+    /// Written first, and it failed: the rows came back `QUEUED`, so both
+    /// policies re-sent all five and `reemitted_unanswered` reported zero
+    /// duplicates at the exact moment five were going out.
+    #[tokio::test]
+    async fn a_crash_between_the_emission_and_the_verdict_leaves_the_attempt_recorded() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting();
+
+        journal.lose_verdicts(true).await;
+
+        let runner = CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour"),
+        );
+
+        runner
+            .run(&smsc, &recipients(5), &CampaignControl::new())
+            .await
+            .expect("the campaign runs");
+
+        assert_eq!(smsc.submitted(), 5);
+        assert_eq!(journal.lost_verdicts().await, 5);
+
+        for row in journal.rows().await {
+            assert_eq!(
+                row.state,
+                MessageState::Sent,
+                "a message whose submit_sm left must not look untouched"
+            );
+            assert!(row.sent_at.is_some());
+            assert_eq!(
+                row.command_status, None,
+                "no answer was journalled, and that is what makes it uncertain"
+            );
+        }
+    }
+
+    /// CA-010-05 under the policy that exists to protect against duplicates.
+    ///
+    /// An operator who chose `Abandon` said, in so many words, "I would rather
+    /// under-deliver than send twice". If the crash window leaves rows that read
+    /// as untouched, that choice buys nothing: every one of them is sent again.
+    #[tokio::test]
+    async fn a_campaign_resumed_under_abandon_sends_nothing_the_smsc_may_have_taken() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting().recording();
+
+        journal.lose_verdicts(true).await;
+
+        CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour"),
+        )
+        .run(&smsc, &recipients(5), &CampaignControl::new())
+        .await
+        .expect("the first run");
+
+        journal.lose_verdicts(false).await;
+
+        let outcome = CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour")
+                .resuming()
+                .on_unanswered(UnansweredPolicy::Abandon),
+        )
+        .run(&smsc, &recipients(5), &CampaignControl::new())
+        .await
+        .expect("the resumed run");
+
+        assert_eq!(
+            smsc.submitted(),
+            5,
+            "the resume sent again what the message centre may already have taken"
+        );
+        assert_eq!(outcome.tally.skipped, 5);
+
+        let sent = smsc.accepted_destinations().await;
+        let distinct: HashSet<String> = sent.iter().cloned().collect();
+
+        assert_eq!(sent.len(), distinct.len());
+    }
+
+    /// The default policy re-sends them — the arbitration of ADR 0014 — and the
+    /// point of this test is that the risk is **counted**. A figure that reads
+    /// zero while five duplicates go out is worse than no figure at all.
+    #[tokio::test]
+    async fn a_campaign_resumed_under_reemit_counts_every_message_it_may_duplicate() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting();
+
+        journal.lose_verdicts(true).await;
+
+        CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour"),
+        )
+        .run(&smsc, &recipients(5), &CampaignControl::new())
+        .await
+        .expect("the first run");
+
+        journal.lose_verdicts(false).await;
+
+        let outcome = CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour").resuming(),
+        )
+        .run(&smsc, &recipients(5), &CampaignControl::new())
+        .await
+        .expect("the resumed run");
+
+        assert_eq!(smsc.submitted(), 10);
+        assert_eq!(
+            outcome.tally.reemitted_unanswered, 5,
+            "every message that may reach its recipient twice is reported"
+        );
+        assert_eq!(outcome.tally.accepted, 5);
+    }
+
     // --- pause and cancel (CA-010-03, CA-010-09) ----------------------------
 
     /// CA-010-03: pausing stops the emission, and resuming sends the rest —
@@ -1250,12 +1433,100 @@ mod tests {
 
         let outcome = outcome.expect("the campaign runs");
 
+        // CA-010-09 names one second, and `retry.rs` claims it in prose. This
+        // is the assertion that holds the claim.
         assert!(
-            started.elapsed() < Duration::from_secs(3_600),
-            "the campaign waited out an hour-long retry delay it had been told to stop"
+            started.elapsed() < Duration::from_secs(1),
+            "cancelling took {:?}, and CA-010-09 allows one second",
+            started.elapsed()
         );
         assert_eq!(outcome.status, CampaignStatus::Cancelled);
         assert_eq!(smsc.submitted(), 1);
+    }
+
+    /// CA-010-09: "no message is left in an undetermined state".
+    ///
+    /// A message waiting out a replay delay when the campaign is cancelled will
+    /// never be retried — the campaign is over. Its last attempt is therefore
+    /// its verdict, and leaving the row `SENT` would leave it non-terminal for
+    /// ever, with a screen showing a message that is neither sent nor failed.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_whose_replay_was_cancelled_is_still_given_a_verdict() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting().then(Reply::Rejected(CommandStatus::EsmeRthrottled));
+        let control = CampaignControl::new();
+        let key = message_key(campaign(), &number(1));
+
+        let runner = CampaignRunner::new(
+            Sender::new(journal.clone(), FixedClock::default()),
+            plan("Bonjour").with_retry(
+                RetryPolicy::new(
+                    5,
+                    Duration::from_secs(600),
+                    Duration::from_secs(600),
+                    RetryBackoff::Fixed,
+                )
+                .expect("the bounds are valid"),
+            ),
+        );
+
+        let source = recipients(1);
+        let (outcome, ()) = tokio::join!(runner.run(&smsc, &source, &control), {
+            let control = &control;
+
+            async move {
+                tokio::time::sleep(SETTLE).await;
+                control.cancel();
+            }
+        });
+
+        let outcome = outcome.expect("the campaign runs");
+        let row = journal.row(key).await.expect("the row is there");
+
+        assert_eq!(row.state, MessageState::Failed, "left undecided");
+        assert!(row.state.is_terminal());
+        assert_eq!(row.command_status, Some(CommandStatus::EsmeRthrottled));
+        assert_eq!(outcome.tally.failed, 1);
+        assert_eq!(outcome.tally.total(), outcome.queued);
+    }
+
+    /// The crash counterpart, which no cancellation can tidy up: a process that
+    /// dies during a replay delay leaves a `SENT` row **carrying the refusal**.
+    /// The message centre answered it, so nothing was accepted and re-emitting
+    /// cannot duplicate — both policies send it, including the one whose whole
+    /// purpose is to avoid duplicates.
+    #[tokio::test]
+    async fn a_refused_message_left_by_a_crash_is_resumed_under_both_policies() {
+        for policy in [UnansweredPolicy::Reemit, UnansweredPolicy::Abandon] {
+            let journal = MemoryJournal::new();
+            let smsc = FakeSmsc::accepting();
+            let key = message_key(campaign(), &number(1));
+
+            let mut refused = journal_row(key, MessageState::Sent);
+            refused.command_status = Some(CommandStatus::EsmeRthrottled);
+            refused.attempts = 1;
+
+            journal.force_row(refused).await;
+
+            let outcome = CampaignRunner::new(
+                Sender::new(journal.clone(), FixedClock::default()),
+                plan("Bonjour").resuming().on_unanswered(policy),
+            )
+            .run(&smsc, &recipients(1), &CampaignControl::new())
+            .await
+            .expect("the campaign runs");
+
+            assert_eq!(smsc.submitted(), 1, "under {policy:?}");
+            assert_eq!(outcome.tally.accepted, 1, "under {policy:?}");
+            assert_eq!(
+                outcome.tally.reemitted_unanswered, 0,
+                "a refusal is not a duplicate risk, under {policy:?}"
+            );
+            assert_eq!(
+                journal.row(key).await.expect("the row").state,
+                MessageState::Accepted
+            );
+        }
     }
 
     // --- planning (CA-010-10) ------------------------------------------------

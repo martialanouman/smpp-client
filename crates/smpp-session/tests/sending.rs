@@ -129,13 +129,19 @@ async fn ca_006_01_a_short_message_is_accepted_and_carries_its_smsc_identifier()
     assert_eq!(row.resp_at, Some(FrozenClock::at(NOW).instant()));
     assert_eq!(row.session_id, Some(handle.session_id()));
 
-    // The full path, in order: written `QUEUED`, then moved `SENT` and
-    // `ACCEPTED` in one transaction.
+    // The full path, in order: written `QUEUED`, moved `SENT` **before** the
+    // socket in a commit of its own, then `ACCEPTED` once the answer came back.
+    //
+    // The two used to share one transaction, committed after the response.
+    // Milestone 010 split them, and the criterion is better served for it: the
+    // `SENT` a screen shows is now a state the journal really passed through
+    // and a crash can find, rather than a transient one inside a batch.
     assert_eq!(
         journal.events().await,
         vec![
             JournalEvent::Inserted(MessageState::Queued),
-            JournalEvent::Transitioned(vec![MessageState::Sent, MessageState::Accepted]),
+            JournalEvent::Transitioned(vec![MessageState::Sent]),
+            JournalEvent::Transitioned(vec![MessageState::Accepted]),
         ]
     );
 
@@ -177,10 +183,25 @@ async fn ca_006_02_the_message_is_journalled_before_any_submit_sm_reaches_the_so
 /// **CA-006-03** — a brutal stop between the persistence and the emission.
 ///
 /// The send is aborted while suspended on its first `submit`. What is left
-/// behind is a `QUEUED` row — recoverable by milestone 010 — and nothing on
-/// the wire, so nothing is duplicated either.
+/// behind is a row that says an emission was **attempted** — recoverable by
+/// milestone 010 — and the criterion's two promises hold: nothing is lost, and
+/// exactly one row exists.
+///
+/// # The state changed, and the criterion did not
+///
+/// This test asserted `QUEUED` until milestone 010, because the `SENT`
+/// transition was written after the message centre answered. That was the
+/// defect ADR 0014 records: a row reading `QUEUED` after its `submit_sm` had
+/// gone out told the resume that nothing had left, so a message the centre may
+/// have taken was re-sent unconditionally and the policy that exists to avoid
+/// that protected nothing.
+///
+/// The persistence step is now two commits — the row, then the attempt — and
+/// this test aborts in the window *after* both. The window CA-006-03 names in
+/// so many words, between the row and the attempt, is the test below, which
+/// still finds `QUEUED`.
 #[tokio::test(start_paused = true)]
-async fn ca_006_03_a_stop_between_the_write_and_the_send_leaves_the_message_queued() {
+async fn ca_006_03_a_stop_between_the_attempt_and_the_send_leaves_it_recoverable() {
     let journal = Journal::new();
     let sender = std::sync::Arc::new(a_sender(journal.clone()));
     let (session, mut reached) = HangingSession::new();
@@ -201,15 +222,58 @@ async fn ca_006_03_a_stop_between_the_write_and_the_send_leaves_the_message_queu
 
     let row = journal.row(identifier).await.expect("the row survives");
 
-    assert_eq!(row.state, MessageState::Queued);
-    assert_eq!(row.attempts, 0, "no attempt was recorded: none completed");
-    assert!(row.sent_at.is_none());
+    // `SENT` with no `command_status`: a `submit_sm` may have left and no answer
+    // was journalled. That is the uncertain family of ADR 0014, and it is what a
+    // resume has to be told.
+    assert_eq!(row.state, MessageState::Sent);
+    assert_eq!(row.attempts, 1, "the attempt was taken before the socket");
+    assert!(row.sent_at.is_some());
+    assert_eq!(row.command_status, None, "nothing answered");
+    assert!(row.resp_at.is_none(), "no verdict was reached");
     assert_eq!(journal.len().await, 1, "exactly one row, never two");
     assert_eq!(
         journal.events().await,
-        vec![JournalEvent::Inserted(MessageState::Queued)],
-        "no transition was applied"
+        vec![
+            JournalEvent::Inserted(MessageState::Queued),
+            JournalEvent::Transitioned(vec![MessageState::Sent]),
+        ],
+        "the attempt was journalled, the verdict was not"
     );
+}
+
+/// **CA-006-03**, the window it names literally: between the row and the
+/// attempt, nothing has left and the row says so.
+///
+/// The send is aborted while suspended on the transition that journals the
+/// attempt — before it, no `submit_sm` can have gone out, so the message is
+/// `QUEUED`, recoverable, and re-sending it cannot duplicate anything.
+#[tokio::test(start_paused = true)]
+async fn ca_006_03_a_stop_before_the_attempt_is_journalled_leaves_the_message_queued() {
+    let (journal, mut reached) = Journal::hanging_on_transitions();
+    let sender = std::sync::Arc::new(a_sender(journal.clone()));
+    let (smsc, _seen) = Smsc::always(Script::Accept);
+    let smsc = smsc.answering_submits_with(Vec::new(), SubmitReply::Accept);
+    let (handle, _session) = bound(a_profile(Gsm7BitCharset::Gsm0338), smsc.clone()).await;
+    let request = a_request("Bonjour");
+    let identifier = request.client_message_id;
+
+    let running = tokio::spawn({
+        let sender = std::sync::Arc::clone(&sender);
+
+        async move { sender.send(&handle, &request).await.map(|_| ()) }
+    });
+
+    reached.recv().await.expect("the send reached the journal");
+    running.abort();
+    assert!(running.await.is_err(), "the task must have been cancelled");
+
+    let row = journal.row(identifier).await.expect("the row survives");
+
+    assert_eq!(row.state, MessageState::Queued);
+    assert_eq!(row.attempts, 0, "no attempt was recorded: none was taken");
+    assert!(row.sent_at.is_none());
+    assert_eq!(smsc.submissions(), 0, "nothing reached the wire");
+    assert_eq!(journal.len().await, 1, "exactly one row, never two");
 }
 
 /// **CA-006-04** — 400 GSM characters make three segments, three `submit_sm`,
@@ -763,7 +827,8 @@ async fn a_journal_that_refuses_the_insert_sends_nothing() {
 ///
 /// So the send is reported as what it was, with `journalled = false` saying
 /// the record is missing. Note what the test asserts and what it does not: the
-/// row **is** still `QUEUED`, and that is the honest residual state.
+/// row **is** still `SENT` with no `command_status` — the same residual a crash
+/// in that window leaves, which is what a resume arbitrates (ADR 0014).
 #[tokio::test(start_paused = true)]
 async fn a_journal_failing_after_the_send_reports_the_send_rather_than_an_error() {
     let (smsc, _seen) = Smsc::always(Script::Accept);
@@ -771,7 +836,11 @@ async fn a_journal_failing_after_the_send_reports_the_send_rather_than_an_error(
         vec![SubmitReply::AcceptAs(String::from("MSG-42"))],
         SubmitReply::Accept,
     );
-    let journal = Journal::refusing_transitions(MessageStoreError::Unavailable {
+    // Refuses the VERDICT and not every transition: the attempt is journalled
+    // before the socket now, so a journal that refused everything would refuse
+    // that one too and nothing would ever be sent — a different scenario from
+    // the one this test is about.
+    let journal = Journal::refusing_verdicts(MessageStoreError::Unavailable {
         reason: String::from("database is locked"),
     });
     let sender = a_sender(journal.clone());
@@ -796,14 +865,19 @@ async fn a_journal_failing_after_the_send_reports_the_send_rather_than_an_error(
         "the caller must be able to tell that the record is missing"
     );
 
-    // The residual state, asserted rather than assumed: the row is still
-    // `QUEUED`, so a resume WOULD re-send it. That is the known window the
-    // module header describes, not something this test papers over.
+    // The residual state, asserted rather than assumed: the row says an
+    // emission was attempted and no answer was journalled, which is exactly what
+    // a crash in the same window leaves. A resume arbitrates it (ADR 0014)
+    // instead of re-sending it blindly, which is what a `QUEUED` row would have
+    // caused.
     let row = journal
         .row(request.client_message_id)
         .await
         .expect("the write-ahead row is there");
-    assert_eq!(row.state, MessageState::Queued);
+
+    assert_eq!(row.state, MessageState::Sent);
+    assert_eq!(row.command_status, None);
+    assert!(row.resp_at.is_none());
 }
 
 /// The counterpart: a journal that fails *before* the send still reports an

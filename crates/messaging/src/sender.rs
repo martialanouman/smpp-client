@@ -278,8 +278,9 @@ pub struct SendReport {
     /// Whether the journal recorded the outcome.
     ///
     /// `false` means the message **was** submitted and the message centre
-    /// answered, but the transitions could not be written: the row is still
-    /// `QUEUED`, so a resume would send it again.
+    /// answered, but the verdict could not be written: the row is still `SENT`
+    /// with no `command_status`, which is exactly what a crash in the same
+    /// window leaves, and a resume treats it under the arbitration of ADR 0014.
     ///
     /// It is a field of the report rather than an error because the two say
     /// opposite things. An error means "nothing was sent"; this means
@@ -518,37 +519,64 @@ where
             observer.state_changed(request.client_message_id, MessageState::Queued);
         }
 
-        // --- 4. Submit, correlating each response with its own request ------
+        // --- 4. Journal the ATTEMPT, before anything reaches the socket -----
+        //
+        // COMMITTED HERE, ON ITS OWN, AND NOT BATCHED WITH THE OUTCOME. This
+        // is the second half of the write-ahead of CLAUDE.md §4 — "a message is
+        // persisted before emission; its state transitions are traceable" — and
+        // it was missing.
+        //
+        // It used to be stacked with the verdict and committed after
+        // `submit_all` returned, which meant a `kill -9` between the
+        // `submit_sm` leaving and that commit left the row `QUEUED`. Every
+        // reader downstream takes `QUEUED` to mean *nothing has left, so
+        // re-sending cannot duplicate* — [`crate::campaign::resume`] says so
+        // and ADR 0014 rests on it. It was false for exactly the window the
+        // arbitration exists to cover, so
+        // `UnansweredPolicy::Abandon` protected nothing and the duplicate-risk
+        // figure read zero at the one moment duplicates were going out.
+        //
+        // The cost is one extra transaction per message, and it is the price of
+        // the row meaning what the rest of the module reads it as.
+        //
+        // A FAILURE HERE STOPS THE SEND, unlike the one below: nothing has been
+        // submitted yet, so propagating it loses nothing and sending on would
+        // put a PDU on the wire that the journal has no record of.
         let sent_at = self.clock.now();
 
-        // Announced before the first PDU leaves, and recorded only after the
-        // last response: the interface follows the message, the journal
-        // records what actually happened. Conflating the two would mean
-        // writing `SENT` before the socket, which is the trade the module
-        // header rules out.
+        self.repository
+            .update_state(
+                &MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
+                    .sent_at(sent_at, request.attempt),
+            )
+            .await?;
+
         observer.state_changed(request.client_message_id, MessageState::Sent);
 
+        // --- 5. Submit, correlating each response with its own request ------
         let Submission { outcomes, emitted } = submit_all(session, pdus).await;
         let responded_at = self.clock.now();
 
-        // --- 5. Record what happened ----------------------------------------
+        // --- 6. Record what happened ----------------------------------------
         let mut report = self.aggregate(request, session.session_id(), total, outcomes);
 
-        // `SENT` is a claim about the wire, so it is only written when
-        // something actually reached it. A submission the session refused —
-        // a receiver bind, a session that went down between the insert and
-        // here — leaves the row `QUEUED` with no `sent_at` and no attempt
-        // consumed, which is the truth and what spec §10.7 budgets against.
-        let mut transitions = Vec::with_capacity(2);
-
-        if emitted {
-            transitions.push(
-                MessageStateUpdate::new(request.client_message_id, MessageState::Sent)
-                    .sent_at(sent_at, request.attempt),
+        // The attempt is already journalled, so what is left is the verdict.
+        //
+        // `emitted` is no longer what decides whether `SENT` is written — it
+        // cannot be, since that decision is now taken before the answer exists.
+        // It is logged instead: a message the session refused before the socket
+        // carries a `sent_at` for a PDU that never left, and a resume reads it
+        // as possibly in flight. That is the residual over-claim of this
+        // ordering, and it is stated rather than hidden — see
+        // [`crate::campaign::resume`], which names the population it affects.
+        if !emitted {
+            tracing::debug!(
+                "the attempt was journalled and the session refused it before the socket; \
+                 the row over-claims until the outcome below narrows it"
             );
         }
 
-        transitions.push(self.final_transition(request, &report, responded_at));
+        let transitions = [self.final_transition(request, &report, responded_at)];
 
         // ONE transaction: the transitions are a single fact about a single
         // message, and a reader must never see `SENT` for a message whose
@@ -571,8 +599,8 @@ where
                 state = %report.state,
                 segments = total,
                 smsc_message_id = ?report.smsc_message_id,
-                "the message was submitted but its transitions could not be journalled; \
-                 the row stays QUEUED and a resume would send it again"
+                "the message was submitted but its verdict could not be journalled; \
+                 the row stays SENT, and a resume applies the arbitration of ADR 0014 to it"
             );
 
             report.journalled = false;
@@ -1066,20 +1094,57 @@ mod tests {
     }
 
     /// A resend of a message the journal does not hold is a caller mistake, and
-    /// it must surface rather than write a row nobody asked for: the transitions
-    /// come back `NotFound`, and the report says the send was not journalled.
+    /// **nothing goes on the wire** for it.
+    ///
+    /// It used to submit and report `journalled: false`, because the only write
+    /// was after the answer. Journalling the attempt first closes that: a PDU
+    /// with no row behind it is precisely what the write-ahead of CLAUDE.md §4
+    /// forbids, and a resume would have no way to know it went out.
     #[tokio::test]
-    async fn a_resend_of_an_unknown_message_reports_that_it_was_not_journalled() {
+    async fn a_resend_of_an_unknown_message_sends_nothing_at_all() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
 
-        let report = sender
-            .resend(&FakeSmsc::accepting(), &request())
+        let refusal = sender
+            .resend(&smsc, &request())
             .await
-            .expect("the submission itself succeeds");
+            .expect_err("there is no row to attach the attempt to");
 
-        assert!(!report.journalled);
+        assert!(matches!(
+            refusal,
+            MessagingError::Store(MessageStoreError::NotFound)
+        ));
+        assert_eq!(smsc.submitted(), 0);
         assert_eq!(journal.inserted().await, 0);
+    }
+
+    /// The attempt is committed **before** the socket, on its own.
+    ///
+    /// Not an implementation detail: it is what makes a `kill -9` between the
+    /// two recoverable, and the whole of ADR 0014 reads the row it leaves. The
+    /// double samples the message centre's counter from inside the journal, so
+    /// this asserts on an **order** across two components rather than on a final
+    /// state, which no final state could show.
+    #[tokio::test]
+    async fn the_attempt_is_journalled_before_any_pdu_reaches_the_message_centre() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting();
+        let request = request();
+
+        journal.witness_transitions(smsc.clone()).await;
+
+        sender
+            .send(&smsc, &request)
+            .await
+            .expect("the send happens");
+
+        assert_eq!(
+            journal.submissions_at_first_transition().await,
+            Some(0),
+            "a submit_sm crossed the wire before the attempt was journalled"
+        );
     }
 
     /// A campaign that will replay this attempt must not have it journalled

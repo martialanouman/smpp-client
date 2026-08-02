@@ -17,6 +17,10 @@
 //!    [`MessageStoreError::Conflict`](crate::ports::MessageStoreError::Conflict).
 //!    The uniqueness is enforced by the database, not by a check in a loop —
 //!    which is why it survives a process that died mid-campaign.
+//!    **This only holds because the attempt is journalled before the socket**;
+//!    a row that still read `QUEUED` after its `submit_sm` had gone out would
+//!    make every reading below wrong, which is what it did until the review of
+//!    this milestone found it.
 //! 2. **A state check before emitting.** A row that exists is not a licence to
 //!    stay silent, nor to send: [`UnansweredPolicy::admit`] reads its state and
 //!    answers. A message already `ACCEPTED` is never emitted again (CA-010-05);
@@ -29,14 +33,53 @@
 //! *accepted* one. That is the property the runner's property test asserts, over
 //! arbitrary sequences of pause, resume, failure, timeout and restart.
 //!
+//! # What `SENT` means, and the question it does not answer
+//!
+//! `SENT` says one thing: **a `submit_sm` for this message left this process**.
+//! It is written before the socket, on its own transaction, which is what makes
+//! it survive a `kill -9` in the middle of a send — see [`crate::sender`], where
+//! the ordering is stated and where it was got wrong.
+//!
+//! It says nothing about whether an **answer** came back. That is
+//! `command_status`, and the two together are what a resume reads:
+//!
+//! | Row | The message centre | Re-emitting it |
+//! |---|---|---|
+//! | `QUEUED` | never saw it | cannot duplicate |
+//! | `SENT`, a `command_status` | answered, refusing | cannot duplicate — it was not taken |
+//! | `SENT`, no `command_status` | **may or may not have taken it** | may duplicate |
+//! | `ACCEPTED` and beyond | took it | forbidden (CA-010-05) |
+//!
+//! Only the third row is uncertain, and only it is arbitrated below. Conflating
+//! it with the second — which is what reading the state alone does — makes an
+//! operator abandon a message they *know* was refused, and leaves that row
+//! non-terminal for ever.
+//!
+//! ## The residual, stated rather than hidden
+//!
+//! One case lands in the uncertain family although nothing left: a submission
+//! the **session itself** refused before writing to the socket
+//! ([`crate::ports::SubmitError::prevented_emission`]) — a session reconnecting,
+//! most often. The attempt is journalled before the port is called, so the row
+//! reads as possibly in flight. It carries no `command_status`, because no
+//! message centre answered and inventing one is not on offer.
+//!
+//! The consequence is bounded: within a run the retry budget takes such a
+//! message to `FAILED` and a resume skips it as terminal, so only a crash
+//! *during* that retry cycle leaves one behind. Under
+//! [`UnansweredPolicy::Reemit`] it is simply sent, and only the duplicate-risk
+//! figure over-reports; under [`UnansweredPolicy::Abandon`] it is skipped, and
+//! that is a message lost which never left. Narrowing it would mean recording a
+//! `command_status` no message centre sent, which the journal does not do.
+//!
 //! # The arbitration: a `SENT` message whose response never came
 //!
 //! Fiche §6 calls this a product decision, and it is. At the moment of a
-//! `kill -9`, a row in `SENT` means the `submit_sm` left this process and no
-//! response was journalled. The message centre may have accepted it and lost the
-//! answer, or never seen it. **SMPP has no way to ask**: there is no idempotency
-//! key on `submit_sm`, and `query_sm` takes the `message_id` the answer we never
-//! got would have carried.
+//! `kill -9`, a row in `SENT` with no `command_status` means the `submit_sm`
+//! left this process and no answer was journalled. The message centre may have
+//! accepted it and lost the answer, or never seen it. **SMPP has no way to
+//! ask**: there is no idempotency key on `submit_sm`, and `query_sm` takes the
+//! `message_id` the answer we never got would have carried.
 //!
 //! So there are exactly two policies, and this module names both:
 //!
@@ -151,12 +194,15 @@ pub enum Admission {
         /// after them.
         attempts_made: u32,
 
-        /// Whether the row was left **in flight** rather than merely written.
+        /// Whether the row was left **in flight** rather than answered.
         ///
-        /// `true` for a `SENT` row, which is the arbitration of the module
-        /// header: this emission may be the recipient's second copy. Carried on
-        /// the decision rather than read again by the caller — it is a fact
-        /// about the row the guard has just read, and asking the journal a
+        /// `true` only for a `SENT` row carrying no `command_status`: this
+        /// emission may be the recipient's second copy. A `SENT` row that
+        /// carries a status was answered — refused — so re-emitting it cannot
+        /// duplicate anything, and it is `false`.
+        ///
+        /// Carried on the decision rather than read again by the caller: it is a
+        /// fact about the row the guard has just read, and asking the journal a
         /// second question to learn it would double the reads of a resume.
         was_unanswered: bool,
     },
@@ -197,13 +243,27 @@ impl UnansweredPolicy {
                 was_unanswered: false,
             },
 
-            // The arbitration. See the module header.
-            MessageState::Sent => match self {
-                Self::Reemit => Admission::Resume {
+            // `SENT` says a `submit_sm` left this process. Whether an ANSWER
+            // was journalled is a separate question, and `command_status` is
+            // what answers it — the two are not the same row, and treating them
+            // as one is what made an operator on `Abandon` give up on a message
+            // they knew had been refused.
+            //
+            //   · a status is present — the centre answered, refusing. It did
+            //     not take the message, so re-emitting cannot duplicate, and
+            //     both policies do (spec §10.7 is what asked for the replay);
+            //   · no status — the answer never came, or the process died before
+            //     it was written. THIS is the arbitration of the module header.
+            MessageState::Sent => match (message.command_status, self) {
+                (Some(_), _) => Admission::Resume {
+                    attempts_made: message.attempts,
+                    was_unanswered: false,
+                },
+                (None, Self::Reemit) => Admission::Resume {
                     attempts_made: message.attempts,
                     was_unanswered: true,
                 },
-                Self::Abandon => Admission::Skip(SkipReason::Unanswered),
+                (None, Self::Abandon) => Admission::Skip(SkipReason::Unanswered),
             },
 
             // CA-010-05. Not negotiable by policy: the message centre said it
@@ -268,7 +328,15 @@ mod tests {
     use super::{message_key, Admission, EmissionGuard, SkipReason, UnansweredPolicy};
     use crate::message::{Message, MessageState};
     use crate::testing::{journal_row, MemoryJournal};
+    use smpp_core::time::Timestamp;
     use smpp_core::types::{CampaignId, ClientMessageId, Msisdn};
+    use smpp_core::values::CommandStatus;
+
+    thread_local! {
+        /// Any instant; only its presence is read.
+        static FIXED_INSTANT: Timestamp =
+            Timestamp::parse("2026-07-26T12:00:00Z").expect("the fixture is RFC 3339");
+    }
 
     fn campaign() -> CampaignId {
         CampaignId::parse("3f8d0a2e-0000-4000-8000-000000000001").expect("a valid UUID")
@@ -412,6 +480,73 @@ mod tests {
         );
         assert_eq!(
             UnansweredPolicy::Abandon.admit(Some(&sent)),
+            Admission::Skip(SkipReason::Unanswered)
+        );
+    }
+
+    /// The distinction finding 3 of the review is about, and the one that makes
+    /// the header's definition of `SENT` true again.
+    ///
+    /// A `SENT` row carrying a `command_status` is a message the centre
+    /// **answered** — and refused. Nothing about it is uncertain: it was not
+    /// accepted, so sending it again cannot produce a second copy. Both policies
+    /// re-emit it, and it is not counted as a duplicate risk.
+    ///
+    /// Without this, an operator on `Abandon` abandoned a message they *knew*
+    /// had been refused — which is not what that policy promises — and the row
+    /// stayed non-terminal for ever.
+    #[test]
+    fn a_refused_message_awaiting_its_replay_is_not_a_duplicate_risk() {
+        let mut refused = row(MessageState::Sent, 1);
+
+        refused.command_status = Some(CommandStatus::EsmeRthrottled);
+
+        for policy in [UnansweredPolicy::Reemit, UnansweredPolicy::Abandon] {
+            assert_eq!(
+                policy.admit(Some(&refused)),
+                Admission::Resume {
+                    attempts_made: 1,
+                    was_unanswered: false,
+                },
+                "under {policy:?}"
+            );
+        }
+    }
+
+    /// The other half: no answer was journalled, so the message centre may have
+    /// taken it. This is the population the arbitration is for.
+    #[test]
+    fn a_message_with_no_answer_journalled_is_the_uncertain_one() {
+        let in_flight = row(MessageState::Sent, 1);
+
+        assert_eq!(in_flight.command_status, None);
+        assert_eq!(
+            UnansweredPolicy::Reemit.admit(Some(&in_flight)),
+            Admission::Resume {
+                attempts_made: 1,
+                was_unanswered: true,
+            }
+        );
+        assert_eq!(
+            UnansweredPolicy::Abandon.admit(Some(&in_flight)),
+            Admission::Skip(SkipReason::Unanswered)
+        );
+    }
+
+    /// A **timeout** carries no `command_status`, deliberately: the message
+    /// centre said nothing, and inventing a status would put a code in the
+    /// journal nobody sent. So a timed-out attempt stays in the uncertain
+    /// family, which is right — spec §10.7 says the centre may have accepted it
+    /// and lost the answer.
+    #[test]
+    fn a_timed_out_attempt_stays_uncertain() {
+        let mut timed_out = row(MessageState::Sent, 2);
+
+        timed_out.resp_at = Some(FIXED_INSTANT.with(Clone::clone));
+        timed_out.command_status = None;
+
+        assert_eq!(
+            UnansweredPolicy::Abandon.admit(Some(&timed_out)),
             Admission::Skip(SkipReason::Unanswered)
         );
     }

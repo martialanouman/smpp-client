@@ -157,6 +157,28 @@ pub fn journal_row(client_message_id: ClientMessageId, state: MessageState) -> M
     }
 }
 
+/// A way for the journal to misbehave, for the duration of one run.
+///
+/// Set at runtime rather than at construction, because the family that matters
+/// is a **sequence**: one run whose verdicts are lost, then a resume against a
+/// journal that works. A double configured once could not express it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum JournalFault {
+    /// Everything works.
+    #[default]
+    None,
+
+    /// Verdicts are swallowed — see [`MemoryJournal::lose_verdicts`].
+    LosesVerdicts,
+
+    /// Every read fails.
+    RefusesReads,
+
+    /// Every write fails.
+    RefusesWrites,
+}
+
 /// An in-memory message journal.
 ///
 /// Reproduces the two behaviours the campaign runner depends on, and neither is
@@ -173,6 +195,14 @@ pub struct MemoryJournal {
     inner: Arc<Mutex<JournalState>>,
     reads_fail: bool,
     insert_failure: Option<MessageStoreError>,
+    /// When set, every method yields before doing anything.
+    ///
+    /// A **suspension point** per journal operation, which is what lets a
+    /// cancellation land between the guard and the send, or between the insert
+    /// and the submission, rather than only in a retry delay. Without them the
+    /// whole campaign runs in one poll and no command can interleave — which is
+    /// how a property test can look thorough and exercise one path.
+    yields: bool,
     /// When false, rows are counted and thrown away.
     ///
     /// For the volume test only, where retaining half a million rows would
@@ -187,6 +217,10 @@ struct JournalState {
     inserted: u64,
     transitions: u64,
     reads: u64,
+    fault: JournalFault,
+    lost_verdicts: u64,
+    witness: Option<FakeSmsc>,
+    submissions_at_first_transition: Option<u64>,
 }
 
 impl core::fmt::Debug for MemoryJournal {
@@ -205,6 +239,13 @@ impl MemoryJournal {
             retain: true,
             ..Self::default()
         }
+    }
+
+    /// The same journal, yielding before every operation.
+    #[must_use]
+    pub const fn yielding(mut self) -> Self {
+        self.yields = true;
+        self
     }
 
     /// A journal that counts what it is given and keeps none of it.
@@ -229,6 +270,62 @@ impl MemoryJournal {
     pub fn refusing_inserts(mut self, failure: MessageStoreError) -> Self {
         self.insert_failure = Some(failure);
         self
+    }
+
+    /// Samples `witness` the first time a transition is written.
+    ///
+    /// How an **order** across two components is asserted on: "the attempt was
+    /// journalled before any PDU left" is not a property of any final state — a
+    /// row that ends `ACCEPTED` says nothing about when it was written — and
+    /// reading the other side's counter from inside the write is the only thing
+    /// that can see it.
+    pub async fn witness_transitions(&self, witness: FakeSmsc) {
+        self.inner.lock().await.witness = Some(witness);
+    }
+
+    /// How many `submit_sm` had reached the message centre when the first
+    /// transition was written.
+    ///
+    /// `None` if no transition was ever written.
+    pub async fn submissions_at_first_transition(&self) -> Option<u64> {
+        self.inner.lock().await.submissions_at_first_transition
+    }
+
+    /// Makes the journal **swallow every verdict** it is handed.
+    ///
+    /// A verdict is a transition carrying `resp_at`: the send path writes one
+    /// exactly once, after the message centre has answered or failed to. Losing
+    /// it is not a database fault — it is what a `kill -9` looks like from the
+    /// journal's side, the process dying between the `submit_sm` leaving and the
+    /// outcome being committed.
+    ///
+    /// The transition the send path writes **before** the socket is untouched,
+    /// which is the point: it is the one that has to survive for a resume to
+    /// know an emission may have happened.
+    pub async fn lose_verdicts(&self, losing: bool) {
+        self.set_fault(if losing {
+            JournalFault::LosesVerdicts
+        } else {
+            JournalFault::None
+        })
+        .await;
+    }
+
+    /// How this journal misbehaves from now on.
+    pub async fn set_fault(&self, fault: JournalFault) {
+        self.inner.lock().await.fault = fault;
+    }
+
+    /// Yields, when this journal was built to.
+    async fn suspend(&self) {
+        if self.yields {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// How many verdicts were swallowed.
+    pub async fn lost_verdicts(&self) -> u64 {
+        self.inner.lock().await.lost_verdicts
     }
 
     /// Writes a row directly, bypassing the transition rules.
@@ -314,11 +411,17 @@ impl MemoryJournal {
 
 impl MessageRepository for MemoryJournal {
     async fn insert_message(&self, message: &Message) -> Result<(), MessageStoreError> {
+        self.suspend().await;
+
         if let Some(failure) = self.insert_failure.clone() {
             return Err(failure);
         }
 
         let mut state = self.inner.lock().await;
+
+        if state.fault == JournalFault::RefusesWrites {
+            return Err(unavailable());
+        }
 
         if self.retain {
             if state.rows.contains_key(&message.client_message_id) {
@@ -347,15 +450,17 @@ impl MessageRepository for MemoryJournal {
         &self,
         client_message_id: ClientMessageId,
     ) -> Result<Option<Message>, MessageStoreError> {
-        if self.reads_fail {
-            return Err(MessageStoreError::Unavailable {
-                reason: String::from("the journal is unavailable"),
-            });
+        self.suspend().await;
+
+        let mut state = self.inner.lock().await;
+
+        if self.reads_fail || state.fault == JournalFault::RefusesReads {
+            return Err(unavailable());
         }
 
-        self.inner.lock().await.reads += 1;
+        state.reads += 1;
 
-        Ok(self.row(client_message_id).await)
+        Ok(state.rows.get(&client_message_id).cloned())
     }
 
     async fn find_message_by_smsc_id(
@@ -363,10 +468,10 @@ impl MessageRepository for MemoryJournal {
         smsc_message_id: &str,
         session_id: Option<SessionId>,
     ) -> Result<Option<Message>, MessageStoreError> {
+        self.suspend().await;
+
         if self.reads_fail {
-            return Err(MessageStoreError::Unavailable {
-                reason: String::from("the journal is unavailable"),
-            });
+            return Err(unavailable());
         }
 
         Ok(self
@@ -390,8 +495,31 @@ impl MessageRepository for MemoryJournal {
         &self,
         updates: &[MessageStateUpdate],
     ) -> Result<u64, MessageStoreError> {
+        self.suspend().await;
+
         let mut state = self.inner.lock().await;
         let mut written = 0;
+
+        if state.fault == JournalFault::RefusesWrites {
+            return Err(unavailable());
+        }
+
+        if state.submissions_at_first_transition.is_none() {
+            if let Some(witness) = state.witness.clone() {
+                state.submissions_at_first_transition = Some(witness.submitted());
+            }
+        }
+
+        // A crash after the emission and before the commit. The call is
+        // reported as having happened — the process died, it did not get an
+        // error back — and nothing is written.
+        if state.fault == JournalFault::LosesVerdicts
+            && updates.iter().any(|update| update.resp_at.is_some())
+        {
+            state.lost_verdicts += 1;
+
+            return Ok(0);
+        }
 
         for update in updates {
             if !self.retain {
@@ -411,6 +539,13 @@ impl MessageRepository for MemoryJournal {
         state.transitions += written;
 
         Ok(written)
+    }
+}
+
+/// The failure a journal reports when it will not answer.
+fn unavailable() -> MessageStoreError {
+    MessageStoreError::Unavailable {
+        reason: String::from("the journal is unavailable"),
     }
 }
 
@@ -444,6 +579,7 @@ struct SmscState {
     submitted: AtomicU64,
     destinations: Mutex<Option<Vec<(String, bool)>>>,
     gate: Option<Semaphore>,
+    yields: bool,
 }
 
 impl core::fmt::Debug for FakeSmsc {
@@ -464,8 +600,22 @@ impl FakeSmsc {
                 submitted: AtomicU64::new(0),
                 destinations: Mutex::new(None),
                 gate: None,
+                yields: false,
             }),
         }
+    }
+
+    /// The same message centre, yielding before it answers.
+    ///
+    /// One more suspension point, in the middle of the send path: between the
+    /// journalled attempt and the verdict. See [`MemoryJournal::yielding`].
+    #[must_use]
+    pub fn yielding(mut self) -> Self {
+        if let Some(state) = Arc::get_mut(&mut self.inner) {
+            state.yields = true;
+        }
+
+        self
     }
 
     /// A message centre that answers `replies` in order, then accepts.
@@ -582,6 +732,10 @@ impl SmscSession for FakeSmsc {
     }
 
     async fn submit(&self, pdu: Pdu) -> Result<Command, SubmitError> {
+        if self.inner.yields {
+            tokio::task::yield_now().await;
+        }
+
         if let Some(gate) = self.inner.gate.as_ref() {
             // `forget` rather than dropping the permit: the point of the gate is
             // that a submission consumes one, so a released permit lets exactly

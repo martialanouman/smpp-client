@@ -29,6 +29,11 @@
 //! that must interrupt it (CA-010-09: cancelling stops sending in under a
 //! second, and a task parked in a `sleep` that nothing can wake does not).
 //!
+//! That claim is held by an assertion rather than left as prose:
+//! `cancelling_interrupts_a_retry_delay`, in [`crate::campaign::runner`],
+//! cancels a campaign parked in an hour-long delay and measures how long the
+//! run takes to return.
+//!
 //! There is deliberately **no jitter** here, unlike the reconnection back-off.
 //! Jitter exists to stop independent clients retrying in lockstep after a
 //! common outage; the retries of one campaign are issued by one feeder through
