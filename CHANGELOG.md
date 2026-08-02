@@ -35,12 +35,17 @@ majeur.
   finale — statut terminal et `done: true` — par un émetteur **inconditionnel**.
   C'est le défaut de `sessions:state` au jalon 007, refusé à l'endroit où il
   aurait coûté le plus cher.
-- **Le débit affiché ne vient pas de cet événement** : la charge utile porte les
-  compteurs et le `sessionId`, et l'IHM lit le débit du `metrics:tick` de cette
-  session (jalon 007). Écart assumé avec la lettre de la spec §15.3
-  (« compteurs + débit »), consigné dans l'ADR 0015 : un second chiffre pour la
-  même chose serait différent de celui des écrans Sessions et Tableau de bord, et
-  sa précision dépendrait de la cadence d'affichage.
+- **Le débit porté est celui de la campagne**, pas celui de la session
+  (spec §15.3, ADR 0015) : les messages que le SMSC a **acceptés** pour cette
+  campagne, par seconde, sur une fenêtre glissante de dix secondes
+  (`messaging::AcceptanceRate`). Mesuré dans le producteur contre l'horloge
+  injectée du runner, jamais dérivé côté WebView — sa précision dépendrait sinon
+  de la cadence d'affichage. `metrics:tick` mesure la **session** : un envoi
+  unitaire effectué pendant qu'une campagne tourne y est compté, donc à côté des
+  compteurs d'une campagne il décrirait autre chose.
+- **Des acceptations, pas des tentatives** : un message refusé puis rejoué deux
+  fois est une livraison de travail. Compter les tentatives mettrait le débit
+  d'une campagne à son maximum au moment précis où le SMSC refuse tout.
 - **La progression n'est pas le journal** : une campagne de 500 000
   destinataires ne pousse pas 500 000 événements. Le détail message par message
   se lit par pagination via `logs_query`, filtré sur la campagne — la même règle,
@@ -68,6 +73,21 @@ majeur.
   quelqu'un a double-cliqué sur l'icône est exactement ce contre quoi CLAUDE.md
   §8 demande des garde-fous. La reprise est un clic explicite.
 - Sept codes d'erreur (`CAMPAIGN_*`), traduits en français et en anglais.
+
+### Non couvert par le jalon 010, sous-PR D
+
+- **CA-010-12 (recette M3) n'est pas vérifié** : aucun `src-tauri/tests/`, et
+  aucune campagne n'a jamais envoyé un message à travers l'IPC. Chaque pièce est
+  testée séparément — runner contre SMSC factice, source de destinataires et
+  cycle de vie contre une vraie base, validation des commandes — l'assemblage et
+  le redémarrage à froid en cours de campagne massive ne le sont pas.
+- **CA-010-11 n'est vérifié que comme mécanisme** : le débit d'émission de
+  l'événement est prouvé à 4 Hz quel que soit celui de la campagne ; « sans
+  dégradation à débit maximal » n'a pas été mesuré à l'écran.
+- **`campaigns.delivered_count` n'est alimenté par rien** et n'est donc **pas**
+  affiché : un zéro permanent à côté de cinq chiffres exacts se lit comme « le
+  SMSC a tout accepté et rien n'est arrivé ». Il revient au jalon 014.
+- La liste complète est dans `tasks-todo/step-010.md` §7.
 
 ### Ajouté — jalon 010, campagnes : `submit_multi` et repli automatique
 

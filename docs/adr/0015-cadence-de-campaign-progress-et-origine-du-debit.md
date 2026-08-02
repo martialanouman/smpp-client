@@ -75,41 +75,55 @@ publication finale que `contacts.rs` obtient en `await`ant son forwarder.
   précision des chiffres ne dépend **pas** de la cadence d'affichage. C'est la
   dépendance que le jalon 007 avait déjà refusé d'introduire pour le débit.
 
-## Décision 2 — La charge utile ne porte **pas** de débit
+## Décision 2 — La charge utile porte le débit **de la campagne**
 
-`campaign:progress` porte les compteurs et le `session_id` de la session
-d'envoi. Le débit affiché à côté de la barre est celui de `metrics:tick` pour
-cette session (`ui/src/store/metrics.ts`).
+`campaign:progress` porte les compteurs, le `session_id` et
+`accepted_per_second` : les messages que le SMSC a **acceptés** pour cette
+campagne, par seconde, sur une fenêtre glissante de dix secondes.
 
-**C'est un écart avec la lettre de la spec §15.3**, qui écrit « compteurs +
-débit ». Il est délibéré et signalé plutôt que tranché en silence.
+Il est mesuré par `messaging::campaign::progress::AcceptanceRate`, dans le
+producteur, contre l'horloge **injectée** du runner (CLAUDE.md §7) — jamais
+dérivé côté WebView.
 
-### Pourquoi
+### Options examinées
 
-Le jalon 007 mesure déjà le débit d'une session : moyennes glissantes 1 s / 10 s,
-occupation de fenêtre, RTT, tenues à **plein régime** dans `smpp-session` et
-échantillonnées à 4 Hz (spec §9.6). Un second chiffre serait :
+**Option A — lire `metrics:tick` et ne rien porter ici.** C'est ce qui avait été
+écrit d'abord, au motif que le jalon 007 mesure déjà un débit à plein régime et
+qu'un second chiffre serait un second chiffre à tenir. **Écartée**, et par sa
+propre réserve : `metrics:tick` mesure la **session**, donc un envoi unitaire
+effectué pendant qu'une campagne tourne y est compté. Le nombre affiché à côté
+des compteurs d'une campagne ne décrivait alors pas cette campagne. Deux nombres
+présentés ensemble doivent parler de la même chose ; c'est aussi la lettre de la
+spec §15.3, qui écrit « compteurs + débit » pour cet événement.
 
-- **différent** — calculé sur une autre fenêtre, par un autre code, et affiché à
-  côté des jauges des écrans Sessions et Tableau de bord qui montreraient autre
-  chose pour la même chose ;
-- **fragile** — s'il était dérivé côté WebView des quatre échantillons par
-  seconde qui y parviennent, sa précision dépendrait de
-  `CAMPAIGN_PROGRESS_INTERVAL`, si bien que resserrer la cadence pour protéger le
-  pont dégraderait silencieusement une mesure. C'est exactement la dépendance que
-  la fiche du jalon 007 demandait d'éviter.
+**Option B — dériver le débit dans la WebView, à partir des compteurs reçus.**
+*Contre :* la précision dépendrait de `CAMPAIGN_PROGRESS_INTERVAL`, si bien que
+resserrer la cadence pour protéger le pont dégraderait silencieusement une
+mesure. C'est exactement la dépendance que la décision 1 est arrangée pour
+éviter, et CLAUDE.md §3 garde ce genre de calcul hors de la WebView.
+
+**Option C, retenue — mesurer dans le producteur, à partir des acceptations.**
+La fenêtre vit dans la boucle du runner, qui la possède seule : pas de verrou,
+pas d'atomique, et une horloge injectée qui rend une mesure de dix secondes
+testable en microsecondes.
+
+### Ce qui est compté, et ce qui ne l'est pas
+
+Des **acceptations**, pas des soumissions. Un message refusé puis rejoué deux
+fois représente une livraison de travail : compter les tentatives mettrait le
+débit d'une campagne à son maximum précisément au moment où le SMSC refuse tout.
 
 ### Conséquences assumées
 
-- **Le chiffre affiché est celui de la session, pas de la campagne.** Un envoi
-  unitaire effectué sur la même session pendant qu'une campagne tourne y est
-  compté. Au jalon 010 une campagne cible une seule session et la garde pour la
-  durée de son exécution, donc c'est un coin et non le cas courant ; la
-  répartition sur plusieurs sessions est le jalon 011, qui devra reposer la
-  question.
-- Un consommateur du contrat IPC qui lirait la spec §15.3 et attendrait un champ
-  `débit` ne le trouvera pas. Le champ `sessionId` est là pour ça, et la
-  documentation de `CampaignProgressEvent` le dit à l'endroit où on la lira.
+- `metrics:tick` garde sa place et son sens : c'est le débit de la **session**,
+  et les écrans Sessions et Tableau de bord l'affichent à ce titre. Les deux
+  chiffres peuvent différer, et c'est la raison d'être des deux.
+- Une fenêtre de dix secondes est plus lisse qu'une seconde : un opérateur veut
+  savoir si la campagne avance, pas ce qui s'est passé dans les 250 dernières
+  millisecondes. Le diviseur est la portion de fenêtre réellement écoulée, sinon
+  la première seconde d'une campagne s'afficherait au dixième de son débit réel.
+- Un silence supérieur à la fenêtre ramène le débit à zéro tout seul, ce qui est
+  la lecture juste : une campagne dont le SMSC ne répond plus est arrêtée.
 
 ## Décision 3 — Le détail message par message n'est **pas** dans cet événement
 
