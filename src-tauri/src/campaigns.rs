@@ -830,10 +830,14 @@ mod tests {
 
     const INTERVAL: Duration = Duration::from_millis(250);
 
-    /// How long a test waits before concluding a future is not going to resolve.
-    /// Virtual time, under : it costs nothing and it is the same
-    /// on every machine.
-    const SETTLE: Duration = Duration::from_millis(50);
+    /// **Real** time given to a task that must make no progress.
+    ///
+    /// Only for `every_status_writer_waits_for_the_live_table`, which is the one
+    /// test here that cannot use a virtual clock because it drives a SQLx pool —
+    /// its header says why at length. Two hundred milliseconds against writers
+    /// that would otherwise complete in microseconds: four orders of magnitude,
+    /// paid once.
+    const RESPITE: Duration = Duration::from_millis(200);
 
     // --- the recipient source ------------------------------------------------
 
@@ -1230,59 +1234,180 @@ mod tests {
         );
     }
 
-    /// **Every status writer takes the live table's lock.**
+    /// **Every status writer waits for the live table's lock.**
     ///
-    /// Holding it from outside and watching each writer fail to make progress
-    /// is what says so.
+    /// # What it asserts, and what it leaves to the compiler
     ///
-    /// What this test does **not** assert is that the lock is held across the
-    /// whole read-modify-write — an implementation that took it, removed its
-    /// entry and released it before writing passed this test unchanged, which is
-    /// how the gap was found. That half is a compile-time guarantee instead:
-    /// `write_status` and `settle` take a [`Held`] and cannot be reached
-    /// without one.
+    /// That a writer takes the lock, and that its write lands only once the lock
+    /// is free. It does **not** assert that the lock is held across the whole
+    /// read-modify-write: an implementation that took it, removed its entry and
+    /// released it before writing passed this test unchanged, which is how that
+    /// gap was found. That half is a compile-time guarantee instead —
+    /// `write_status` and `settle` take a [`Held`] and cannot be reached without
+    /// one, so the shape no longer compiles.
+    ///
+    /// # NO VIRTUAL CLOCK HERE, and that is the whole point
+    ///
+    /// This test used `tokio::time::pause()` and inferred the wait from a
+    /// `timeout` expiring. It passed on macOS and Windows and failed on Ubuntu,
+    /// on its **last** line — the write issued *after* the lock was released.
+    ///
+    /// Virtual time and a real connection pool do not mix. SQLx measures its
+    /// acquire timeout on the same clock, so the moment the pool has to open a
+    /// connection the runtime goes idle waiting on the blocking connect, tokio's
+    /// auto-advance jumps to the next armed timer, and the acquire deadline
+    /// fires instantly: `PoolTimedOut`, surfaced as `CAMPAIGN_STORAGE`.
+    ///
+    /// Measured rather than assumed. Under `tokio::time::pause()`, fourteen of
+    /// sixteen concurrent reads on a *warm* pool failed exactly that way, and the
+    /// two that reused an already-open connection succeeded; the old shape, made
+    /// to race the pool for a connection, failed on precisely the CI line with
+    /// precisely the CI error. The size of the clock jump is irrelevant — whether
+    /// a connection has to be opened is everything, and that depends on the
+    /// runner's disk.
+    ///
+    /// So the clock is left alone, and the two directions are stated
+    /// differently:
+    ///
+    /// * **while the table is held**, the assertion is on the campaign row —
+    ///   *no status was written* — which is the property itself, observed,
+    ///   rather than deduced from a future that made no progress;
+    /// * **after the release**, the writer is awaited with **no timeout at all**,
+    ///   and the ordering is read off a log both sides append to. "It completed
+    ///   after the release" is then a constatation.
+    ///
+    /// The one inference left is [`RESPITE`], and it is worth naming: a writer
+    /// that did not take the lock would finish in microseconds — this suite runs
+    /// a hundred tests in a tenth of a second — so the margin is four orders of
+    /// magnitude, and it no longer depends on the disk, because nothing here
+    /// touches the pool while blocked.
+    ///
+    /// # The two writers are driven one after the other
+    ///
+    /// Deliberately, and it is not tidiness: run together they race for the lock
+    /// once it is free, and `finish` winning would take the row to `COMPLETED` —
+    /// after which `pause`'s move to `PAUSED` is refused by the lifecycle and the
+    /// test fails for a reason that has nothing to do with what it checks. One
+    /// phase each, with the row moving `RUNNING -> PAUSED -> COMPLETED` along the
+    /// legal path.
     #[tokio::test]
     async fn every_status_writer_waits_for_the_live_table() {
         let (_directory, services) = services().await;
+        let services = Arc::new(services);
         let campaign = a_campaign(CampaignStatus::Running);
 
         services.save(&campaign).await.expect("the row is written");
 
-        // Virtual time from HERE, not from the top of the test: SQLx measures
-        // its pool-acquire timeout against the same clock, and a paused one
-        // makes opening the database fail with `PoolTimedOut` before the test
-        // has begun. Pausing after the pool is warm costs nothing and keeps the
-        // waits below deterministic.
-        tokio::time::pause();
+        let log = Arc::new(tokio::sync::Mutex::new(Vec::<&'static str>::new()));
 
-        let held = services.inner.running.lock().await;
+        // --- phase one: `pause`, which reports its own refusal ---------------
+        {
+            let held = services.inner.running.lock().await;
 
-        assert!(
-            tokio::time::timeout(SETTLE, services.pause(campaign.campaign_id))
+            let writer = {
+                let services = Arc::clone(&services);
+                let log = Arc::clone(&log);
+                let campaign_id = campaign.campaign_id;
+
+                tokio::spawn(async move {
+                    let outcome = services.pause(campaign_id).await;
+
+                    log.lock().await.push("pause wrote");
+
+                    outcome
+                })
+            };
+
+            tokio::time::sleep(RESPITE).await;
+
+            // THE PROPERTY, observed on the row rather than deduced from a
+            // future that has not finished.
+            assert_eq!(
+                services
+                    .find(campaign.campaign_id)
+                    .await
+                    .expect("the row is there")
+                    .status,
+                CampaignStatus::Running,
+                "pause wrote a status while the live table was held"
+            );
+
+            log.lock().await.push("released");
+            drop(held);
+
+            // No timeout: this is the line that broke on Ubuntu, and there is
+            // nothing left here that a slow machine can turn into a failure.
+            writer
                 .await
-                .is_err(),
-            "pause wrote a status without holding the live table"
-        );
-        assert!(
-            tokio::time::timeout(
-                SETTLE,
-                services.inner.finish(
-                    campaign.campaign_id,
-                    CampaignStatus::Completed,
-                    &CampaignTally::default(),
-                ),
-            )
-            .await
-            .is_err(),
-            "the finishing task wrote a status without holding the live table"
+                .expect("the writer task ran")
+                .expect("the pause goes through once the table is free");
+        }
+
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Paused
         );
 
-        drop(held);
+        // --- phase two: `finish`, which reports nothing and writes the row ---
+        {
+            let held = services.inner.running.lock().await;
 
-        services
-            .pause(campaign.campaign_id)
-            .await
-            .expect("the pause goes through once the table is free");
+            let writer = {
+                let services = Arc::clone(&services);
+                let log = Arc::clone(&log);
+                let campaign_id = campaign.campaign_id;
+
+                tokio::spawn(async move {
+                    services
+                        .inner
+                        .finish(
+                            campaign_id,
+                            CampaignStatus::Completed,
+                            &CampaignTally::default(),
+                        )
+                        .await;
+
+                    log.lock().await.push("finish wrote");
+                })
+            };
+
+            tokio::time::sleep(RESPITE).await;
+
+            assert_eq!(
+                services
+                    .find(campaign.campaign_id)
+                    .await
+                    .expect("the row is there")
+                    .status,
+                CampaignStatus::Paused,
+                "the finishing task wrote a status while the live table was held"
+            );
+
+            log.lock().await.push("released");
+            drop(held);
+
+            writer.await.expect("the writer task ran");
+        }
+
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Completed
+        );
+
+        // Each write landed AFTER its release, which is the ordering the whole
+        // test is about — read off the log rather than inferred from a clock.
+        assert_eq!(
+            log.lock().await.as_slice(),
+            ["released", "pause wrote", "released", "finish wrote"]
+        );
     }
 
     // --- what a reading carries ----------------------------------------------
