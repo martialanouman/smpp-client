@@ -42,19 +42,45 @@ majeur.
   la socket. Une ligne par lot rendrait 253 destinataires invisibles à la reprise
   de la spec §10.5 — le défaut que la revue de `sender` a corrigé, réintroduit à
   l'échelle 254.
-- **Un refus inattribuable annule tous les verdicts du lot**
-  (`match_refusals`) : si une entrée `unsuccess_sme` nomme une adresse que le lot
-  ne porte pas, ou s'il y en a plus que de destinataires, **aucun** destinataire
-  n'est déclaré accepté. Le contraire est la sur-déclaration silencieuse : un
-  SMSC qui cite les adresses refusées sous une forme non reconnue ferait
-  journaliser `ACCEPTED` un lot entier de messages refusés, sans erreur ni ligne
-  de log. Les lignes restent dans la famille incertaine d'ADR 0014.
+- **Toute ambiguïté annule les verdicts du lot** (`match_refusals`) : un refus
+  est attribué seulement s'il nomme **exactement un** destinataire, et un
+  destinataire n'est refusé **qu'une fois**. Quatre situations rendent `None` —
+  plus de refus que de destinataires, un refus ne nommant personne, un refus
+  nommant **deux** destinataires, **deux** refus nommant le même. Le contraire
+  est la sur-déclaration silencieuse : un SMSC qui cite les adresses refusées
+  sous une forme non reconnue ferait journaliser `ACCEPTED` un lot entier de
+  messages refusés, sans erreur ni ligne de log. Le troisième cas n'est pas
+  hypothétique : `Destination::parse_with` construit deux destinations
+  **légitimement distinctes** à partir des mêmes chiffres sous deux TON, et
+  `unsuccess_sme` ne les sépare pas.
+- **Ce que le lot laisse en base dépend de `last_attempt`** : `SENT` sans
+  `command_status` — la famille incertaine d'ADR 0014, que la reprise arbitre —
+  tant que l'appelant a des tentatives ; `FAILED`, terminal et jamais relu par
+  la reprise, sur la dernière, qui est le **défaut** de `Batch::new`. Même règle
+  que `Sender::final_transition`, énoncée avec sa condition.
+- **Un refus de la session avant la socket n'est pas une absence de réponse** :
+  `SubmitError::prevented_emission()` est une garantie du port, donc ces
+  destinataires n'ont rien reçu et ne sont pas des risques de doublon —
+  `RecipientOutcome::NotEmitted`, exclus de `BatchReport::at_risk_of_duplication`.
+  Les confondre multipliait par 254 le résidu qu'ADR 0014 dimensionne comme « au
+  plus la fenêtre d'émission ».
+- **Une ligne conflictuelle est une question, pas une réponse** : le lot
+  interroge `EmissionGuard` sur un conflit d'insertion, exactement comme le
+  moteur de campagne. Sans quoi une ligne `QUEUED` laissée par une exécution
+  interrompue en cours d'insertion excluait **définitivement** son destinataire.
+  `BatchReport::reemitted_unanswered` chiffre les lignes reprises en vol.
+- **Le verrou de support est lié à son `SessionId`** : ce qu'un bind a appris ne
+  dit rien d'un autre. Un verrou étranger ne désactive pas le groupage sur un
+  centre qui le supporte, il fait simplement envoyer un par un
+  (`FallbackReason::ForeignLatch`). Une réponse inattribuable verrouille la
+  session : le centre citera ses refus de la même façon au lot suivant.
 - **Test de propriété** (`tests/submit_multi_fallback.rs`) : sur des réponses
   arbitraires du SMSC, aucun destinataire n'est perdu et aucun n'est déclaré
   accepté sans que le SMSC l'ait pris — vérifié contre l'enregistrement du SMSC
-  factice. Le générateur est **recensé** : chaque famille (repli après émission,
-  repli avant, lot partiellement accepté, refus inattribuable, ligne déjà
-  présente) a un plancher assertionné.
+  factice. Le générateur est **recensé sur douze graines** et chaque plancher
+  vaut la moitié du minimum mesuré, donc 2× de marge : un plancher franchi par
+  chance n'est pas une garantie. Douze familles couvertes, dont l'abonné répété,
+  la ligne échouée en `QUEUED`, la ligne en vol et le refus pré-socket.
 
 ### Limitation connue — accusés de livraison d'un envoi groupé
 

@@ -85,6 +85,26 @@
 //! rows ever passing through the resume where ADR 0014 arbitrates and where the
 //! duplicate is **counted**.
 //!
+//! # What an uncertain batch leaves in the journal, exactly
+//!
+//! It depends on [`Batch::last_attempt`], and the difference is not cosmetic —
+//! it decides whether ADR 0014's arbitration ever runs for these rows:
+//!
+//! | `last_attempt` | Row | A resume |
+//! |---|---|---|
+//! | `false` — the caller will try again | `SENT`, no `command_status` | arbitrates it (ADR 0014's third line) |
+//! | `true` — this verdict is final | `FAILED` | never reads it; `FAILED` is terminal |
+//!
+//! The second row is the **default** of [`Batch::new`], and it is the same rule
+//! [`crate::sender::Sender`] applies to a unit send: the attempt nobody will
+//! replay is the one that writes the terminal state, or a message the campaign
+//! has given up on would stay non-terminal for ever. The consequence to be
+//! aware of is that a batch sent with `last_attempt` and never answered writes
+//! up to 254 `FAILED` rows for messages the centre may have delivered — visible
+//! in the journal as failures, never re-sent, and never arbitrated. A caller
+//! that wants the arbitration must say it has attempts left, which is what
+//! [`Batch::with_more_attempts_allowed`] is for.
+//!
 //! # Why the fallback cannot duplicate
 //!
 //! ADR 0014's table has four rows; the fallback fires on the second one only.
@@ -120,6 +140,7 @@ use smpp_core::types::{CampaignId, ClientMessageId, Msisdn, SessionId};
 use smpp_core::values::{CommandId, CommandStatus, DestAddress, SmeAddress};
 
 use crate::addressing::Destination;
+use crate::campaign::resume::{Admission, EmissionGuard, UnansweredPolicy};
 use crate::encoding::EncodingChoice;
 use crate::error::MessagingError;
 use crate::message::{MessageState, MessageStateUpdate};
@@ -285,10 +306,11 @@ pub struct Refusal {
 /// fallback would then deliver every one of them a second copy, inside a single
 /// run, without the row ever passing through the resume where the arbitration
 /// lives and where the duplicate would be **counted**. So there is no fallback:
-/// the batch is left uncertain, the rows say so — `SENT` with no
-/// `command_status`, which is precisely ADR 0014's third line — and the
-/// duplicate, if the operator's policy chooses one, is issued and counted by the
-/// resume.
+/// the batch is left uncertain, and [`Batch::last_attempt`] decides what the
+/// rows then say. See [`verdict_update`] — the short version is that a caller
+/// with attempts left leaves them `SENT` without a `command_status`, ADR 0014's
+/// third line, and a caller on its last attempt renders the verdict and writes
+/// `FAILED`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MultiResponse {
@@ -386,6 +408,26 @@ pub fn read_multi_response(response: &Command) -> MultiResponse {
 /// message centre did not refuse — it took the message — and `Some(status)` for
 /// one it did.
 ///
+/// # One rule: any ambiguity voids the batch
+///
+/// A refusal is attributed only when it names **exactly one** recipient, and
+/// each recipient is refused **at most once**. Four situations return `None`,
+/// and they are the same situation:
+///
+/// | The answer | Why nothing can be claimed |
+/// |---|---|
+/// | more refusals than recipients | at least one names nobody |
+/// | a refusal naming nobody in the batch | the addresses are not comparable |
+/// | a refusal naming **two** recipients | which of the two was refused? |
+/// | **two** refusals naming one recipient | which status is the verdict? |
+///
+/// The third row is not hypothetical and it is not only about a subscriber
+/// listed twice. [`Destination::parse_with`] builds two *legitimately distinct*
+/// destinations out of the same digits under different TONs — a short code and
+/// an international number — and `unsuccess_sme` gives this client nothing that
+/// separates them. Attributing to the first would leave the second reported
+/// `Accepted` for a message centre that took nobody.
+///
 /// # `None`, and why it is all-or-nothing
 ///
 /// `None` means at least one refusal could not be attributed: it names an
@@ -400,9 +442,11 @@ pub fn read_multi_response(response: &Command) -> MultiResponse {
 /// messages is journalled `ACCEPTED`. Nobody would see it — no error, no log,
 /// no failed message — until the delivery figures were queried weeks later.
 ///
-/// Voiding the batch instead costs precision and no correctness: the rows stay
-/// in the uncertain family of ADR 0014, where a resume re-emits them under the
-/// operator's policy and **counts** what it did.
+/// Voiding the batch instead costs precision and no correctness: no recipient
+/// is claimed either way, and what the rows then say follows
+/// [`Batch::last_attempt`] — the uncertain family of ADR 0014 while the caller
+/// has attempts left, a rendered `FAILED` verdict on the last one. See
+/// [`verdict_update`].
 ///
 /// # What matching tolerates
 ///
@@ -426,15 +470,36 @@ pub fn match_refusals(
         let quoted = refusal.destination.trim();
         let quoted = quoted.strip_prefix('+').unwrap_or(quoted);
 
-        let matched = destinations
+        let mut naming = destinations
             .iter()
-            .position(|destination| destination.number().as_str() == quoted)?;
+            .enumerate()
+            .filter(|(_, destination)| destination.number().as_str() == quoted);
 
-        // `get_mut` rather than indexing: `position` returns an index into the
-        // same slice `verdicts` was sized from, so this cannot fail — and an
-        // index that panicked on a message centre's answer would be a remote
-        // peer crashing the client.
-        *verdicts.get_mut(matched)? = Some(refusal.status);
+        // EXACTLY ONE, and `next()` twice rather than `position()`. `position`
+        // returns the FIRST match and says nothing about the second, which is
+        // how a batch carrying one subscriber twice — or two destinations
+        // differing only by their TON — had the refusal pinned on one of them
+        // and the other reported accepted.
+        let (matched, _) = naming.next()?;
+
+        if naming.next().is_some() {
+            return None;
+        }
+
+        // `get_mut` rather than indexing: the index comes from the same slice
+        // `verdicts` was sized from, so this cannot fail — and an index that
+        // panicked on a message centre's answer would be a remote peer crashing
+        // the client.
+        let verdict = verdicts.get_mut(matched)?;
+
+        // Already refused by an earlier entry, with a status that may not be
+        // this one. Overwriting kept whichever arrived last and called it the
+        // verdict; this function does not guess.
+        if verdict.is_some() {
+            return None;
+        }
+
+        *verdict = Some(refusal.status);
     }
 
     Some(verdicts)
@@ -573,9 +638,30 @@ pub enum RecipientOutcome {
     /// cannot be attributed ([`match_refusals`]).
     ///
     /// The row is left in the uncertain family of ADR 0014 — `SENT` with no
-    /// `command_status` — which is where the duplicate arbitration lives and
-    /// where the duplicate gets counted.
+    /// `command_status`, when the caller still has attempts left — which is
+    /// where the duplicate arbitration lives and where the duplicate gets
+    /// counted. On a **last** attempt the verdict is rendered instead, and the
+    /// row is `FAILED`; see [`verdict_update`].
     Uncertain,
+
+    /// The **session** refused the submission before writing to the socket.
+    ///
+    /// Distinct from [`Self::Uncertain`], and the distinction is the whole
+    /// point: [`SubmitError::prevented_emission`] is a *guarantee* of the port,
+    /// not a hint, so this recipient certainly received nothing and re-sending
+    /// certainly cannot duplicate.
+    ///
+    /// Conflating the two used to multiply the duplicate-risk figure of ADR
+    /// 0014 by the batch size — that figure is sized as "at most the send
+    /// window", and one reconnecting session turned it into 254 at a stroke.
+    /// [`BatchReport::at_risk_of_duplication`] excludes these.
+    ///
+    /// **The row still over-claims**, and this does not fix that: the `SENT`
+    /// transition is committed before the socket by design, and ADR 0014 rules
+    /// out the only narrowing available — writing a `command_status` no message
+    /// centre sent. What changes is that the caller can now see the difference
+    /// and stop counting these as possible duplicates.
+    NotEmitted,
 
     /// The recipient already had a row, so nothing was sent.
     ///
@@ -605,8 +691,17 @@ pub enum FallbackReason {
     /// The operator turned batching off.
     Disabled,
 
-    /// This session has already refused the operation once.
+    /// This session has already answered in a way that rules batching out.
     KnownUnsupported,
+
+    /// The latch belongs to another session, so it says nothing about this one.
+    ///
+    /// A caller mistake rather than a message centre's answer, and it is
+    /// answered by **not batching** rather than by an error: every recipient
+    /// still gets their message, and reading another bind's latch would either
+    /// disable batching on a centre that supports it or re-enable it on one that
+    /// does not.
+    ForeignLatch,
 
     /// One recipient. A `submit_multi` to one address is a `submit_sm` with
     /// more octets and one more way for a message centre to say no.
@@ -654,6 +749,18 @@ pub struct BatchReport {
     /// an error, as [`SendReport::journalled`].
     pub journalled: bool,
 
+    /// How many recipients a previous run had left **in flight**.
+    ///
+    /// The duplicate-risk figure of ADR 0014, for the recipients whose row was
+    /// already `SENT` with no `command_status` when this batch picked them up.
+    /// Under [`UnansweredPolicy::Reemit`] each of them may read the message
+    /// twice, and the arbitration is only honest if the number is reported —
+    /// which is the same contract `CampaignTally::reemitted_unanswered` carries.
+    ///
+    /// Distinct from [`Self::at_risk_of_duplication`], which is about what
+    /// **this** batch leaves behind.
+    pub reemitted_unanswered: usize,
+
     /// One entry per recipient of the batch, in the order they were given.
     ///
     /// CA-010-08 is "without losing a recipient", and this is where that is
@@ -677,6 +784,25 @@ impl BatchReport {
     pub fn used_submit_multi(&self) -> bool {
         self.recipients.iter().any(|entry| entry.via == Via::Multi)
     }
+
+    /// How many recipients may receive this message twice if it is sent again.
+    ///
+    /// The batch's contribution to the figure ADR 0014 asks a campaign to
+    /// report (`reemitted_unanswered`). Exactly the
+    /// [`RecipientOutcome::Uncertain`] entries: a submission the session refused
+    /// before the socket is **not** one of them, because the port guarantees
+    /// nothing was written and re-sending cannot duplicate.
+    ///
+    /// The distinction is worth a method rather than a filter at each call site:
+    /// counting `NotEmitted` here is how one reconnecting session turned a
+    /// window-sized risk into a 254-sized one.
+    #[must_use]
+    pub fn at_risk_of_duplication(&self) -> usize {
+        self.recipients
+            .iter()
+            .filter(|entry| entry.outcome == RecipientOutcome::Uncertain)
+            .count()
+    }
 }
 
 /// What became of one recipient.
@@ -692,20 +818,31 @@ pub struct RecipientReport {
     pub via: Via,
 }
 
-/// Whether one session accepts `submit_multi`.
+/// Whether **one** session can usefully be batched.
 ///
 /// A latch, held across the batches of a whole campaign. A message centre that
 /// answered `ESME_RINVCMDID` once will answer it again: asking two thousand
 /// more times costs two thousand round trips and two thousand `warn!` lines for
 /// an answer that is already known.
 ///
-/// It only ever moves **towards** [`MultiSupportState::Unsupported`], which is
-/// the safe direction: the fallback works everywhere, and re-enabling batching
+/// # It carries its `SessionId`, and that is not decoration
+///
+/// What a latch learned is a fact about one message centre on one bind. This
+/// type used to only *say* in prose that the caller builds one per session, with
+/// nothing enforcing it and no caller honouring it — so a latch shared across
+/// sessions would have disabled batching on a centre that supports it, or
+/// re-enabled it on one that does not. [`Self::for_session`] is the only
+/// constructor, and [`BatchSender`] refuses to read a latch belonging to another
+/// session ([`FallbackReason::ForeignLatch`]).
+///
+/// # It only ever moves towards [`MultiSupportState::Unsupported`]
+///
+/// The safe direction: the fallback works everywhere, and re-enabling batching
 /// on a session that refused it once would need evidence this client cannot
-/// obtain. A session that reconnects to a re-configured message centre gets a
-/// new latch, because the caller builds one per session.
-#[derive(Debug, Default)]
+/// obtain.
+#[derive(Debug)]
 pub struct MultiSupport {
+    session_id: SessionId,
     unsupported: AtomicBool,
     proven: AtomicBool,
 }
@@ -716,20 +853,39 @@ pub struct MultiSupport {
 pub enum MultiSupportState {
     /// Nothing has been tried yet.
     Unknown,
-    /// A `submit_multi_resp` came back from this session.
+
+    /// A `submit_multi_resp` came back from this session **and its verdicts
+    /// could be attributed**.
     Supported,
-    /// This session refused the operation.
+
+    /// Batching this session is not usable.
+    ///
+    /// Two ways in, and they cost the same:
+    ///
+    /// * the session refused the operation — `ESME_RINVCMDID`, `generic_nack`;
+    /// * it answered a `submit_multi_resp` whose refusals could not be
+    ///   attributed ([`match_refusals`]). A centre that quotes its addresses in
+    ///   a form this client cannot compare will quote them that way again, so
+    ///   every later batch would spend 254 rows on an answer nothing can be read
+    ///   from.
     Unsupported,
 }
 
 impl MultiSupport {
-    /// A latch that has learned nothing yet.
+    /// A latch for one session, which has learned nothing yet.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn for_session(session_id: SessionId) -> Self {
         Self {
+            session_id,
             unsupported: AtomicBool::new(false),
             proven: AtomicBool::new(false),
         }
+    }
+
+    /// Which session this latch speaks for.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     /// What this latch knows.
@@ -744,12 +900,12 @@ impl MultiSupport {
         }
     }
 
-    /// Records that this session refused the operation. Never undone.
+    /// Records that batching this session is not usable. Never undone.
     fn note_unsupported(&self) {
         self.unsupported.store(true, Ordering::SeqCst);
     }
 
-    /// Records that this session answered a `submit_multi_resp`.
+    /// Records that this session answered usably.
     fn note_supported(&self) {
         self.proven.store(true, Ordering::SeqCst);
     }
@@ -767,6 +923,7 @@ pub struct BatchSender<'a, R, C> {
     sender: &'a Sender<R, C>,
     support: &'a MultiSupport,
     enabled: bool,
+    unanswered: UnansweredPolicy,
 }
 
 impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
@@ -777,7 +934,21 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
             sender,
             support,
             enabled: true,
+            unanswered: UnansweredPolicy::Reemit,
         }
+    }
+
+    /// The same batch sender, under another arbitration for a recipient a
+    /// previous run left in flight.
+    ///
+    /// Exactly [`UnansweredPolicy`], applied by exactly
+    /// [`EmissionGuard`] — the batch path does not get an arbitration of its
+    /// own, because a second one would be a second answer to the question ADR
+    /// 0014 settled.
+    #[must_use]
+    pub const fn on_unanswered(mut self, policy: UnansweredPolicy) -> Self {
+        self.unanswered = policy;
+        self
     }
 
     /// The same batch sender, with batching turned on or off.
@@ -856,11 +1027,16 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
         let split = segment(&batch.text, &options, ConcatenationReference::new(0))?;
 
         let mut slots: Vec<Slot> = batch.recipients.iter().map(|_| Slot::pending()).collect();
+        let mut reemitted = 0_usize;
 
-        if let Some(reason) = self.why_not_multi(batch, split.segments().len()) {
+        if let Some(reason) =
+            self.why_not_multi(batch, split.segments().len(), session.session_id())
+        {
             tracing::debug!(reason = ?reason, "the batch is sent one message at a time");
 
-            let journalled = self.send_each(session, batch, &mut slots).await?;
+            let journalled = self
+                .send_each(session, batch, &mut slots, &mut reemitted)
+                .await?;
 
             return Ok(report(
                 session,
@@ -869,6 +1045,7 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                 Some(reason),
                 None,
                 journalled,
+                reemitted,
             ));
         }
 
@@ -888,12 +1065,14 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
         build_submit_multi(&batch.submit, &destinations, body)?;
 
         // --- write ahead, per recipient ------------------------------------
-        let live = self.write_ahead(session, batch, &split, &mut slots).await?;
+        let live = self
+            .write_ahead(session, batch, &split, &mut slots, &mut reemitted)
+            .await?;
 
         if live.is_empty() {
             tracing::debug!("every recipient of the batch already had a row");
 
-            return Ok(report(session, batch, slots, None, None, true));
+            return Ok(report(session, batch, slots, None, None, true, reemitted));
         }
 
         let live_destinations: Vec<Destination> = live
@@ -932,6 +1111,7 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                     Some(FallbackReason::OperationRefused { status }),
                     None,
                     journalled,
+                    reemitted,
                 ))
             }
             BatchVerdicts::PerRecipient {
@@ -953,8 +1133,17 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                     if let (Some(slot), Some(outcome)) =
                         (slots.get_mut(*index), outcomes.get(position))
                     {
+                        // `Via` is what CARRIED the message, so a submission the
+                        // session refused before the socket was carried by
+                        // nothing — even though a `submit_multi` was built for
+                        // it. Reporting `Multi` here would have the caller
+                        // believe a PDU left.
+                        slot.via = if *outcome == RecipientOutcome::NotEmitted {
+                            Via::Nothing
+                        } else {
+                            Via::Multi
+                        };
                         slot.outcome = outcome.clone();
-                        slot.via = Via::Multi;
                     }
                 }
 
@@ -975,15 +1164,36 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                     None,
                     smsc_message_id,
                     journalled,
+                    reemitted,
                 ))
             }
         }
     }
 
     /// Why this batch cannot go out as one `submit_multi`, if it cannot.
-    fn why_not_multi(&self, batch: &Batch, segments: usize) -> Option<FallbackReason> {
+    fn why_not_multi(
+        &self,
+        batch: &Batch,
+        segments: usize,
+        session_id: SessionId,
+    ) -> Option<FallbackReason> {
         if !self.enabled {
             return Some(FallbackReason::Disabled);
+        }
+
+        if self.support.session_id() != session_id {
+            tracing::warn!(
+                latch = %self.support.session_id(),
+                "the submit_multi latch belongs to another session; this batch is \
+                 sent one message at a time rather than on another bind's evidence"
+            );
+
+            // NO `debug_assert!(false)` here, unlike the runner's genuinely
+            // unreachable arm. This one IS reachable — it is a caller mistake —
+            // and it is *handled*: every recipient still gets their message.
+            // Aborting a debug build would make the safe handling the only thing
+            // no test could exercise.
+            return Some(FallbackReason::ForeignLatch);
         }
 
         if self.support.state() == MultiSupportState::Unsupported {
@@ -1009,6 +1219,7 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
         batch: &Batch,
         split: &SegmentedMessage,
         slots: &mut [Slot],
+        reemitted: &mut usize,
     ) -> Result<Vec<usize>, MessagingError> {
         let created_at = self.sender.clock().now();
         let mut live = Vec::with_capacity(batch.recipients.len());
@@ -1021,10 +1232,21 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
 
             match self.sender.repository().insert_message(&row).await {
                 Ok(()) => live.push(index),
+                // A CONFLICT IS NOT A REASON TO SKIP, it is a reason to ask.
+                //
+                // The insert is the first guard (ADR 0014, decision 1) and the
+                // state check is the second; skipping on the first alone loses
+                // the recipient of any row a previous run left behind. Those
+                // rows exist: the inserts below are one per recipient rather
+                // than one transaction, so a failure at the k-th leaves k − 1
+                // `QUEUED` rows that nothing sent — and reading them as "already
+                // has a message" meant they were never sent at all.
                 Err(MessageStoreError::Conflict) => {
-                    if let Some(slot) = slots.get_mut(index) {
-                        slot.outcome = RecipientOutcome::AlreadyPresent;
-                        slot.via = Via::Nothing;
+                    if self
+                        .admit(recipient.client_message_id, index, slots, reemitted)
+                        .await?
+                    {
+                        live.push(index);
                     }
                 }
                 Err(error) => return Err(error.into()),
@@ -1064,6 +1286,67 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
         Ok(live)
     }
 
+    /// Asks the guard what to do about a recipient whose row already exists.
+    ///
+    /// `true` when the batch may send to them **without** inserting: the row is
+    /// there and the message centre has not accepted it. `false` fills the slot
+    /// with [`RecipientOutcome::AlreadyPresent`] and the recipient leaves the
+    /// batch.
+    ///
+    /// The same [`EmissionGuard`] and the same [`UnansweredPolicy`] the campaign
+    /// runner uses on the same conflict — deliberately, since a second reading
+    /// of "may this recipient be emitted to" is a second answer to CA-010-05.
+    async fn admit(
+        &self,
+        client_message_id: ClientMessageId,
+        index: usize,
+        slots: &mut [Slot],
+        reemitted: &mut usize,
+    ) -> Result<bool, MessagingError> {
+        let guard = EmissionGuard::new(self.sender.repository(), self.unanswered);
+
+        match guard.admit(client_message_id).await? {
+            Admission::Resume { was_unanswered, .. } => {
+                if was_unanswered {
+                    // ADR 0014's duplicate-risk figure, kept for the batch path:
+                    // this row may already have been taken by a previous run, so
+                    // its recipient may read the message twice.
+                    *reemitted += 1;
+                }
+
+                Ok(true)
+            }
+            Admission::Skip(reason) => {
+                tracing::debug!(reason = ?reason, "the recipient already has a message");
+
+                if let Some(slot) = slots.get_mut(index) {
+                    slot.outcome = RecipientOutcome::AlreadyPresent;
+                    slot.via = Via::Nothing;
+                }
+
+                Ok(false)
+            }
+            // The insert conflicted, so a row exists, and the read that followed
+            // found none. With SQLite that is another run of the same campaign
+            // deleting or rolling back in between — the case
+            // `CampaignRunner::emit` documents at the same junction. Counted as
+            // a skip, which is what it is: another writer owns this recipient.
+            Admission::Fresh => {
+                tracing::warn!(
+                    "the write-ahead key conflicted and its row could not be read back; \
+                     another run is writing to the same journal"
+                );
+
+                if let Some(slot) = slots.get_mut(index) {
+                    slot.outcome = RecipientOutcome::AlreadyPresent;
+                    slot.via = Via::Nothing;
+                }
+
+                Ok(false)
+            }
+        }
+    }
+
     /// Reads the answer into one verdict per live recipient.
     fn verdicts(
         &self,
@@ -1074,6 +1357,30 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
 
         let response = match answer {
             Err(failure) => {
+                let retryable = SendFailure::NoResponse(failure.clone()).is_retryable();
+
+                // THE PORT'S GUARANTEE, READ RATHER THAN IGNORED.
+                // `prevented_emission()` says the implementation refused before
+                // writing to the socket, so this batch certainly reached nobody.
+                // Treating it as a timeout put all `total` recipients in the
+                // duplicate-risk family of ADR 0014 at once — a figure that
+                // document sizes as "at most the send window".
+                if failure.prevented_emission() {
+                    tracing::warn!(
+                        failure = %failure,
+                        recipients = total,
+                        "the session refused the submit_multi before the socket; \
+                         nothing reached the message centre, so none of these \
+                         recipients is a duplicate risk"
+                    );
+
+                    return BatchVerdicts::PerRecipient {
+                        outcomes: vec![RecipientOutcome::NotEmitted; total],
+                        smsc_message_id: None,
+                        uncertain_is_retryable: retryable,
+                    };
+                }
+
                 tracing::warn!(
                     failure = %failure,
                     recipients = total,
@@ -1081,10 +1388,7 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                      is left uncertain and none is re-sent inside this run"
                 );
 
-                return BatchVerdicts::uncertain(
-                    total,
-                    SendFailure::NoResponse(failure.clone()).is_retryable(),
-                );
+                return BatchVerdicts::uncertain(total, retryable);
             }
             Ok(response) => response,
         };
@@ -1109,18 +1413,26 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
                 smsc_message_id,
                 refused,
             } => {
-                self.support.note_supported();
-
+                // NOTED ONLY ONCE THE VERDICTS HOLD, and not on the `Answered`
+                // shape alone. A centre whose refusals cannot be attributed will
+                // answer the next batch the same way; leaving the latch on
+                // `Supported` spent 254 rows per batch on an unreadable answer,
+                // for ever.
                 let Some(attributed) = match_refusals(live_destinations, &refused) else {
+                    self.support.note_unsupported();
+
                     tracing::warn!(
                         refusals = refused.len(),
                         recipients = total,
-                        "a submit_multi_resp refused an address this batch does not carry; \
-                         no verdict is claimed for any recipient"
+                        "a submit_multi_resp could not be attributed to this batch's \
+                         recipients; no verdict is claimed for any of them, and this \
+                         session will not be batched again"
                     );
 
                     return BatchVerdicts::uncertain(total, true);
                 };
+
+                self.support.note_supported();
 
                 BatchVerdicts::PerRecipient {
                     outcomes: attributed
@@ -1192,31 +1504,41 @@ impl<'a, R: MessageRepository, C: Clock> BatchSender<'a, R, C> {
         session: &S,
         batch: &Batch,
         slots: &mut [Slot],
+        reemitted: &mut usize,
     ) -> Result<bool, MessagingError> {
         let mut journalled = true;
 
         for (index, recipient) in batch.recipients.iter().enumerate() {
             let request = request_for(batch, recipient);
 
-            let outcome = match self.sender.send(session, &request).await {
-                Ok(report) => {
-                    journalled &= report.journalled;
-
-                    outcome_of(&report)
-                }
+            let report = match self.sender.send(session, &request).await {
+                Ok(report) => Some(report),
+                // Same guard, same reason as `Self::write_ahead`: a row that
+                // exists is a question, not an answer. A `QUEUED` one left by a
+                // failed run is re-sent through `resend`, which skips the insert
+                // the conflict just refused.
                 Err(MessagingError::Store(MessageStoreError::Conflict)) => {
-                    RecipientOutcome::AlreadyPresent
+                    if self
+                        .admit(recipient.client_message_id, index, slots, reemitted)
+                        .await?
+                    {
+                        Some(self.sender.resend(session, &request).await?)
+                    } else {
+                        None
+                    }
                 }
                 Err(error) => return Err(error),
             };
 
+            let Some(report) = report else {
+                continue;
+            };
+
+            journalled &= report.journalled;
+
             if let Some(slot) = slots.get_mut(index) {
-                slot.via = if outcome == RecipientOutcome::AlreadyPresent {
-                    Via::Nothing
-                } else {
-                    Via::Individual
-                };
-                slot.outcome = outcome;
+                slot.outcome = outcome_of(&report);
+                slot.via = Via::Individual;
             }
         }
 
@@ -1388,7 +1710,9 @@ fn verdict_update(
         // a `panic!` in production code. Uncertain is the safe reading of it
         // anyway: nothing was sent, so nothing is claimed. The state machine
         // refuses the move over the terminal row it would land on.
-        RecipientOutcome::Uncertain | RecipientOutcome::AlreadyPresent => {
+        RecipientOutcome::Uncertain
+        | RecipientOutcome::NotEmitted
+        | RecipientOutcome::AlreadyPresent => {
             let state = if !last_attempt && uncertain_is_retryable {
                 MessageState::Sent
             } else {
@@ -1408,12 +1732,14 @@ fn report<S: SmscSession>(
     fallback: Option<FallbackReason>,
     smsc_message_id: Option<String>,
     journalled: bool,
+    reemitted_unanswered: usize,
 ) -> BatchReport {
     BatchReport {
         session_id: session.session_id(),
         smsc_message_id,
         fallback,
         journalled,
+        reemitted_unanswered,
         // Zipped, so the report can only ever be as long as the shorter of the
         // two — and both are built from `batch.recipients`, so it is exactly as
         // long as the batch. That is CA-010-08's "without losing a recipient".
@@ -1458,8 +1784,8 @@ mod tests {
 
     use super::{
         build_submit_multi, match_refusals, read_multi_response, Batch, BatchRecipient,
-        BatchSender, FallbackReason, MultiResponse, MultiSupport, RecipientOutcome, Refusal, Via,
-        MAX_DESTINATIONS,
+        BatchSender, FallbackReason, MultiResponse, MultiSupport, MultiSupportState,
+        RecipientOutcome, Refusal, Via, MAX_DESTINATIONS,
     };
     use crate::addressing::Destination;
     use crate::segmentation::{segment, ConcatenationReference, SegmentationOptions};
@@ -1672,6 +1998,72 @@ mod tests {
         assert_eq!(match_refusals(&batch, &refused), None);
     }
 
+    /// J-1: two recipients the refusal cannot tell apart.
+    ///
+    /// `unsuccess_sme` names an address, and two entries of one batch may carry
+    /// the same one — the same subscriber listed twice, or two destinations that
+    /// differ only by a TON the answer does not repeat back usefully. Attributing
+    /// the refusal to the first of them leaves the second looking accepted, which
+    /// is the over-claim in its purest form: the message centre took nobody and
+    /// one row says `ACCEPTED`.
+    #[test]
+    fn a_refusal_matching_two_recipients_voids_every_verdict() {
+        let batch = [destination("+2250700000001"), destination("+2250700000001")];
+        let refused = [Refusal {
+            destination: String::from("2250700000001"),
+            status: CommandStatus::EsmeRinvdstadr,
+        }];
+
+        assert_eq!(match_refusals(&batch, &refused), None);
+    }
+
+    /// The same digits under two TONs are two destinations — a short code and an
+    /// international number — and `unsuccess_sme` does not let this client tell
+    /// which one was refused.
+    #[test]
+    fn two_destinations_sharing_their_digits_void_every_verdict() {
+        let batch = [
+            Destination::parse_with("2250700000001", Ton::International, Npi::Isdn).expect("valid"),
+            Destination::parse_with("2250700000001", Ton::NetworkSpecific, Npi::Unknown)
+                .expect("valid"),
+        ];
+        let refused = [Refusal {
+            destination: String::from("2250700000001"),
+            status: CommandStatus::EsmeRinvdstadr,
+        }];
+
+        assert_eq!(match_refusals(&batch, &refused), None);
+    }
+
+    /// A batch with a repeated recipient and **no** refusal is not ambiguous:
+    /// the message centre took everybody, and there is nothing to attribute.
+    #[test]
+    fn a_repeated_recipient_is_only_a_problem_when_a_refusal_names_it() {
+        let batch = [destination("+2250700000001"), destination("+2250700000001")];
+
+        assert_eq!(match_refusals(&batch, &[]), Some(vec![None, None]));
+    }
+
+    /// M-2: the same recipient refused twice, with two different reasons. Which
+    /// one is the verdict? Nothing here can say, so nothing is claimed — the
+    /// alternative silently kept whichever arrived last.
+    #[test]
+    fn two_refusals_naming_the_same_recipient_void_every_verdict() {
+        let batch = [destination("+2250700000001"), destination("+2250700000002")];
+        let refused = [
+            Refusal {
+                destination: String::from("2250700000001"),
+                status: CommandStatus::EsmeRinvdstadr,
+            },
+            Refusal {
+                destination: String::from("+2250700000001"),
+                status: CommandStatus::EsmeRthrottled,
+            },
+        ];
+
+        assert_eq!(match_refusals(&batch, &refused), None);
+    }
+
     #[test]
     fn more_refusals_than_recipients_voids_every_verdict() {
         let batch = [destination("+2250700000001")];
@@ -1706,13 +2098,13 @@ mod tests {
 
     // --- the batch send path ------------------------------------------------
 
-    use crate::campaign::resume::message_key;
+    use crate::campaign::resume::{message_key, UnansweredPolicy};
     use crate::message::MessageState;
-    use crate::ports::{MessageRepository as _, MessageStoreError, SubmitError};
+    use crate::ports::{MessageRepository as _, MessageStoreError, SmscSession as _, SubmitError};
     use crate::sender::Sender;
     use crate::testing::{journal_row, FakeSmsc, FixedClock, MemoryJournal, MultiReply, Refused};
     use crate::MessagingError;
-    use smpp_core::types::CampaignId;
+    use smpp_core::types::{CampaignId, ClientMessageId, SessionId};
 
     fn campaign() -> CampaignId {
         CampaignId::parse("3f8d0a2e-0000-4000-8000-000000000001").expect("a valid UUID")
@@ -1746,11 +2138,12 @@ mod tests {
     async fn every_recipient_is_journalled_before_the_batch_reaches_the_socket() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
         let batch = batch_of(3);
 
         journal.witness_transitions(smsc.clone()).await;
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -1771,11 +2164,12 @@ mod tests {
     async fn a_message_centre_without_submit_multi_falls_back_without_losing_a_recipient() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting()
             .recording()
             .answering_multi(MultiReply::Unsupported);
         let batch = batch_of(3);
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -1809,10 +2203,11 @@ mod tests {
     async fn the_operation_is_not_attempted_again_once_it_has_been_refused() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         // The script answers the FIRST submit_multi with a refusal and would
         // accept any later one — so a second attempt would be visible.
         let smsc = FakeSmsc::accepting().multi_scripted([MultiReply::Unsupported]);
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let batcher = BatchSender::new(&sender, &support);
 
@@ -1855,10 +2250,11 @@ mod tests {
     async fn a_throttled_batch_is_not_replayed_one_message_at_a_time() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting()
             .answering_multi(MultiReply::Refused(CommandStatus::EsmeRthrottled));
         let batch = batch_of(3).with_more_attempts_allowed(true);
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -1887,7 +2283,6 @@ mod tests {
     async fn a_partially_successful_batch_gives_every_recipient_its_own_verdict() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let batch = batch_of(3);
         let refused = batch
             .recipients
@@ -1901,6 +2296,8 @@ mod tests {
         let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Accepted {
             refused: vec![Refused::plain(refused, CommandStatus::EsmeRinvdstadr)],
         });
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -1944,8 +2341,9 @@ mod tests {
     async fn no_row_carries_the_identifier_the_whole_batch_shares() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch_of(3))
@@ -1987,13 +2385,14 @@ mod tests {
     async fn a_refusal_that_cannot_be_attributed_leaves_every_recipient_uncertain() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Accepted {
             refused: vec![Refused::plain(
                 "2259999999999",
                 CommandStatus::EsmeRinvdstadr,
             )],
         });
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch_of(3).with_more_attempts_allowed(true))
@@ -2027,7 +2426,6 @@ mod tests {
     async fn a_recipient_refused_under_an_unrecognisable_address_is_never_reported_accepted() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let batch = batch_of(3);
         let refused = batch
             .recipients
@@ -2047,6 +2445,8 @@ mod tests {
                     CommandStatus::EsmeRinvdstadr,
                 )],
             });
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch.clone().with_more_attempts_allowed(true))
@@ -2068,15 +2468,224 @@ mod tests {
         }
     }
 
+    /// J-1, end to end and at the only level that matters: the message centre
+    /// took **nobody**, so nothing may be reported accepted.
+    ///
+    /// Two recipients, one subscriber, two distinct write-ahead keys — which is
+    /// what a caller outside the campaign path can build, since
+    /// [`BatchRecipient`] carries its key rather than deriving it. Attributing
+    /// the refusal to the first left the second reported `Accepted` and its row
+    /// `ACCEPTED`, for a batch the centre refused whole.
+    #[tokio::test]
+    async fn a_subscriber_listed_twice_and_refused_twice_is_never_reported_accepted() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let twice = destination("+2250700000001");
+
+        let batch = Batch::new(
+            "Bonjour",
+            options(),
+            vec![
+                BatchRecipient {
+                    client_message_id: ClientMessageId::new(),
+                    destination: twice.clone(),
+                },
+                BatchRecipient {
+                    client_message_id: ClientMessageId::new(),
+                    destination: twice.clone(),
+                },
+            ],
+        );
+
+        let smsc = FakeSmsc::accepting()
+            .recording()
+            .answering_multi(MultiReply::Accepted {
+                refused: vec![
+                    Refused::plain(twice.number().as_str(), CommandStatus::EsmeRinvdstadr),
+                    Refused::plain(twice.number().as_str(), CommandStatus::EsmeRinvdstadr),
+                ],
+            });
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        let report = BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the batch is sent");
+
+        assert!(
+            smsc.accepted_destinations().await.is_empty(),
+            "the message centre took nobody"
+        );
+        assert_eq!(report.accepted(), 0);
+
+        for row in journal.rows().await {
+            assert_ne!(row.state, MessageState::Accepted);
+        }
+    }
+
+    /// M-1: an answer this client cannot attribute is a session it must stop
+    /// batching.
+    ///
+    /// Not folding *this* batch is right — the `submit_multi` left and may have
+    /// been taken. Batching the *next* one is not: the centre will quote its
+    /// refusals the same way again, so every later batch would burn 254 rows on
+    /// an answer nothing can be read from, for ever.
+    #[tokio::test]
+    async fn a_message_centre_whose_refusals_cannot_be_attributed_stops_being_batched() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let batch = batch_of(3);
+        let refused = batch
+            .recipients
+            .get(1)
+            .expect("three recipients")
+            .destination
+            .number()
+            .as_str()
+            .to_owned();
+
+        let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Accepted {
+            refused: vec![Refused::quoted_as(
+                refused.clone(),
+                format!("00{refused}"),
+                CommandStatus::EsmeRinvdstadr,
+            )],
+        });
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the batch is sent");
+
+        assert_eq!(
+            support.state(),
+            MultiSupportState::Unsupported,
+            "an unusable answer must not leave the session marked batchable"
+        );
+        assert_eq!(smsc.multi_submitted(), 1);
+    }
+
+    /// The other half of M-1: an answer that **is** usable leaves the session
+    /// batchable, so the latch does not disable batching at the first refused
+    /// recipient.
+    #[tokio::test]
+    async fn a_message_centre_answering_usably_stays_batchable() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let batch = batch_of(3);
+        let refused = batch
+            .recipients
+            .get(1)
+            .expect("three recipients")
+            .destination
+            .number()
+            .as_str()
+            .to_owned();
+
+        let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Accepted {
+            refused: vec![Refused::plain(refused, CommandStatus::EsmeRinvdstadr)],
+        });
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the batch is sent");
+
+        assert_eq!(support.state(), MultiSupportState::Supported);
+    }
+
+    /// M-4: a latch belongs to one session, and the type says so.
+    #[tokio::test]
+    async fn a_latch_from_another_session_is_never_read_as_this_one() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let elsewhere = MultiSupport::for_session(SessionId::new());
+        let smsc = FakeSmsc::accepting();
+
+        assert_ne!(elsewhere.session_id(), smsc.session_id());
+
+        let report = BatchSender::new(&sender, &elsewhere)
+            .submit_batch(&smsc, &batch_of(3))
+            .await
+            .expect("the batch is sent");
+
+        assert_eq!(report.fallback, Some(FallbackReason::ForeignLatch));
+        assert_eq!(
+            smsc.multi_submitted(),
+            0,
+            "what another session learned says nothing about this one"
+        );
+        assert_eq!(report.recipients.len(), 3);
+    }
+
+    /// J-3: what an uncertain batch leaves in the journal is **conditional**,
+    /// and three doc comments used to state one half of it as if it were the
+    /// whole.
+    ///
+    /// The default of [`Batch::new`] is `last_attempt`, so the ordinary caller
+    /// gets `FAILED` — terminal, never re-read by `campaign::resume`, so ADR
+    /// 0014's arbitration never runs for those rows. That is the same rule
+    /// `Sender::final_transition` applies and it is defensible; asserting the
+    /// opposite in the documentation was not.
+    #[tokio::test]
+    async fn an_uncertain_batch_writes_a_verdict_or_leaves_it_open_by_last_attempt() {
+        async fn states(last_attempt: bool) -> Vec<(MessageState, Option<CommandStatus>)> {
+            let journal = MemoryJournal::new();
+            let sender = Sender::new(journal.clone(), FixedClock::default());
+            let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Unreadable);
+            let support = MultiSupport::for_session(smsc.session_id());
+
+            BatchSender::new(&sender, &support)
+                .submit_batch(
+                    &smsc,
+                    &batch_of(2).with_more_attempts_allowed(!last_attempt),
+                )
+                .await
+                .expect("the batch is sent");
+
+            let mut states: Vec<(MessageState, Option<CommandStatus>)> = journal
+                .rows()
+                .await
+                .into_iter()
+                .map(|row| (row.state, row.command_status))
+                .collect();
+
+            states.sort_by_key(|(state, _)| *state);
+            states
+        }
+
+        assert_eq!(
+            states(false).await,
+            vec![(MessageState::Sent, None); 2],
+            "with attempts left the row stays in ADR 0014's uncertain family"
+        );
+        assert_eq!(
+            states(true).await,
+            vec![(MessageState::Failed, None); 2],
+            "on a last attempt the verdict is rendered, and FAILED is terminal"
+        );
+
+        assert!(
+            Batch::new("Bonjour", options(), Vec::new()).last_attempt,
+            "the second case is the DEFAULT, which is what made the claim wrong"
+        );
+    }
+
     /// The duplicate the fallback must not create: a `submit_multi` that left
     /// and was never answered may have been taken for all 254 recipients.
     #[tokio::test]
     async fn an_unanswered_batch_is_not_replayed_one_message_at_a_time() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc =
             FakeSmsc::accepting().answering_multi(MultiReply::Failed(SubmitError::ResponseTimeout));
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch_of(3).with_more_attempts_allowed(true))
@@ -2096,14 +2705,118 @@ mod tests {
         }
     }
 
+    /// J-4: a submission the **session** refused before writing to the socket
+    /// is not an unanswered one, and 254 recipients must not be reported as 254
+    /// possible duplicates because of it.
+    ///
+    /// [`SubmitError::prevented_emission`] is part of the port's contract, not a
+    /// hint: `NotBound` guarantees nothing was written. Reading it is what keeps
+    /// the duplicate-risk figure of ADR 0014 — sized as "at most the send
+    /// window" — from being multiplied by the batch size on a single
+    /// reconnecting session.
+    #[tokio::test]
+    async fn a_batch_the_session_refused_before_the_socket_is_not_a_duplicate_risk() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc =
+            FakeSmsc::accepting().answering_multi(MultiReply::Failed(SubmitError::NotBound {
+                state: String::from("RECONNECT"),
+            }));
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        let report = BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch_of(3).with_more_attempts_allowed(true))
+            .await
+            .expect("the batch is sent");
+
+        assert!(report.recipients.iter().all(|entry| entry.outcome
+            == RecipientOutcome::NotEmitted
+            && entry.via == Via::Nothing));
+        assert_eq!(
+            report.at_risk_of_duplication(),
+            0,
+            "nothing left the socket, so nothing can arrive twice"
+        );
+        assert_eq!(report.fallback, None, "a submit_sm would be refused too");
+    }
+
+    /// The two failures are **not** the same fact, and the report says so: one
+    /// may have been taken by the message centre, the other certainly was not.
+    #[tokio::test]
+    async fn a_timeout_and_a_pre_socket_refusal_are_not_reported_alike() {
+        async fn outcomes(failure: SubmitError) -> (Vec<RecipientOutcome>, usize) {
+            let journal = MemoryJournal::new();
+            let sender = Sender::new(journal, FixedClock::default());
+            let smsc = FakeSmsc::accepting().answering_multi(MultiReply::Failed(failure));
+            let support = MultiSupport::for_session(smsc.session_id());
+
+            let report = BatchSender::new(&sender, &support)
+                .submit_batch(&smsc, &batch_of(2).with_more_attempts_allowed(true))
+                .await
+                .expect("the batch is sent");
+
+            (
+                report
+                    .recipients
+                    .iter()
+                    .map(|entry| entry.outcome.clone())
+                    .collect(),
+                report.at_risk_of_duplication(),
+            )
+        }
+
+        let (timed_out, timed_out_risk) = outcomes(SubmitError::ResponseTimeout).await;
+        let (refused, refused_risk) = outcomes(SubmitError::OperationNotAllowed).await;
+
+        assert_eq!(
+            timed_out,
+            vec![RecipientOutcome::Uncertain; 2],
+            "a timeout leaves the batch's fate unknown"
+        );
+        assert_eq!(timed_out_risk, 2);
+
+        assert_eq!(
+            refused,
+            vec![RecipientOutcome::NotEmitted; 2],
+            "the port guarantees nothing was written to the socket"
+        );
+        assert_eq!(refused_risk, 0);
+    }
+
+    /// A bind that may not submit will not be able to a moment later either, so
+    /// the verdict is final however many attempts the caller has left — the same
+    /// classification [`crate::retry::SendFailure::is_retryable`] applies to a
+    /// unit send.
+    #[tokio::test]
+    async fn a_bind_that_may_not_submit_is_a_final_verdict_for_every_recipient() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting()
+            .answering_multi(MultiReply::Failed(SubmitError::OperationNotAllowed));
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch_of(3).with_more_attempts_allowed(true))
+            .await
+            .expect("the batch is sent");
+
+        for row in journal.rows().await {
+            assert_eq!(row.state, MessageState::Failed);
+            assert_eq!(row.command_status, None, "no message centre answered");
+        }
+    }
+
     /// A `submit_multi` to one recipient is a `submit_sm` with more octets and
     /// a message centre that may not support it.
     #[tokio::test]
     async fn a_batch_of_one_is_sent_as_an_ordinary_submit_sm() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch_of(1))
@@ -2121,11 +2834,12 @@ mod tests {
     async fn a_text_that_needs_several_segments_is_sent_one_message_at_a_time() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
 
         let mut batch = batch_of(2);
         batch.text = "a".repeat(400);
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -2141,8 +2855,9 @@ mod tests {
     async fn a_disabled_batch_sender_never_puts_a_submit_multi_on_the_wire() {
         let journal = MemoryJournal::new();
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .enabled(false)
@@ -2172,8 +2887,9 @@ mod tests {
             .await;
 
         let sender = Sender::new(journal.clone(), FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting().recording();
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let report = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch)
@@ -2196,6 +2912,194 @@ mod tests {
         );
     }
 
+    /// J-5: a row written by a run that then failed must not exclude its
+    /// recipient for ever.
+    ///
+    /// The inserts are one per recipient and not one transaction, so a failure
+    /// at the *k*-th leaves `k − 1` rows `QUEUED` with no `SENT` transition.
+    /// Nothing was emitted, so that is safe on the spot — but the retry of the
+    /// same batch re-derives the same keys, the inserts conflict, and reporting
+    /// those recipients `AlreadyPresent` means **they are never sent to at
+    /// all**. Persisted and then forgotten, which is exactly what the property
+    /// test's header names as the danger.
+    #[tokio::test]
+    async fn a_recipient_left_queued_by_a_failed_run_is_sent_by_the_next_one() {
+        let journal = MemoryJournal::new();
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting().recording();
+
+        let support = MultiSupport::for_session(smsc.session_id());
+        let batch = batch_of(3);
+
+        // The second insert fails: recipient 0 keeps a QUEUED row, and nothing
+        // reaches the message centre.
+        journal.fail_inserts_from(Some(2)).await;
+
+        BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect_err("the journal refused the second insert");
+
+        assert_eq!(smsc.submitted(), 0, "nothing was sent by the failed run");
+        assert_eq!(
+            journal
+                .row(
+                    batch
+                        .recipients
+                        .first()
+                        .expect("three recipients")
+                        .client_message_id
+                )
+                .await
+                .expect("the first row was written")
+                .state,
+            MessageState::Queued,
+            "the fixture must actually leave an orphan row behind"
+        );
+
+        // …and the journal recovers.
+        journal.fail_inserts_from(None).await;
+
+        let report = BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the second run goes through");
+
+        assert_eq!(
+            report
+                .recipients
+                .iter()
+                .filter(|entry| entry.outcome == RecipientOutcome::AlreadyPresent)
+                .count(),
+            0,
+            "a QUEUED row is a message that never left, not a reason to skip"
+        );
+        assert_eq!(smsc.accepted_destinations().await.len(), 3);
+
+        for row in journal.rows().await {
+            assert_eq!(row.state, MessageState::Accepted);
+        }
+    }
+
+    /// The same guard on the individual path: the fallback must not lose the
+    /// recipient a failed run left `QUEUED` either.
+    #[tokio::test]
+    async fn a_queued_recipient_is_also_recovered_on_the_individual_path() {
+        let journal = MemoryJournal::new();
+        let batch = batch_of(2);
+        let stranded = batch
+            .recipients
+            .first()
+            .expect("two recipients")
+            .client_message_id;
+
+        journal
+            .force_row(journal_row(stranded, MessageState::Queued))
+            .await;
+
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting().recording();
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        let report = BatchSender::new(&sender, &support)
+            .enabled(false)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the batch is sent");
+
+        assert_eq!(smsc.accepted_destinations().await.len(), 2);
+        assert_eq!(
+            journal.row(stranded).await.expect("the row is there").state,
+            MessageState::Accepted
+        );
+        assert_eq!(report.recipients.len(), 2);
+    }
+
+    /// CA-010-05 is not weakened by the recovery above: the guard reads the
+    /// state, and an accepted message is still never sent again.
+    #[tokio::test]
+    async fn an_accepted_row_is_still_never_sent_again() {
+        let journal = MemoryJournal::new();
+        let batch = batch_of(3);
+        let taken = batch
+            .recipients
+            .first()
+            .expect("three recipients")
+            .client_message_id;
+
+        journal
+            .force_row(journal_row(taken, MessageState::Accepted))
+            .await;
+
+        let sender = Sender::new(journal.clone(), FixedClock::default());
+        let smsc = FakeSmsc::accepting().recording();
+
+        let support = MultiSupport::for_session(smsc.session_id());
+
+        let report = BatchSender::new(&sender, &support)
+            .submit_batch(&smsc, &batch)
+            .await
+            .expect("the batch is sent");
+
+        assert_eq!(
+            report.recipients.first().map(|entry| entry.outcome.clone()),
+            Some(RecipientOutcome::AlreadyPresent)
+        );
+        assert_eq!(smsc.destinations().await.len(), 2);
+    }
+
+    /// The arbitration of ADR 0014 reaches the batch path, and it is counted.
+    ///
+    /// A row left `SENT` with no `command_status` by a previous run may already
+    /// have been taken. Under the default policy it is sent again and the batch
+    /// **reports** how many such recipients there were; under `Abandon` it is
+    /// left alone.
+    #[tokio::test]
+    async fn a_recipient_left_in_flight_is_replayed_and_counted() {
+        async fn run(policy: UnansweredPolicy) -> (usize, usize, u64) {
+            let journal = MemoryJournal::new();
+            let batch = batch_of(2);
+            let in_flight = batch
+                .recipients
+                .first()
+                .expect("two recipients")
+                .client_message_id;
+
+            journal
+                .force_row(journal_row(in_flight, MessageState::Sent))
+                .await;
+
+            let sender = Sender::new(journal.clone(), FixedClock::default());
+            let smsc = FakeSmsc::accepting().recording();
+
+            let support = MultiSupport::for_session(smsc.session_id());
+
+            let report = BatchSender::new(&sender, &support)
+                .on_unanswered(policy)
+                .submit_batch(&smsc, &batch)
+                .await
+                .expect("the batch is sent");
+
+            (
+                report.accepted(),
+                report.reemitted_unanswered,
+                smsc.submitted(),
+            )
+        }
+
+        assert_eq!(
+            run(UnansweredPolicy::Reemit).await,
+            (2, 1, 1),
+            "both are sent in one submit_multi, and the risk is reported"
+        );
+        assert_eq!(
+            run(UnansweredPolicy::Abandon).await,
+            (1, 0, 1),
+            "the in-flight one is left alone; the other still goes out"
+        );
+    }
+
     /// A journal that cannot be written stops the batch, and **nothing** is
     /// sent: emitting without the write-ahead row is the one thing the ordering
     /// of CLAUDE.md §4 forbids.
@@ -2205,8 +3109,9 @@ mod tests {
             reason: String::from("the journal is unavailable"),
         });
         let sender = Sender::new(journal, FixedClock::default());
-        let support = MultiSupport::new();
         let smsc = FakeSmsc::accepting();
+
+        let support = MultiSupport::for_session(smsc.session_id());
 
         let refusal = BatchSender::new(&sender, &support)
             .submit_batch(&smsc, &batch_of(3))

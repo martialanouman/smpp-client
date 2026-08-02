@@ -214,6 +214,14 @@ pub struct MemoryJournal {
 #[derive(Debug, Default)]
 struct JournalState {
     rows: HashMap<ClientMessageId, Message>,
+    /// Inserts refused from the `n`-th attempt on, counting from 1.
+    ///
+    /// Distinct from [`MemoryJournal::refusing_inserts`], which is global and
+    /// therefore cannot express the family that matters: a batch whose *k*-th
+    /// insert fails, leaving `k − 1` rows written and nothing sent. A double
+    /// that cannot represent a case is a double that reports it green.
+    insert_fails_from: Option<u64>,
+    insert_attempts: u64,
     inserted: u64,
     transitions: u64,
     reads: u64,
@@ -314,6 +322,20 @@ impl MemoryJournal {
     /// How this journal misbehaves from now on.
     pub async fn set_fault(&self, fault: JournalFault) {
         self.inner.lock().await.fault = fault;
+    }
+
+    /// Refuses inserts from the `attempt`-th on, counting from 1.
+    ///
+    /// `None` restores an ordinary journal, and restoring it is the point: the
+    /// family this exists for is a **sequence** — a batch whose second insert
+    /// fails, then the same batch retried against a journal that works. What
+    /// the first run leaves behind is a `QUEUED` row with no `SENT` transition,
+    /// which nothing but a failed insert can produce.
+    pub async fn fail_inserts_from(&self, attempt: Option<u64>) {
+        let mut state = self.inner.lock().await;
+
+        state.insert_fails_from = attempt;
+        state.insert_attempts = 0;
     }
 
     /// Yields, when this journal was built to.
@@ -420,6 +442,15 @@ impl MessageRepository for MemoryJournal {
         let mut state = self.inner.lock().await;
 
         if state.fault == JournalFault::RefusesWrites {
+            return Err(unavailable());
+        }
+
+        state.insert_attempts += 1;
+
+        if state
+            .insert_fails_from
+            .is_some_and(|from| state.insert_attempts >= from)
+        {
             return Err(unavailable());
         }
 

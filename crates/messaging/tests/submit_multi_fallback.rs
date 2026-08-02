@@ -54,7 +54,7 @@ use std::collections::HashSet;
 use messaging::addressing::Destination;
 use messaging::campaign::resume::message_key;
 use messaging::message::MessageState;
-use messaging::ports::{MessageRepository as _, SubmitError};
+use messaging::ports::{MessageRepository as _, SmscSession as _, SubmitError};
 use messaging::sender::Sender;
 use messaging::submit::SubmitOptions;
 use messaging::submit_multi::{
@@ -64,7 +64,7 @@ use messaging::testing::{journal_row, FakeSmsc, FixedClock, MemoryJournal, Multi
 use proptest::prelude::*;
 use proptest::strategy::ValueTree as _;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
-use smpp_core::types::CampaignId;
+use smpp_core::types::{CampaignId, ClientMessageId};
 use smpp_core::values::CommandStatus;
 
 /// Recipients in the largest batch the generator builds.
@@ -114,6 +114,21 @@ enum Answer {
     Silence(SubmitError),
 }
 
+/// What a recipient's row already holds when the batch starts.
+///
+/// `Queued` is the family the old generator could not reach: it only ever
+/// forced `Accepted` rows, so "a row a failed run left behind, which the batch
+/// must send rather than skip" was excluded by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    /// Written and never sent — what a failed insert leaves behind.
+    Queued,
+    /// Already taken by the message centre (CA-010-05).
+    Accepted,
+    /// In flight when the last run stopped: ADR 0014's arbitration.
+    InFlight,
+}
+
 /// One case: a batch, a message centre, and the settings around them.
 #[derive(Debug, Clone)]
 struct Scenario {
@@ -122,8 +137,16 @@ struct Scenario {
     enabled: bool,
     last_attempt: bool,
     long_text: bool,
-    /// Indices whose row is already in the journal before the batch runs.
-    taken: Vec<usize>,
+    /// Rows already in the journal before the batch runs.
+    taken: Vec<(usize, Existing)>,
+    /// Recipients listed **twice** in the batch, under two write-ahead keys.
+    ///
+    /// What a caller outside the campaign path can build, since
+    /// [`BatchRecipient`] carries its key rather than deriving it — and the
+    /// family where a refusal names two recipients and can be attributed to
+    /// neither. The old generator built strictly distinct numbers, so it was
+    /// excluded by construction.
+    repeated: usize,
 }
 
 fn any_status() -> impl Strategy<Value = CommandStatus> {
@@ -137,52 +160,79 @@ fn any_status() -> impl Strategy<Value = CommandStatus> {
 }
 
 fn any_submit_error() -> impl Strategy<Value = SubmitError> {
+    // The two that `prevented_emission()` covers are weighted up: they are the
+    // J-4 family — nothing left the socket, so nobody is a duplicate risk — and
+    // at one weight each they came out of some seeds ZERO times in 192 cases.
     prop_oneof![
-        Just(SubmitError::ResponseTimeout),
-        Just(SubmitError::Closed),
-        Just(SubmitError::Transport {
+        2 => Just(SubmitError::ResponseTimeout),
+        1 => Just(SubmitError::Closed),
+        1 => Just(SubmitError::Transport {
             reason: String::from("the socket failed"),
         }),
-        Just(SubmitError::NotBound {
+        3 => Just(SubmitError::NotBound {
             state: String::from("RECONNECT"),
         }),
+        3 => Just(SubmitError::OperationNotAllowed),
     ]
 }
 
 fn any_answer(size: usize) -> impl Strategy<Value = Answer> {
+    // A STRICT SUBSET when there is one to take.
+    //
+    // `1..=size` refused everybody about as often as it refused somebody, so
+    // "partially accepted" — the family a per-recipient verdict exists for —
+    // came out of the sampler at 2 cases in 192 on some seeds and 13 on others.
+    // Capping the refusals below `size` makes the family a *consequence of the
+    // strategy* rather than of the seed.
+    let partial = proptest::collection::vec((0..size, any_status()), 1..size.max(2))
+        .prop_map(Answer::RefuseSome);
+
     prop_oneof![
         2 => Just(Answer::AcceptAll),
-        3 => proptest::collection::vec((0..size, any_status()), 1..=size)
-            .prop_map(Answer::RefuseSome),
+        9 => partial,
         2 => Just(Answer::RefuseAlien),
-        3 => (0..size).prop_map(Answer::RefuseUnrecognisably),
+        8 => (0..size).prop_map(Answer::RefuseUnrecognisably),
         2 => any_status().prop_map(Answer::RefusePdu),
-        5 => Just(Answer::Unsupported),
+        10 => Just(Answer::Unsupported),
         1 => Just(Answer::Unreadable),
-        2 => any_submit_error().prop_map(Answer::Silence),
+        8 => any_submit_error().prop_map(Answer::Silence),
+    ]
+}
+
+fn any_existing() -> impl Strategy<Value = Existing> {
+    prop_oneof![
+        Just(Existing::Queued),
+        Just(Existing::Accepted),
+        Just(Existing::InFlight),
     ]
 }
 
 fn any_scenario() -> impl Strategy<Value = Scenario> {
-    (1..=MAX_BATCH).prop_flat_map(|size| {
+    // Two or more, so `submit_multi` is reachable at all: a batch of one takes
+    // the individual path by design, and half the families below need the
+    // batched one.
+    (2..=MAX_BATCH).prop_flat_map(|size| {
         (
             Just(size),
             any_answer(size),
-            // Batching off in one case out of five: the fallback that happens
+            // Batching off in one case out of seven: the fallback that happens
             // before anything is written has to be covered too.
-            proptest::bool::weighted(0.8),
+            proptest::bool::weighted(6.0 / 7.0),
             proptest::bool::weighted(0.5),
-            proptest::bool::weighted(0.25),
-            proptest::collection::vec(0..size, 0..=1),
+            proptest::bool::weighted(0.15),
+            proptest::collection::vec((0..size, any_existing()), 0..=1),
+            // A repeated recipient in one case out of three.
+            prop_oneof![2 => Just(0_usize), 1 => Just(1_usize)],
         )
             .prop_map(
-                |(size, answer, enabled, last_attempt, long_text, taken)| Scenario {
+                |(size, answer, enabled, last_attempt, long_text, taken, repeated)| Scenario {
                     size,
                     answer,
                     enabled,
                     last_attempt,
                     long_text,
                     taken,
+                    repeated,
                 },
             )
     })
@@ -200,12 +250,22 @@ struct Seen {
     already_present: usize,
     /// The message centre refused somebody it did not name recognisably.
     hid_a_refusal: bool,
+    /// The batch carried one subscriber twice, so a refusal naming them is
+    /// attributable to neither entry (J-1).
+    ambiguous_recipients: bool,
+    /// A row a failed run left `QUEUED` was met, and had to be sent rather than
+    /// skipped (J-5).
+    met_a_stranded_row: bool,
+    /// A row left in flight was sent again, and counted (ADR 0014).
+    replayed_an_in_flight_row: bool,
+    /// The session refused before the socket (J-4).
+    not_emitted: usize,
 }
 
 /// Runs one case and checks the property on it.
 async fn exercise(scenario: &Scenario) -> Seen {
     let journal = MemoryJournal::new();
-    let recipients: Vec<BatchRecipient> = (0..scenario.size)
+    let mut recipients: Vec<BatchRecipient> = (0..scenario.size)
         .map(|index| {
             let destination = Destination::parse(&number(index)).expect("a valid fixture number");
 
@@ -216,14 +276,38 @@ async fn exercise(scenario: &Scenario) -> Seen {
         })
         .collect();
 
-    for index in &scenario.taken {
+    // The same subscriber a second time, under a **different** write-ahead key
+    // — so both rows are written and both are sent to. That is what a caller
+    // building its own keys can produce, and it is the family where a refusal
+    // names two recipients and belongs to neither.
+    for _ in 0..scenario.repeated {
+        if let Some(first) = recipients.first().cloned() {
+            recipients.push(BatchRecipient {
+                client_message_id: ClientMessageId::new(),
+                destination: first.destination,
+            });
+        }
+    }
+
+    for (index, existing) in &scenario.taken {
         if let Some(recipient) = recipients.get(*index) {
-            journal
-                .force_row(journal_row(
-                    recipient.client_message_id,
-                    MessageState::Accepted,
-                ))
-                .await;
+            let mut row = journal_row(
+                recipient.client_message_id,
+                match existing {
+                    Existing::Queued => MessageState::Queued,
+                    Existing::Accepted => MessageState::Accepted,
+                    Existing::InFlight => MessageState::Sent,
+                },
+            );
+
+            // ADR 0014's third line is `SENT` **without** a `command_status`;
+            // `journal_row` already leaves it `None`, and this says so where a
+            // later edit could change it.
+            if *existing == Existing::InFlight {
+                row.command_status = None;
+            }
+
+            journal.force_row(row).await;
         }
     }
 
@@ -269,7 +353,7 @@ async fn exercise(scenario: &Scenario) -> Seen {
 
     let smsc = FakeSmsc::accepting().recording().answering_multi(reply);
     let sender = Sender::new(journal.clone(), FixedClock::default());
-    let support = MultiSupport::new();
+    let support = MultiSupport::for_session(smsc.session_id());
 
     let text = if scenario.long_text {
         "a".repeat(400)
@@ -295,7 +379,7 @@ async fn exercise(scenario: &Scenario) -> Seen {
 
     assert_eq!(
         report.recipients.len(),
-        scenario.size,
+        recipients.len(),
         "the report lost a recipient: {scenario:?}"
     );
     assert_eq!(
@@ -330,22 +414,33 @@ async fn exercise(scenario: &Scenario) -> Seen {
     let taken_by_the_centre: Vec<String> = smsc.accepted_destinations().await;
     let distinct: HashSet<&String> = taken_by_the_centre.iter().collect();
 
-    // One MESSAGE per recipient, which is not one submission: a text of 400
-    // characters is three `submit_sm`, all three accepted, and that is one
-    // message. So the ceiling is the number of segments, and anything above it
-    // is a second message to the same person.
+    // One accepted MESSAGE per **entry of the batch**, and neither of those two
+    // words is loose.
+    //
+    //   · a message is not a submission: a text of 400 characters is three
+    //     `submit_sm`, all three accepted, and that is one message;
+    //   · an entry is not a subscriber: a caller building its own keys may list
+    //     one person twice, which is two rows and two messages by construction.
+    //     The campaign path cannot — its keys are derived — but this API can,
+    //     and `Scenario::repeated` is that family. What must never happen is a
+    //     subscriber accepted more times than the batch has entries for them.
     let segments = if scenario.long_text { 3 } else { 1 };
 
-    for recipient in &distinct {
+    for address in &distinct {
         let accepted = taken_by_the_centre
             .iter()
-            .filter(|taken| taken == recipient)
+            .filter(|taken| taken == address)
+            .count();
+
+        let entries = recipients
+            .iter()
+            .filter(|recipient| recipient.destination.number().as_str() == address.as_str())
             .count();
 
         assert!(
-            accepted <= segments,
-            "a recipient was accepted {accepted} times for a message of \
-             {segments} segment(s): {scenario:?}"
+            accepted <= segments * entries,
+            "a recipient was accepted {accepted} times for {entries} batch \
+             entr(y/ies) of {segments} segment(s): {scenario:?}"
         );
     }
 
@@ -422,6 +517,17 @@ async fn exercise(scenario: &Scenario) -> Seen {
             .count(),
         hid_a_refusal: matches!(scenario.answer, Answer::RefuseUnrecognisably(_))
             && report.used_submit_multi(),
+        ambiguous_recipients: scenario.repeated > 0 && report.used_submit_multi(),
+        met_a_stranded_row: scenario
+            .taken
+            .iter()
+            .any(|(_, existing)| *existing == Existing::Queued),
+        replayed_an_in_flight_row: report.reemitted_unanswered > 0,
+        not_emitted: report
+            .recipients
+            .iter()
+            .filter(|entry| entry.outcome == RecipientOutcome::NotEmitted)
+            .count(),
     }
 }
 
@@ -443,76 +549,209 @@ proptest! {
     }
 }
 
-/// The census. Without it, a strategy that only ever produced `AcceptAll` would
-/// pass every assertion above and prove nothing.
+/// The census, over **several seeds**.
+///
+/// # Why not one pinned seed
+///
+/// The first version of this test pinned a deterministic RNG and asserted a
+/// floor on that one sample. Replayed over sixty seeds, one of those floors was
+/// cleared **by chance in half the runs** — `partially accepted` bottomed out at
+/// 2 against a floor of 9. A floor that holds on the seed it was written against
+/// and nowhere else is not a guarantee: the first engineer to meet it red would
+/// lower it, and the protection would disappear without anybody deciding to
+/// remove it.
+///
+/// So each floor is asserted on the **minimum over `SEEDS` independent seeds**,
+/// which is a statement about the *strategy* rather than about a sample. The
+/// strategy was reweighted until every family clears its floor at its worst
+/// seed; `print_the_census` shows the margins, and they are what to re-read
+/// after any change to `any_scenario`.
+///
+/// It also closes the gap the review named: the `proptest!` above runs on
+/// `Config::default()`, whose `rng_seed` is **random**, so certifying one pinned
+/// distribution certified a distribution the property never uses.
 #[test]
 fn the_generator_reaches_the_families_the_property_can_break_in() {
-    const SAMPLE: u32 = 192;
+    let (worst, census) = census();
 
-    let mut runner = TestRunner::new_with_rng(
-        Config {
-            cases: SAMPLE,
-            ..Config::default()
-        },
-        TestRng::deterministic_rng(RngAlgorithm::ChaCha),
-    );
-
-    let strategy = any_scenario();
-    let runtime = runtime();
-
-    let mut with_multi = 0_u32;
-    let mut with_late_fallback = 0_u32;
-    let mut with_early_fallback = 0_u32;
-    let mut with_a_partial_batch = 0_u32;
-    let mut with_everybody_uncertain = 0_u32;
-    let mut with_a_row_already_taken = 0_u32;
-    let mut with_an_acceptance = 0_u32;
-    let mut with_a_hidden_refusal = 0_u32;
-
-    for _ in 0..SAMPLE {
-        let scenario = strategy.new_tree(&mut runner).unwrap().current();
-        let seen = runtime.block_on(async { exercise(&scenario).await });
-
-        with_multi += u32::from(seen.used_multi);
-        with_late_fallback += u32::from(seen.fell_back_after_emission);
-        with_early_fallback += u32::from(seen.fell_back_before_emission);
-        with_a_partial_batch += u32::from(seen.accepted > 0 && seen.rejected > 0);
-        with_everybody_uncertain +=
-            u32::from(seen.uncertain > 0 && seen.accepted == 0 && seen.rejected == 0);
-        with_a_row_already_taken += u32::from(seen.already_present > 0);
-        with_an_acceptance += u32::from(seen.accepted > 0);
-        with_a_hidden_refusal += u32::from(seen.hid_a_refusal);
+    for (family, count) in FAMILIES.iter().zip(&worst) {
+        assert!(
+            *count >= family.floor,
+            "family \"{}\" is reached by chance rather than by the strategy — {census}",
+            family.name
+        );
     }
+}
 
-    let census = format!(
-        "over {SAMPLE} scenarios: \
-         {with_multi} went out as one submit_multi, \
-         {with_late_fallback} fell back after the PDU had left, \
-         {with_early_fallback} fell back before it, \
-         {with_a_partial_batch} were partially accepted, \
-         {with_everybody_uncertain} left every recipient uncertain, \
-         {with_a_row_already_taken} met a row that already existed, \
-         {with_an_acceptance} accepted at least one recipient, \
-         {with_a_hidden_refusal} had a real refusal quoted unrecognisably"
-    );
+/// Prints the census the floors above are read from.
+///
+/// ```text
+/// cargo test -p messaging --test submit_multi_fallback -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "reporting only; run it after changing the strategy"]
+#[expect(
+    clippy::print_stdout,
+    reason = "the whole purpose of this ignored test is to print the table the \
+              floors above are read from"
+)]
+fn print_the_census() {
+    println!("{}", census().1);
+}
 
+/// Cases drawn per seed.
+const SAMPLE: u32 = 192;
+
+/// Independent seeds every floor must hold on.
+const SEEDS: u8 = 12;
+
+/// One family the property can break in: what it counts, and its floor.
+///
+/// # Where the floors come from
+///
+/// Each is **half** the count that family reached at its *worst* of the
+/// `SEEDS` seeds, measured with `print_the_census` and written down. Two
+/// consequences, and both are the point:
+///
+/// * every floor has at least 2× headroom today, so a floor is never cleared by
+///   luck — which is what the previous version of this test did, with one floor
+///   passing in half of sixty replayed seeds;
+/// * a change to `any_scenario` that halves a family's representation turns the
+///   test red instead of quietly narrowing what the property covers.
+///
+/// They are absolute numbers rather than fractions of `SAMPLE` because that is
+/// what they are: a measurement, not a proportion somebody chose.
+struct Family {
+    name: &'static str,
+    /// Half the worst-seed count measured when this line was written.
+    floor: u32,
+    seen: fn(&Seen) -> bool,
+}
+
+const FAMILIES: &[Family] = &[
     // The batched path itself: without it every case is an ordinary unit send
     // and this file tests `Sender`.
-    assert!(with_multi >= SAMPLE / 5, "{census}");
+    Family {
+        name: "went out as one submit_multi",
+        floor: 41,
+        seen: |seen| seen.used_multi,
+    },
     // CA-010-08's own family — the message centre refuses the operation.
-    assert!(with_late_fallback >= SAMPLE / 10, "{census}");
+    Family {
+        name: "fell back after the PDU had left",
+        floor: 9,
+        seen: |seen| seen.fell_back_after_emission,
+    },
     // …and the fallbacks decided before anything is written.
-    assert!(with_early_fallback >= SAMPLE / 10, "{census}");
+    Family {
+        name: "fell back before it",
+        floor: 19,
+        seen: |seen| seen.fell_back_before_emission,
+    },
     // The partial success that makes a per-recipient verdict necessary at all.
-    assert!(with_a_partial_batch >= SAMPLE / 20, "{census}");
-    // The family the over-claim lives in: an answer nothing can be read from.
-    assert!(with_everybody_uncertain >= SAMPLE / 10, "{census}");
+    Family {
+        name: "were partially accepted",
+        floor: 5,
+        seen: |seen| seen.accepted > 0 && seen.rejected > 0,
+    },
+    // An answer nothing can be read from.
+    Family {
+        name: "left every recipient uncertain",
+        floor: 26,
+        seen: |seen| seen.uncertain > 0 && seen.accepted == 0 && seen.rejected == 0,
+    },
     // The write-ahead guard firing.
-    assert!(with_a_row_already_taken >= SAMPLE / 20, "{census}");
-    // And the nominal path, so a generator that only ever failed is caught too.
-    assert!(with_an_acceptance >= SAMPLE / 4, "{census}");
-    // THE family, and the one a generator would silently exclude: it needs the
-    // batch to have gone out as a `submit_multi` AND the message centre to
-    // disagree with its own PDU.
-    assert!(with_a_hidden_refusal >= SAMPLE / 20, "{census}");
+    Family {
+        name: "met a row that already existed",
+        floor: 13,
+        seen: |seen| seen.already_present > 0,
+    },
+    // The nominal path, so a generator that only ever failed is caught too.
+    Family {
+        name: "accepted at least one recipient",
+        floor: 47,
+        seen: |seen| seen.accepted > 0,
+    },
+    // The silent over-claim: a real refusal quoted unrecognisably.
+    Family {
+        name: "had a real refusal quoted unrecognisably",
+        floor: 8,
+        seen: |seen| seen.hid_a_refusal,
+    },
+    // J-1: a batch carrying one subscriber twice, so a refusal naming them
+    // belongs to neither entry.
+    Family {
+        name: "carried one subscriber twice",
+        floor: 11,
+        seen: |seen| seen.ambiguous_recipients,
+    },
+    // J-5: a row a failed run left QUEUED, which must be sent and not skipped.
+    Family {
+        name: "met a row stranded QUEUED",
+        floor: 12,
+        seen: |seen| seen.met_a_stranded_row,
+    },
+    // ADR 0014's arbitration, reached and reported.
+    Family {
+        name: "replayed a row left in flight",
+        floor: 14,
+        seen: |seen| seen.replayed_an_in_flight_row,
+    },
+    // J-4: the session refused before the socket.
+    Family {
+        name: "were refused before the socket",
+        floor: 6,
+        seen: |seen| seen.not_emitted > 0,
+    },
+];
+
+/// Samples the strategy on every seed and returns, per family, the **worst**
+/// count across them — plus the table to read it from.
+fn census() -> (Vec<u32>, String) {
+    let strategy = any_scenario();
+    let runtime = runtime();
+    let mut worst = vec![u32::MAX; FAMILIES.len()];
+
+    for seed in 0..SEEDS {
+        let mut runner = TestRunner::new_with_rng(
+            Config {
+                cases: SAMPLE,
+                ..Config::default()
+            },
+            TestRng::from_seed(RngAlgorithm::ChaCha, &[seed; 32]),
+        );
+
+        let mut counts = vec![0_u32; FAMILIES.len()];
+
+        for _ in 0..SAMPLE {
+            let scenario = strategy.new_tree(&mut runner).unwrap().current();
+            let seen = runtime.block_on(async { exercise(&scenario).await });
+
+            for (count, family) in counts.iter_mut().zip(FAMILIES) {
+                *count += u32::from((family.seen)(&seen));
+            }
+        }
+
+        for (slot, count) in worst.iter_mut().zip(&counts) {
+            *slot = (*slot).min(*count);
+        }
+    }
+
+    let table = FAMILIES
+        .iter()
+        .zip(&worst)
+        .map(|(family, count)| {
+            format!(
+                "\n  {count:>4} / {SAMPLE}  (floor {:>3}, margin {:>4}%)  {}",
+                family.floor,
+                count * 100 / family.floor.max(1),
+                family.name
+            )
+        })
+        .collect::<String>();
+
+    (
+        worst,
+        format!("worst count over {SEEDS} seeds of {SAMPLE} cases:{table}"),
+    )
 }

@@ -5,3 +5,6 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc dbb100f21c2fcffd691c56c186856405b5ef3397c50d6c41d1675be5dbdd59d5 # shrinks to scenario = Scenario { size: 2, answer: RefuseUnrecognisably(0), enabled: true, last_attempt: false, long_text: false, taken: [] }
+cc 089dc3d71e4270b9a2f361fe2b2ec39c077a5203b7bf0e5d8a6f71e57b3761ff # shrinks to scenario = Scenario { size: 2, answer: AcceptAll, enabled: false, last_attempt: false, long_text: false, taken: [], repeated: 1 }
+cc 70220be01ecf25b0a65bbcfcc617ce7b08f6be415ecffbc6cefca649afe6a28d # shrinks to scenario = Scenario { size: 2, answer: RefuseSome([(0, EsmeRthrottled)]), enabled: true, last_attempt: false, long_text: false, taken: [], repeated: 1 }
+cc cbb327ddfb24224371de291f008c9eac42ed610a623cb3b1a7424d6d15b450a6 # shrinks to scenario = Scenario { size: 2, answer: AcceptAll, enabled: true, last_attempt: false, long_text: false, taken: [(0, Queued)], repeated: 0 }
