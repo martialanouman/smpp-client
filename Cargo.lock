@@ -3521,6 +3521,7 @@ name = "smpp-session"
 version = "0.0.1"
 dependencies = [
  "futures-util",
+ "logging-export",
  "messaging",
  "persistence",
  "rand 0.9.5",
