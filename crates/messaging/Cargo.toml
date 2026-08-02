@@ -56,6 +56,19 @@ uuid.workspace = true
 # `cargo check -p logging-export` did not.
 tokio = { workspace = true, features = ["macros", "sync", "time"] }
 
+# Milestone 010. `contacts.attributes` is the opaque JSON object spec §14.2
+# prescribes, and the template engine of L-010-03 resolves `{{prenom}}` out of
+# it. Reading it is therefore this crate's business: the alternative is having
+# the IPC layer or `persistence` decode the document and hand a map down, which
+# would put the "what is a usable attribute value" decision — blank is missing,
+# a nested object is not a value — in a layer CLAUDE.md §3 says holds no
+# business logic. Already compiled in this tree (`contacts`, `persistence`).
+#
+# NO `serde` derive: nothing here is serialised, and the document is read
+# through `serde_json::Value` rather than into a type of ours, because its
+# shape is whatever the import wrote.
+serde_json.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true

@@ -4,6 +4,7 @@ use crate::addressing::AddressError;
 use crate::encoding::EncodingError;
 use crate::ports::MessageStoreError;
 use crate::submit::SubmitBuildError;
+use crate::template::{RenderError, TemplateError};
 
 /// Errors produced by this crate.
 ///
@@ -48,4 +49,19 @@ pub enum MessagingError {
     /// orchestrator does not submit a message it could not persist.
     #[error("the message journal refused the operation")]
     Store(#[from] MessageStoreError),
+
+    /// The campaign template could not be read (spec §10.2).
+    ///
+    /// Raised once, when the campaign is validated, and never per recipient:
+    /// a template is parsed before the first message is built.
+    #[error("the message template could not be parsed")]
+    Template(#[from] TemplateError),
+
+    /// The message of **one** recipient could not be built.
+    ///
+    /// Separate from [`Self::Template`] because the two are acted on
+    /// differently: a template failure stops the campaign, a render failure
+    /// rejects one line and the campaign carries on (CA-010-06).
+    #[error("the message could not be rendered for this recipient")]
+    Render(#[from] RenderError),
 }

@@ -58,6 +58,7 @@ pub mod ports;
 pub mod segmentation;
 pub mod sender;
 pub mod submit;
+pub mod template;
 
 pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
@@ -65,6 +66,7 @@ pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
 pub use sender::{SegmentOutcome, SendObserver, SendReport, SendRequest, Sender};
+pub use template::{MissingVariablePolicy, RenderError, Template, TemplateError, Variables};
 
 /// Crate version, as declared in its manifest.
 ///
