@@ -195,11 +195,131 @@ export const commands = {
 	 *  [`ErrorDto`] if the buffered entries could not be written on the way out.
 	 */
 	logsSetPduLogging: (enabled: boolean) => typedError<boolean, ErrorDto>(__TAURI_INVOKE("logs_set_pdu_logging", { enabled })),
+	/**
+	 *  Opens the native picker and returns the file the operator chose.
+	 * 
+	 *  # Why the picker lives in the backend
+	 * 
+	 *  It could run in the WebView — the plugin has a JavaScript side — and that
+	 *  is what the first cut did. But then `contacts_import` has to take whatever
+	 *  path it is handed, and CLAUDE.md §3 says the WebView is untrusted: injected
+	 *  script could pass `~/.ssh/id_rsa` and read the file back out of the
+	 *  rejected rows, which carry the offending value verbatim. Opening the picker
+	 *  here is what lets the backend **remember** which files the operator pointed
+	 *  at, so `contacts_import` can refuse everything else. The window is granted
+	 *  no `dialog:` permission at all as a result.
+	 * 
+	 *  Returns `None` when the operator dismissed the picker, which is an outcome
+	 *  and not a failure.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` if the picked entry is not a
+	 *  path this platform can open — a content URI on a mobile target.
+	 */
+	contactsPickFile: () => typedError<string | null, ErrorDto>(__TAURI_INVOKE("contacts_pick_file")),
+	/**
+	 *  Reads a file and writes the contacts it holds.
+	 * 
+	 *  Progress arrives on `import:progress` (CA-009-11); this returns the final
+	 *  report, which is authoritative even when the import was cancelled.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_FILE_NOT_PICKED` if the file did not come from
+	 *  [`contacts_pick_file`], `CONTACTS_IMPORT_BUSY` if one is already running,
+	 *  `CONTACTS_INVALID_INPUT` if an option will not parse,
+	 *  `CONTACTS_IMPORT_REJECTED` if the file cannot be read or mapped, or a
+	 *  storage code if the contacts cannot be written.
+	 */
+	contactsImport: (source: ImportSourceInput, options: ImportOptionsInput) => typedError<ImportReportDto, ErrorDto>(__TAURI_INVOKE("contacts_import", { source, options })),
+	/**
+	 *  Asks the running import to stop (CA-009-10).
+	 * 
+	 *  Returns whether there was one. Not an error when there is none: an operator
+	 *  who clicks cancel on an import that has just finished has got what they
+	 *  wanted.
+	 * 
+	 *  # Errors
+	 * 
+	 *  Infallible today; the `Result` is what the bridge requires of an `async`
+	 *  command.
+	 */
+	contactsCancelImport: () => typedError<boolean, ErrorDto>(__TAURI_INVOKE("contacts_cancel_import")),
+	/**
+	 *  Reads one page of the contacts table.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a malformed identifier or
+	 *  cursor, `CONTACTS_STORAGE` if the store will not answer.
+	 */
+	contactsPage: (selection: {
+	/**  How [`Self::lists`] are combined. */
+	combination?: CombinationInput,
+	/**  The lists the query spans. */
+	lists?: string[],
+	/**  Lists whose members are removed from the result, whatever else says. */
+	excluded?: string[],
+} | null, search: string | null, cursor: string | null, limit: number | null) => typedError<ContactPageDto, ErrorDto>(__TAURI_INVOKE("contacts_page", { selection, search, cursor, limit })),
+	/**
+	 *  Every contact list, oldest first (CA-009-12).
+	 * 
+	 *  Unpaginated, and deliberately: a list is created by hand or by one import,
+	 *  so the table holds units to hundreds. The contacts *inside* them are what
+	 *  needs paging, and that is [`contacts_page`]'s job.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_STORAGE` if the store will not answer.
+	 */
+	contactsLists: () => typedError<ContactListDto[], ErrorDto>(__TAURI_INVOKE("contacts_lists")),
+	/**
+	 *  Creates a contact list (CA-009-12).
+	 * 
+	 *  Returns its identifier, which is what the import assistant then sends as
+	 *  `listId`. Without this the list selector would be permanently empty and no
+	 *  import could enrol anything.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a blank name, or a storage
+	 *  code if the write fails.
+	 * 
+	 *  **Not** a duplicate: `contact_lists.name` carries no unique constraint, so
+	 *  two lists may share a name. Stated because it is a real consequence — two
+	 *  identically named lists are indistinguishable in the selectors — and
+	 *  because adding the constraint is a migration, which belongs to the
+	 *  milestone that decides list management is a screen of its own.
+	 */
+	contactsCreateList: (name: string) => typedError<string, ErrorDto>(__TAURI_INVOKE("contacts_create_list", { name })),
+	/**
+	 *  Every saved mapping profile, oldest first (CA-009-09).
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_STORAGE` if the store will not answer.
+	 */
+	contactsProfiles: () => typedError<ImportProfileDto[], ErrorDto>(__TAURI_INVOKE("contacts_profiles")),
+	/**
+	 *  Saves a mapping profile, replacing one of the same identifier.
+	 * 
+	 *  Returns the identifier, which is the one the interface sent or a fresh one
+	 *  when it sent none — that is how a form that saved a new profile learns what
+	 *  to send next time.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a malformed identifier,
+	 *  `CONTACTS_STORAGE` if the write fails.
+	 */
+	contactsSaveProfile: (profile: ImportProfileDto) => typedError<string, ErrorDto>(__TAURI_INVOKE("contacts_save_profile", { profile })),
 };
 
 /** Events */
 export const events = {
 	errorNotify: makeEvent<ErrorNotify>("error:notify"),
+	importProgress: makeEvent<ImportProgressEvent>("import:progress"),
 	messageUpdate: makeEvent<MessageUpdate>("message:update"),
 	metricsTick: makeEvent<MetricsTick>("metrics:tick"),
 	sessionsState: makeEvent<SessionsState>("sessions:state"),
@@ -223,6 +343,14 @@ export type AppConfig = {
 	retentionDays: RetentionDays,
 };
 
+/**  One contact attribute and the column it comes from. */
+export type AttributeColumnInput = {
+	/**  The variable name a message template will use. */
+	variable: string,
+	/**  Where its value is read. */
+	column: ColumnRefInput,
+};
+
 /**  Which bind operation opens a session (EF-CNX-02). */
 export type BindTypeDto = 
 /**  Sends only. */
@@ -231,6 +359,42 @@ export type BindTypeDto =
 "receiver" | 
 /**  Both, on one connection. */
 "transceiver";
+
+/**  Which column means what (CA-009-09). */
+export type ColumnMappingInput = {
+	/**  The recipient number. The one column an import cannot do without. */
+	msisdn: ColumnRefInput,
+	/**  A per-row country, which wins over the default region. */
+	country: ColumnRefInput | null,
+	/**  Everything else worth keeping. */
+	attributes: AttributeColumnInput[],
+};
+
+/**
+ *  How one column of the file is designated.
+ * 
+ *  By name for a file with a header row, by zero-based position otherwise.
+ */
+export type ColumnRefInput = 
+/**  By header name, matched case-insensitively after trimming. */
+{ by: "name"; value: string } | 
+/**
+ *  By zero-based position.
+ * 
+ *  A `u32` and not a `usize`: `usize` exports to TypeScript as a number
+ *  whose width depends on the host, and a column index that differs
+ *  between a 32-bit and a 64-bit build is a contract that is not one.
+ */
+{ by: "index"; value: number };
+
+/**  How the lists a query spans are combined (CA-009-12). */
+export type CombinationInput = 
+/**  Every contact of the store, whatever list it belongs to. */
+"everything" | 
+/**  A contact of at least one of the lists. */
+"union" | 
+/**  A contact of every one of the lists. */
+"intersection";
 
 /**
  *  Untrusted input of the `config_set` command.
@@ -247,6 +411,77 @@ export type ConfigSetInput = {
 	/**  Raw retention, in days. */
 	retentionDays: number,
 };
+
+/**  One contact list. */
+export type ContactListDto = {
+	/**  Primary key. */
+	listId: string,
+	/**  Name shown in the interface. */
+	name: string,
+	/**  When the list was created. */
+	createdAt: string,
+};
+
+/**  One page of the contacts table. */
+export type ContactPageDto = {
+	/**  The rows, in insertion order. */
+	rows: ContactRowDto[],
+	/**
+	 *  Cursor to pass back for the next page, or `null` at the end.
+	 * 
+	 *  A **string**, and opaque: the interface hands it back untouched. A
+	 *  cursor is a SQLite `rowid`, an `i64`, and `JSON.stringify` throws on a
+	 *  `BigInt`.
+	 */
+	next: string | null,
+	/**
+	 *  How many contacts the selection holds in total.
+	 * 
+	 *  What sizes the virtualised scrollbar. Counts the selection and **not**
+	 *  the search: the count is what the scrollbar is sized against before the
+	 *  operator has typed anything, and recomputing it per keystroke would put
+	 *  a full scan behind every character.
+	 */
+	total: number,
+};
+
+/**  One row of the contacts table. */
+export type ContactRowDto = {
+	/**  Primary key, and the row's React key. */
+	contactId: string,
+	/**
+	 *  The number in international form, digits only (CA-009-04).
+	 * 
+	 *  Without the leading `+`: `Msisdn` holds the digits, and the log screen
+	 *  renders them the same way. Adding one here alone would make the same
+	 *  contact look different on two screens.
+	 */
+	msisdn: string,
+	/**  The country the number resolved to. */
+	country: string | null,
+	/**  Whether the number passed validation. */
+	valid: boolean,
+	/**  `MOBILE`, `FIXED_LINE`, … as the numbering plan reported it. */
+	lineType: string | null,
+	/**  The mapped attributes, as a JSON object. */
+	attributes: string | null,
+	/**  `import_csv`, `import_xlsx`, or whatever created the contact. */
+	source: string | null,
+	/**  When the contact was written. */
+	createdAt: string,
+};
+
+/**  What to do with a row whose number was already seen. */
+export type DeduplicationInput = 
+/**  Keep the first occurrence and drop the rest. */
+"firstWins" | 
+/**
+ *  Keep the first occurrence and fold later attributes into it.
+ * 
+ *  Holds every distinct contact in memory until the import ends; the
+ *  interface says so where the operator picks it.
+ */
+"mergeAttributes";
 
 /**
  *  The `data_coding` selector, as the operator sees it (spec §7.5).
@@ -346,7 +581,47 @@ export type ErrorCode =
  */
 "LOGS_INVALID_FILTER" | 
 /**  The business journal or the PDU log could not be read. */
-"LOGS_UNAVAILABLE";
+"LOGS_UNAVAILABLE" | 
+/**
+ *  The file an import points at could not be read or made sense of.
+ * 
+ *  Covers a missing file, an unreadable sheet and a mapping that names a
+ *  column the file does not have. One code, because the operator's next
+ *  move is the same in all three: look at `details`, which names the file
+ *  position or the column, and fix the file or the mapping.
+ */
+"CONTACTS_IMPORT_REJECTED" | 
+/**
+ *  An import is already running.
+ * 
+ *  Its own code rather than a storage one: nothing is broken, and the
+ *  interface has to say "wait or cancel", not "retry".
+ */
+"CONTACTS_IMPORT_BUSY" | 
+/**  The contact store could not be read or written. */
+"CONTACTS_STORAGE" | 
+/**  A contact or a list already exists under that identifier. */
+"CONTACTS_DUPLICATE" | 
+/**  The contact, list or import profile a call referred to does not exist. */
+"CONTACTS_NOT_FOUND" | 
+/**
+ *  The file an import names was not chosen in the native picker.
+ * 
+ *  Its own code because it is not a fault of the file: it is the
+ *  application refusing to open something the operator did not point at.
+ *  The interface tells them to pick the file again.
+ */
+"CONTACTS_FILE_NOT_PICKED" | 
+/**
+ *  A field of a contacts call could not be read.
+ * 
+ *  Distinct from [`Self::ContactsImportRejected`], which is about the
+ *  operator's **file**. This one is about the call itself — an identifier
+ *  that is not one, a cursor that does not parse — so it points at the
+ *  interface, not at something the operator can fix by editing a
+ *  spreadsheet.
+ */
+"CONTACTS_INVALID_INPUT";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -386,6 +661,15 @@ export type Gsm7PackingDto =
 /**  Eight septets in seven octets. */
 "packed";
 
+/**  Whether the first row names the columns. */
+export type HeaderModeInput = 
+/**  Decide by looking at the first row. */
+"detect" | 
+/**  The first row names the columns. */
+"present" | 
+/**  Every row is data. */
+"absent";
+
 /**
  *  How hard to look for a message when a delivery receipt quotes its
  *  identifier differently (step-008 §6).
@@ -401,6 +685,123 @@ export type IdMatchingDto =
 "relaxed" | 
 /**  Also the other base. **Lossy** — see `messaging::correlation::IdMatching`. */
 "bases";
+
+/**  Everything the operator chose in the import assistant. */
+export type ImportOptionsInput = {
+	/**  Which column means what. */
+	mapping: ColumnMappingInput,
+	/**  Whether the first row names the columns. */
+	headers?: HeaderModeInput,
+	/**
+	 *  The region national forms are resolved against (CA-009-04).
+	 * 
+	 *  An ISO 3166-1 alpha-2 code. Rejected here if it is not one, rather
+	 *  than quietly ignored — an operator who typed `CIV` and got every row
+	 *  refused for "unknown indicatif" would look at the wrong thing.
+	 */
+	defaultRegion: string | null,
+	/**  Keep mobile lines only (CA-009-06). */
+	mobilesOnly?: boolean,
+	/**  What to do with a repeated number. */
+	deduplication?: DeduplicationInput,
+	/**  A list every imported contact joins. */
+	listId: string | null,
+};
+
+/**  A saved column-mapping profile (CA-009-09). */
+export type ImportProfileDto = {
+	/**  Primary key. Absent when the interface is saving a new profile. */
+	profileId: string | null,
+	/**  The name the operator gave it. */
+	name: string,
+	/**  The mapping it replays. */
+	mapping: ColumnMappingInput,
+	/**  When it was saved. Ignored on the way in. */
+	createdAt: string | null,
+};
+
+/**
+ *  Payload of `import:progress` — how far a contact import has got.
+ * 
+ *  # Why this channel has no throttle here
+ * 
+ *  It has one, and it is upstream: `contacts::import` computes a progress
+ *  reading every `PROGRESS_EVERY_ROWS` rows and offers it with `try_send` on a
+ *  bounded channel, so a million-row import produces about a thousand events
+ *  and an interface that falls behind loses intermediate ones rather than
+ *  slowing the import down (CA-009-11).
+ * 
+ *  A second throttle *here* would be the bug `sessions:state` had: the last
+ *  event of an import is the one carrying [`Self::done`], and dropping it would
+ *  leave a progress bar running under a finished report.
+ */
+export type ImportProgressEvent = {
+	/**  Non-blank rows dealt with. */
+	processed: number,
+	/**  Contacts accepted so far. */
+	imported: number,
+	/**  Rows refused so far. */
+	rejected: number,
+	/**  Rows repeating an earlier number. */
+	duplicates: number,
+	/**  Whether this is the last event of the import. */
+	done: boolean,
+};
+
+/**
+ *  What an import produced (CA-009-08).
+ * 
+ *  The counts are `u32`, saturating: the bridge carries JSON and
+ *  `JSON.stringify` throws on a `BigInt`. A file large enough to saturate one
+ *  would have exhausted the disk first.
+ */
+export type ImportReportDto = {
+	/**  Non-blank rows examined. Equals `imported + rejected + duplicates`. */
+	total: number,
+	/**  Contacts written. */
+	imported: number,
+	/**  Rows refused, whatever the reason. */
+	rejected: number,
+	/**  Rows whose number repeated an earlier one. */
+	duplicates: number,
+	/**  Rows that held nothing, counted apart from [`Self::total`]. */
+	blank: number,
+	/**  Contacts the numbering plan reported as mobile. */
+	mobiles: number,
+	/**  Contacts the plan reported as a landline. */
+	fixedLines: number,
+	/**
+	 *  How many rows each rejection reason accounts for.
+	 * 
+	 *  Keyed by the stable reason code, which the interface translates.
+	 */
+	byReason: ReasonCountDto[],
+	/**  The refused rows, for the correction export (CA-009-05). */
+	rejectedRows: RejectedRowDto[],
+	/**  Whether [`Self::rejected_rows`] was cut short. */
+	rejectedTruncated: boolean,
+	/**  Whether the operator stopped the import before the end of the file. */
+	cancelled: boolean,
+};
+
+/**
+ *  Where an import reads from.
+ * 
+ *  A discriminated union rather than a path plus a flag: the sheet name only
+ *  means something for a workbook, and an optional field valid under one
+ *  variant only is a field somebody will set under the other.
+ */
+export type ImportSourceInput = 
+/**  A delimited text file. */
+{ kind: "csv"; 
+/**  The file the operator chose, from the native dialog. */
+path: string } | 
+/**  One sheet of a workbook. */
+{ kind: "xlsx"; 
+/**  The file the operator chose. */
+path: string; 
+/**  The sheet, or the first one when absent. */
+sheet: string | null };
 
 /**  The protocol version announced at bind time (EF-CNX-04). */
 export type InterfaceVersionDto = 
@@ -853,6 +1254,20 @@ export type PduRowDto = {
 };
 
 /**
+ *  How many rows one rejection reason accounts for.
+ * 
+ *  A list of pairs rather than a map: `serde_json` would serialise the map
+ *  fine, but the order would be the map's, and the interface renders these in
+ *  the order the backend counted them.
+ */
+export type ReasonCountDto = {
+	/**  The stable reason code. */
+	reason: string,
+	/**  How many rows it refused. */
+	count: number,
+};
+
+/**
  *  What `registered_delivery` asks the message centre for.
  * 
  *  The three values an operator has a reason to choose. The rest of the octet
@@ -870,6 +1285,27 @@ export type RegisteredDeliveryDto =
 "onAnyOutcome" | 
 /**  `2` — a receipt on failure only. */
 "onFailure";
+
+/**  One refused row, with everything needed to fix it. */
+export type RejectedRowDto = {
+	/**
+	 *  Line in the operator's file, as their editor shows it.
+	 * 
+	 *  A `u32`: a file with more than four billion lines is not one this
+	 *  application is going to report on.
+	 */
+	line: number,
+	/**  Why it was refused — the interface translates the code. */
+	reason: string,
+	/**
+	 *  The cell as it was in the file.
+	 * 
+	 *  The one operator value that crosses back, and deliberately: it goes to
+	 *  the person who supplied it, so the exported list is correctable. It is
+	 *  never logged and never part of an error message.
+	 */
+	value: string,
+};
 
 /**
  *  How long, in days, the rolling log files are kept.
@@ -916,6 +1352,16 @@ export type SegmentationModeDto =
 "sar" | 
 /**  No splitting: the whole body in the `message_payload` TLV. */
 "messagePayload";
+
+/**  Which contacts a query spans. */
+export type SelectionInput = {
+	/**  How [`Self::lists`] are combined. */
+	combination?: CombinationInput,
+	/**  The lists the query spans. */
+	lists?: string[],
+	/**  Lists whose members are removed from the result, whatever else says. */
+	excluded?: string[],
+};
 
 /**  Input of [`session_bind`]. */
 export type SessionBindInput = {

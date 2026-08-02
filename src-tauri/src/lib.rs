@@ -28,6 +28,7 @@ use tauri::Manager as _;
 
 mod commands;
 mod config;
+mod contacts;
 mod error;
 mod events;
 mod ipc;
@@ -65,6 +66,10 @@ pub fn run() -> anyhow::Result<()> {
     let ipc = ipc::builder();
 
     tauri::Builder::default()
+        // The native file picker, and nothing more of the filesystem: the
+        // WebView gets a path the operator chose, and the backend is what
+        // opens it (CLAUDE.md §8).
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(ipc.invoke_handler())
         .setup(move |app| {
             // Wires the typed event channels. Without this, `error:notify`

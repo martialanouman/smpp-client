@@ -6,15 +6,16 @@
 
 mod support;
 
+use contacts::ports::{ContactRepository, ContactStoreError};
 use futures_util::StreamExt;
 use messaging::ports::{MessageRepository, MessageStoreError};
 use persistence::ports::{
-    CampaignRepository, ContactRepository, MessageJournal, PduLogRepository,
+    CampaignRepository, ContactDirectory, MessageJournal, PduLogRepository,
     SessionProfileRepository,
 };
 use persistence::{
-    CampaignId, CampaignStatus, ContactId, Cursor, ListId, MessageFilter, MessageState,
-    MessageStateUpdate, PduDirection, PduLogEntry, PersistenceError, SqliteCampaignRepository,
+    CampaignId, CampaignStatus, ContactId, Cursor, ListId, ListSelection, MessageFilter,
+    MessageState, MessageStateUpdate, PduDirection, PduLogEntry, SqliteCampaignRepository,
     SqliteContactRepository, SqliteMessageRepository, SqlitePduLogRepository,
     SqliteSessionProfileRepository,
 };
@@ -186,10 +187,7 @@ async fn inserting_the_same_contact_identifier_twice_is_a_conflict() {
 
     let rejection = repository.insert_contact(&contact).await.unwrap_err();
 
-    assert!(
-        matches!(rejection, PersistenceError::Conflict { entity, .. } if entity == "contacts"),
-        "expected a conflict, got {rejection:?}"
-    );
+    assert_eq!(rejection, ContactStoreError::Conflict);
 }
 
 /// One transaction for the batch means all-or-nothing: the two valid contacts
@@ -210,7 +208,7 @@ async fn a_batch_of_contacts_that_fails_leaves_nothing_behind() {
     repository.insert_contacts(&batch).await.unwrap_err();
 
     let page = repository
-        .page_contacts(Cursor::start(), 100)
+        .page_contacts(&ListSelection::everything(), None, Cursor::start(), 100)
         .await
         .unwrap();
     assert!(page.is_empty(), "the batch must have rolled back whole");
@@ -229,7 +227,10 @@ async fn contacts_are_paginated_by_cursor_without_gaps_or_repeats() {
     let mut seen = Vec::new();
     let mut cursor = Cursor::start();
     loop {
-        let page = repository.page_contacts(cursor, 10).await.unwrap();
+        let page = repository
+            .page_contacts(&ListSelection::everything(), None, cursor, 10)
+            .await
+            .unwrap();
         seen.extend(page.items.iter().map(|contact| contact.contact_id));
 
         match page.next {
@@ -264,7 +265,7 @@ async fn a_contact_list_holds_only_the_contacts_added_to_it() {
     assert_eq!(added, 1);
 
     let members: Vec<_> = repository
-        .stream_contacts(Some(list.list_id))
+        .stream_contacts(&ListSelection::union([list.list_id]))
         .map(|contact| contact.unwrap().contact_id)
         .collect()
         .await;
@@ -309,9 +310,10 @@ async fn a_membership_referencing_an_unknown_contact_is_refused() {
         .await
         .unwrap_err();
 
-    assert!(
-        matches!(rejection, PersistenceError::Database { .. }),
-        "expected the foreign key to fire, got {rejection:?}"
+    assert_eq!(
+        rejection,
+        ContactStoreError::NotFound,
+        "the foreign key must fire, and the port must name the kind of failure"
     );
 }
 
@@ -326,12 +328,237 @@ async fn streaming_without_a_list_yields_every_contact() {
     repository.insert_contacts(&batch).await.unwrap();
 
     let streamed: Vec<_> = repository
-        .stream_contacts(None)
+        .stream_contacts(&ListSelection::everything())
         .map(|contact| contact.unwrap().contact_id)
         .collect()
         .await;
 
     assert_eq!(streamed.len(), batch.len());
+}
+
+/// CA-009-12, against the real SQL rather than against the algebra alone: a
+/// union is "in either", an intersection is "in both", and the two give
+/// different answers on the same data.
+#[tokio::test]
+async fn lists_combine_by_union_and_by_intersection() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let only_first = a_contact(ContactId::new(), numbered_msisdn(1).as_str());
+    let both = a_contact(ContactId::new(), numbered_msisdn(2).as_str());
+    let only_second = a_contact(ContactId::new(), numbered_msisdn(3).as_str());
+    let neither = a_contact(ContactId::new(), numbered_msisdn(4).as_str());
+    repository
+        .insert_contacts(&[
+            only_first.clone(),
+            both.clone(),
+            only_second.clone(),
+            neither,
+        ])
+        .await
+        .unwrap();
+
+    let first = a_contact_list(ListId::new(), "juillet");
+    let second = a_contact_list(ListId::new(), "abidjan");
+    repository.insert_contact_list(&first).await.unwrap();
+    repository.insert_contact_list(&second).await.unwrap();
+    repository
+        .add_contacts_to_list(first.list_id, &[only_first.contact_id, both.contact_id])
+        .await
+        .unwrap();
+    repository
+        .add_contacts_to_list(second.list_id, &[only_second.contact_id, both.contact_id])
+        .await
+        .unwrap();
+
+    let union = ListSelection::union([first.list_id, second.list_id]);
+    let intersection = ListSelection::intersection([first.list_id, second.list_id]);
+
+    assert_eq!(repository.count_contacts(&union).await.unwrap(), 3);
+    assert_eq!(repository.count_contacts(&intersection).await.unwrap(), 1);
+
+    let members: Vec<_> = repository
+        .stream_contacts(&intersection)
+        .map(|contact| contact.unwrap().contact_id)
+        .collect()
+        .await;
+    assert_eq!(members, vec![both.contact_id]);
+}
+
+/// An exclusion is applied after the combination and cannot be overridden by
+/// it — otherwise "everyone in July except the opt-outs" would reach the
+/// opt-outs.
+#[tokio::test]
+async fn an_exclusion_wins_over_the_combination_it_is_applied_to() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let kept = a_contact(ContactId::new(), numbered_msisdn(1).as_str());
+    let excluded = a_contact(ContactId::new(), numbered_msisdn(2).as_str());
+    repository
+        .insert_contacts(&[kept.clone(), excluded.clone()])
+        .await
+        .unwrap();
+
+    let campaign = a_contact_list(ListId::new(), "juillet");
+    let optout = a_contact_list(ListId::new(), "opt-out");
+    repository.insert_contact_list(&campaign).await.unwrap();
+    repository.insert_contact_list(&optout).await.unwrap();
+    repository
+        .add_contacts_to_list(campaign.list_id, &[kept.contact_id, excluded.contact_id])
+        .await
+        .unwrap();
+    repository
+        .add_contacts_to_list(optout.list_id, &[excluded.contact_id])
+        .await
+        .unwrap();
+
+    let selection = ListSelection::union([campaign.list_id]).excluding([optout.list_id]);
+
+    let members: Vec<_> = repository
+        .stream_contacts(&selection)
+        .map(|contact| contact.unwrap().contact_id)
+        .collect()
+        .await;
+
+    assert_eq!(members, vec![kept.contact_id]);
+    assert_eq!(repository.count_contacts(&selection).await.unwrap(), 1);
+}
+
+/// The trap the algebra exists to prevent, asserted against the SQL rather
+/// than only against the type: an empty intersection must select NOTHING.
+/// `COUNT(…) = 0` over no list is trivially true of every contact, so an
+/// implementation that let the empty case reach the query would return the
+/// whole table here.
+#[tokio::test]
+async fn an_empty_combination_selects_no_contact_rather_than_all_of_them() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let batch: Vec<_> = (0..5)
+        .map(|index| a_contact(ContactId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_contacts(&batch).await.unwrap();
+
+    for empty in [
+        ListSelection::union(Vec::new()),
+        ListSelection::intersection(Vec::new()),
+    ] {
+        assert_eq!(repository.count_contacts(&empty).await.unwrap(), 0);
+        assert_eq!(
+            repository
+                .stream_contacts(&empty)
+                .collect::<Vec<_>>()
+                .await
+                .len(),
+            0
+        );
+        assert!(repository
+            .page_contacts(&empty, None, Cursor::start(), 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    assert_eq!(
+        repository
+            .count_contacts(&ListSelection::everything())
+            .await
+            .unwrap(),
+        5,
+        "…while `everything` still means everything"
+    );
+}
+
+/// The contacts screen searches on the number and on the attributes, and on
+/// nothing else: an operator types digits or a name, never `import_csv`.
+#[tokio::test]
+async fn a_page_can_be_searched_by_number_and_by_attribute() {
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let batch: Vec<_> = (0..3)
+        .map(|index| a_contact(ContactId::new(), numbered_msisdn(index).as_str()))
+        .collect();
+    repository.insert_contacts(&batch).await.unwrap();
+
+    let by_number = repository
+        .page_contacts(
+            &ListSelection::everything(),
+            Some(numbered_msisdn(1).as_str()),
+            Cursor::start(),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(by_number.len(), 1);
+
+    let by_attribute = repository
+        .page_contacts(
+            &ListSelection::everything(),
+            Some("Awa"),
+            Cursor::start(),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(by_attribute.len(), 3);
+
+    // "fixture" IS the `source` of every contact above, so a search that
+    // covered that column would return three here. Searching for a value the
+    // fixtures do not hold would pass whatever the query did.
+    let by_source = repository
+        .page_contacts(
+            &ListSelection::everything(),
+            Some("fixture"),
+            Cursor::start(),
+            10,
+        )
+        .await
+        .unwrap();
+    assert!(
+        by_source.is_empty(),
+        "the source column is not part of the search"
+    );
+}
+
+/// CA-009-09: a saved profile comes back with the mapping it was saved with,
+/// and saving it again replaces it rather than adding a second row.
+#[tokio::test]
+async fn an_import_profile_survives_a_round_trip_and_is_replaced_in_place() {
+    use contacts::import::{ColumnMapping, ColumnRef, ImportProfile};
+    use persistence::ProfileId;
+
+    let harness = temp_database().await;
+    let repository = SqliteContactRepository::new(harness.database().clone());
+
+    let profile = ImportProfile {
+        profile_id: ProfileId::new(),
+        name: String::from("fichier client"),
+        mapping: ColumnMapping::by_name("telephone")
+            .with_country(ColumnRef::Name(String::from("pays")))
+            .with_attribute("prenom", ColumnRef::Index(2)),
+        created_at: instant("2026-07-27T09:00:00Z"),
+    };
+
+    repository.upsert_import_profile(&profile).await.unwrap();
+
+    assert_eq!(
+        repository.list_import_profiles().await.unwrap(),
+        vec![profile.clone()]
+    );
+
+    let renamed = ImportProfile {
+        name: String::from("fichier client v2"),
+        ..profile
+    };
+    repository.upsert_import_profile(&renamed).await.unwrap();
+
+    assert_eq!(
+        repository.list_import_profiles().await.unwrap(),
+        vec![renamed],
+        "an upsert replaces rather than adding a second row"
+    );
 }
 
 // --- Campaigns --------------------------------------------------------------

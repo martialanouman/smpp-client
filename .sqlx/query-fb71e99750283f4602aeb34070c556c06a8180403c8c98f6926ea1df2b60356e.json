@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\"\n               FROM contacts\n               WHERE (\n                       ?1\n                       OR (\n                           NOT ?2\n                           AND EXISTS (\n                               SELECT 1 FROM contact_list_members AS m\n                               WHERE m.contact_id = contacts.contact_id\n                                 AND m.list_id IN (SELECT value FROM json_each(?3))\n                           )\n                       )\n                       OR (\n                           ?2\n                           AND (\n                               SELECT COUNT(DISTINCT m.list_id)\n                               FROM contact_list_members AS m\n                               WHERE m.contact_id = contacts.contact_id\n                                 AND m.list_id IN (SELECT value FROM json_each(?3))\n                           ) = ?4\n                       )\n                     )\n                 AND NOT EXISTS (\n                       SELECT 1 FROM contact_list_members AS x\n                       WHERE x.contact_id = contacts.contact_id\n                         AND x.list_id IN (SELECT value FROM json_each(?5))\n                     )",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb71e99750283f4602aeb34070c556c06a8180403c8c98f6926ea1df2b60356e"
+}

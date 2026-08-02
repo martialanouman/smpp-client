@@ -12,7 +12,7 @@ use smpp_core::values::{
     CommandStatus, DataCoding, Gsm7BitCharset, Gsm7BitPacking, Npi, SmppVersion, Ton,
 };
 
-use crate::records::{CampaignId, ContactId, ListId, MessageState};
+use crate::records::{CampaignId, ContactId, LineType, ListId, MessageState, ProfileId};
 use crate::{PersistenceError, Timestamp};
 
 /// Widens an unsigned count to the signed integer SQLite stores.
@@ -213,13 +213,53 @@ pub(crate) fn read_optional_campaign_id(
 }
 
 /// Reads a contact identifier column.
+///
+/// The three identifiers below moved to `contacts` at milestone 009
+/// (ADR 0012), so their `parse` returns an `Option` rather than an error — the
+/// two callers, this storage and the IPC layer validating an argument from the
+/// WebView, want different errors out of the same failure. The column context
+/// that makes a malformed row actionable is restored here, where it is known.
 pub(crate) fn read_contact_id(raw: &str) -> Result<ContactId, PersistenceError> {
-    ContactId::parse(raw)
+    ContactId::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "contacts",
+        column: "contact_id",
+        expected: "a UUID in canonical form",
+    })
 }
 
 /// Reads a contact list identifier column.
 pub(crate) fn read_list_id(raw: &str) -> Result<ListId, PersistenceError> {
-    ListId::parse(raw)
+    ListId::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "contact_lists",
+        column: "list_id",
+        expected: "a UUID in canonical form",
+    })
+}
+
+/// Reads an import-profile identifier column.
+pub(crate) fn read_profile_id(raw: &str) -> Result<ProfileId, PersistenceError> {
+    ProfileId::parse(raw).ok_or(PersistenceError::MalformedRow {
+        table: "import_profiles",
+        column: "profile_id",
+        expected: "a UUID in canonical form",
+    })
+}
+
+/// Reads the optional `contacts.line_type` column.
+///
+/// A NULL column is "the plan was never consulted" and stays `None`; a value
+/// this version does not know is a malformed row rather than a silent
+/// `Unknown`, because reading it as `Unknown` would make a "mobiles only"
+/// campaign quietly skip contacts a later version had classified.
+pub(crate) fn read_line_type(raw: Option<&str>) -> Result<Option<LineType>, PersistenceError> {
+    raw.map(|value| {
+        LineType::parse(value).ok_or(PersistenceError::MalformedRow {
+            table: "contacts",
+            column: "line_type",
+            expected: "one of mobile, fixed_line, fixed_line_or_mobile, other, unknown",
+        })
+    })
+    .transpose()
 }
 
 /// Reads a subscriber number column.
@@ -283,9 +323,31 @@ mod tests {
     use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 
     use super::{
-        read_gsm7_charset, read_gsm7_packing, read_interface_version, read_u16, read_u32,
-        store_interface_version,
+        read_gsm7_charset, read_gsm7_packing, read_interface_version, read_line_type, read_list_id,
+        read_u16, read_u32, store_interface_version,
     };
+
+    /// The identifiers no longer carry their own column context — it is
+    /// restored here — so this is the test that keeps a malformed row saying
+    /// which column it came from without echoing the value.
+    #[test]
+    fn a_malformed_identifier_names_its_column_without_echoing_the_value() {
+        let rejection = read_list_id("not-a-uuid").expect_err("must be rejected");
+
+        let rendered = rejection.to_string();
+        assert!(rendered.contains("contact_lists.list_id"), "{rendered}");
+        assert!(!rendered.contains("not-a-uuid"), "{rendered}");
+    }
+
+    /// An unknown line type is a malformed row, NOT a silent `Unknown`: read
+    /// as `Unknown`, a contact a later version classified as a mobile would be
+    /// dropped from a mobiles-only campaign with nothing said.
+    #[test]
+    fn an_unknown_line_type_is_rejected_and_a_null_one_is_not() {
+        assert!(read_line_type(Some("satellite")).is_err());
+        assert_eq!(read_line_type(None).expect("null is legal"), None);
+        assert!(read_line_type(Some("mobile")).expect("known").is_some());
+    }
 
     #[test]
     fn a_negative_count_is_rejected_rather_than_wrapped() {

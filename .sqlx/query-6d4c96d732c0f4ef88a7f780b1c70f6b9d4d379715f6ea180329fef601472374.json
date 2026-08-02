@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT list_id, name, created_at FROM contact_lists ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "list_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contact_lists",
+            "name": "list_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contact_lists",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contact_lists",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6d4c96d732c0f4ef88a7f780b1c70f6b9d4d379715f6ea180329fef601472374"
+}

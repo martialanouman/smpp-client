@@ -8,16 +8,17 @@
 //! that uses it for nothing pays the inversion's whole cost — the upward
 //! `persistence` → consumer edge — and buys none of its benefit.
 //!
-//! That argument has now expired for one of them. Milestone 006 gave
+//! That argument has now expired for two of them. Milestone 006 gave
 //! `messaging` its send orchestrator, so `MessageRepository` moved there
-//! (ADR 0010) and this crate implements it. What is left below are the ports
-//! whose consumers are still to come:
+//! (ADR 0010); milestone 009 gave `contacts` its importer, so
+//! `ContactRepository` moved there (ADR 0012, CA-009-13). This crate implements
+//! both. What is left below are the ports whose consumers are still to come:
 //!
 //! | Port | Consumer, and when it arrives |
 //! |------|-------------------------------|
 //! | [`SessionProfileRepository`] | `smpp-session`, no milestone yet |
-//! | [`ContactRepository`] | `contacts`, milestone 009 (CA-009-13) |
 //! | [`CampaignRepository`] | `messaging`, milestone 010 |
+//! | [`ContactDirectory`] | `src-tauri` reads it directly; see its own note |
 //! | [`MessageJournal`] | `logging-export`, milestone 013 |
 //! | [`PduLogRepository`] | `logging-export`, milestone 013 |
 //!
@@ -37,12 +38,12 @@
 
 use std::future::Future;
 
+use contacts::lists::ListSelection;
 use futures_core::stream::BoxStream;
 use smpp_core::types::SessionId;
 
 use crate::records::{
-    Campaign, CampaignId, Contact, ContactId, ContactList, ListId, Message, MessageFilter,
-    PduLogEntry, SessionProfile,
+    Campaign, CampaignId, Contact, Message, MessageFilter, PduLogEntry, SessionProfile,
 };
 use crate::{Cursor, Page, PersistenceError};
 
@@ -102,111 +103,36 @@ pub trait SessionProfileRepository {
     ) -> impl Future<Output = Result<bool, PersistenceError>> + Send;
 }
 
-/// Reads and writes contacts and contact lists (spec §14.2, §11).
-pub trait ContactRepository {
-    /// Inserts one contact.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Conflict`] if the identifier already exists,
-    /// [`PersistenceError::Database`] otherwise.
-    fn insert_contact(
-        &self,
-        contact: &Contact,
-    ) -> impl Future<Output = Result<(), PersistenceError>> + Send;
-
-    /// Inserts a batch of contacts in **one** transaction.
-    ///
-    /// An import is tens of thousands of rows (spec §11.2). One transaction
-    /// per row would mean one `fsync` per row; one transaction for the batch
-    /// is also all-or-nothing, so a failed import leaves no half-imported
-    /// list behind.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Conflict`] if any identifier already exists — and
-    /// then **no** contact of the batch is written.
-    fn insert_contacts(
-        &self,
-        contacts: &[Contact],
-    ) -> impl Future<Output = Result<u64, PersistenceError>> + Send;
-
-    /// Reads one contact.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Database`] if the read fails, or
-    /// [`PersistenceError::MalformedRow`] if a stored value no longer fits its
-    /// type.
-    fn find_contact(
-        &self,
-        contact_id: ContactId,
-    ) -> impl Future<Output = Result<Option<Contact>, PersistenceError>> + Send;
-
+/// Reads pages of contacts for the contacts screen (spec §14.2, §11).
+///
+/// # What became of `ContactRepository`
+///
+/// It moved to `contacts` at milestone 009 — the deadline ADR 0007 set itself,
+/// recorded by ADR 0012 — and this crate implements it on
+/// [`crate::SqliteContactRepository`].
+///
+/// This one method did **not** move with it, and deliberately: its caller is
+/// the contacts screen of `src-tauri`, not the import, and a port belongs to
+/// the layer that consumes it. It also speaks in [`Cursor`] and [`Page`], types
+/// whose whole reason to exist is the storage they page over. Exactly the split
+/// ADR 0010 made between `messaging::ports::MessageRepository` and
+/// [`MessageJournal`].
+pub trait ContactDirectory {
     /// Reads one page of contacts, in insertion order.
+    ///
+    /// `search` matches a fragment of the number or of the attributes; `None`
+    /// selects everything the `selection` already allows.
     ///
     /// # Errors
     ///
     /// [`PersistenceError::Database`] if the read fails.
     fn page_contacts(
         &self,
+        selection: &ListSelection,
+        search: Option<&str>,
         cursor: Cursor,
         limit: u32,
     ) -> impl Future<Output = Result<Page<Contact>, PersistenceError>> + Send;
-
-    /// Traverses the contacts of a list, or the whole table when `list` is
-    /// `None`.
-    ///
-    /// Rows arrive one at a time (spec §10.4): a campaign of several million
-    /// recipients feeds a bounded queue from this stream, and memory stays
-    /// flat whatever the total.
-    ///
-    /// The **order is unspecified**, and deliberately so: it is whichever order
-    /// the index serving the traversal already yields. Imposing one would mean
-    /// sorting, and sorting means buffering the whole result set before the
-    /// first row — exactly what this method exists to avoid. Every contact is
-    /// yielded exactly once; that is the whole contract.
-    fn stream_contacts(
-        &self,
-        list: Option<ListId>,
-    ) -> BoxStream<'_, Result<Contact, PersistenceError>>;
-
-    /// Creates a contact list.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Conflict`] if the identifier already exists.
-    fn insert_contact_list(
-        &self,
-        list: &ContactList,
-    ) -> impl Future<Output = Result<(), PersistenceError>> + Send;
-
-    /// Reads one contact list.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Database`] if the read fails.
-    fn find_contact_list(
-        &self,
-        list_id: ListId,
-    ) -> impl Future<Output = Result<Option<ContactList>, PersistenceError>> + Send;
-
-    /// Adds contacts to a list, in **one** transaction, ignoring those already
-    /// in it.
-    ///
-    /// Returns how many memberships were created. Re-adding a contact is a
-    /// no-op rather than an error: an import that overlaps a previous one is
-    /// ordinary, not a fault.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Database`] if the write fails — including when the
-    /// list or a contact does not exist, which the foreign keys reject.
-    fn add_contacts_to_list(
-        &self,
-        list_id: ListId,
-        contacts: &[ContactId],
-    ) -> impl Future<Output = Result<u64, PersistenceError>> + Send;
 }
 
 /// Reads and writes campaigns (spec §14.2, §10).

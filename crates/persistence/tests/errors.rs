@@ -8,8 +8,9 @@ mod support;
 
 use std::error::Error;
 
+use contacts::ports::{ContactRepository, ContactStoreError};
 use messaging::ports::{MessageRepository, MessageStoreError};
-use persistence::ports::{ContactRepository, SessionProfileRepository};
+use persistence::ports::SessionProfileRepository;
 use persistence::{
     ContactId, PersistenceError, SqliteContactRepository, SqliteMessageRepository,
     SqliteSessionProfileRepository,
@@ -89,11 +90,12 @@ async fn no_error_variant_can_carry_the_credential() {
     }
 }
 
-/// SQLite's own messages name the constraint, never the bound parameter. The
-/// assertion is on the whole chain, since the driver error is a `source` of
-/// [`PersistenceError::Database`].
+/// SQLite's own messages name the constraint, never the bound parameter — and
+/// the contact port drops the driver chain anyway (ADR 0012). Both renderings
+/// are checked: `Display`, which reaches the interface, and `Debug`, which is
+/// what a `tracing` field would print.
 #[tokio::test]
-async fn a_rejected_insert_never_echoes_the_offending_value() {
+async fn a_rejected_contact_insert_never_echoes_the_offending_value() {
     let harness = temp_database().await;
     let repository = SqliteContactRepository::new(harness.database().clone());
 
@@ -101,8 +103,9 @@ async fn a_rejected_insert_never_echoes_the_offending_value() {
     repository.insert_contact(&contact).await.unwrap();
 
     let rejection = repository.insert_contact(&contact).await.unwrap_err();
-    let rendered = rendered_chain(&rejection);
+    let rendered = format!("{rejection} | {rejection:?}");
 
+    assert_eq!(rejection, ContactStoreError::Conflict);
     assert!(
         !rendered.contains("2250102030405"),
         "the number reached the error message: {rendered}"
@@ -111,26 +114,39 @@ async fn a_rejected_insert_never_echoes_the_offending_value() {
         !rendered.contains("Awa"),
         "a contact attribute reached the error message: {rendered}"
     );
+    assert!(
+        !rendered.contains(&contact.contact_id.to_string()),
+        "the identifier reached the port's error: {rendered}"
+    );
 }
 
-/// A conflict names the aggregate and the identifier, and that is the point:
-/// a UUID says which row without saying anything about it.
-#[tokio::test]
-async fn a_conflict_names_the_row_by_identifier_only() {
-    let harness = temp_database().await;
-    let repository = SqliteContactRepository::new(harness.database().clone());
+/// A conflict names the aggregate and the identifier, and that is the point: a
+/// UUID says which row without saying anything about it.
+///
+/// # Why this is built rather than provoked
+///
+/// It used to be provoked through `SqliteContactRepository::insert_contact`.
+/// That method now reports a `ContactStoreError`, which deliberately carries
+/// neither the identifier nor the driver chain (ADR 0012), and every other
+/// public write of this crate is an upsert or an autoincrement — so no port
+/// still hands a `PersistenceError::Conflict` back.
+///
+/// The *classification* — a SQLite uniqueness violation becoming a `Conflict`
+/// rather than a `Database` — is what the test above proves, since the port
+/// variant it asserts can only be reached through it. What is left to check
+/// here is the rendering, and that is what this does.
+#[test]
+fn a_conflict_names_the_row_by_identifier_only() {
+    let contact_id = ContactId::new();
 
-    let contact = a_contact(ContactId::new(), "+2250102030405");
-    repository.insert_contact(&contact).await.unwrap();
-
-    let rejection = repository.insert_contact(&contact).await.unwrap_err();
-    let rendered = rejection.to_string();
+    let rejection = PersistenceError::Conflict {
+        entity: "contacts",
+        id: contact_id.to_string(),
+    };
+    let rendered = rendered_chain(&rejection);
 
     assert!(rendered.contains("contacts"), "{rendered}");
-    assert!(
-        rendered.contains(&contact.contact_id.to_string()),
-        "{rendered}"
-    );
+    assert!(rendered.contains(&contact_id.to_string()), "{rendered}");
     assert!(
         !rendered.contains("2250102030405"),
         "the number reached the error message: {rendered}"

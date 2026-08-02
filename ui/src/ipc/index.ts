@@ -22,6 +22,14 @@ import { commands, events } from "./generated/bindings";
 import type {
   AppConfig,
   ConfigSetInput,
+  ContactListDto,
+  ContactPageDto,
+  ImportOptionsInput,
+  ImportProfileDto,
+  ImportProgressEvent,
+  ImportReportDto,
+  ImportSourceInput,
+  SelectionInput,
   LogFilterInput,
   LogPageDto,
   OrphanPageDto,
@@ -42,15 +50,29 @@ import type {
 
 export type {
   AppConfig,
+  AttributeColumnInput,
   BindTypeDto,
+  ColumnMappingInput,
+  ColumnRefInput,
+  CombinationInput,
+  ContactListDto,
+  ContactPageDto,
+  ContactRowDto,
   ConfigSetInput,
   EncodingDto,
   ErrorCode,
   ErrorDto,
   ErrorNotify,
   Gsm7CharsetDto,
+  DeduplicationInput,
   Gsm7PackingDto,
+  HeaderModeInput,
   IdMatchingDto,
+  ImportOptionsInput,
+  ImportProfileDto,
+  ImportProgressEvent,
+  ImportReportDto,
+  ImportSourceInput,
   InterfaceVersionDto,
   Language,
   LogFilterInput,
@@ -69,8 +91,11 @@ export type {
   OrphanRowDto,
   PduPageDto,
   PduRowDto,
+  ReasonCountDto,
   RegisteredDeliveryDto,
+  RejectedRowDto,
   RetentionDays,
+  SelectionInput,
   SegmentOutcomeDto,
   SegmentationModeDto,
   SessionBindInput,
@@ -343,4 +368,107 @@ export function logsPdus(
  */
 export function logsSetPduLogging(enabled: boolean): Promise<IpcOutcome<boolean>> {
   return call(() => commands.logsSetPduLogging(enabled));
+}
+
+/**
+ * Reads a contact file and writes what it holds (EF-CNT-01).
+ *
+ * Resolves when the import is **over** — a million-row file means a promise
+ * pending for minutes, which is why {@link onImportProgress} exists. The
+ * report comes back even when the operator cancelled, with `cancelled` set and
+ * `imported` counting exactly what reached the database (CA-009-10).
+ */
+export function contactsImport(
+  source: ImportSourceInput,
+  options: ImportOptionsInput,
+): Promise<IpcOutcome<ImportReportDto>> {
+  return call(() => commands.contactsImport(source, options));
+}
+
+/**
+ * Asks the running import to stop (CA-009-10).
+ *
+ * Resolves to `false` when there was nothing to cancel, which is not an error:
+ * an operator clicking cancel on an import that has just finished has got what
+ * they wanted.
+ */
+export function contactsCancelImport(): Promise<IpcOutcome<boolean>> {
+  return call(() => commands.contactsCancelImport());
+}
+
+/**
+ * Reads one page of the contacts table.
+ *
+ * `cursor` is opaque — hand back whatever the previous page returned in
+ * `next`, and `null` to start over. `total` counts the **selection** and not
+ * the search, so the virtualised scrollbar keeps its size while the operator
+ * types.
+ */
+export function contactsPage(
+  selection: SelectionInput | null,
+  search: string | null,
+  cursor: string | null,
+  limit: number | null,
+): Promise<IpcOutcome<ContactPageDto>> {
+  return call(() => commands.contactsPage(selection, search, cursor, limit));
+}
+
+/**
+ * Creates a contact list (CA-009-12).
+ *
+ * Resolves to its identifier, which the import assistant then sends as
+ * `listId`.
+ */
+export function contactsCreateList(name: string): Promise<IpcOutcome<string>> {
+  return call(() => commands.contactsCreateList(name));
+}
+
+/** Every contact list, oldest first (CA-009-12). Unpaginated by design. */
+export function contactsLists(): Promise<IpcOutcome<ContactListDto[]>> {
+  return call(() => commands.contactsLists());
+}
+
+/** Every saved column-mapping profile, oldest first (CA-009-09). */
+export function contactsProfiles(): Promise<IpcOutcome<ImportProfileDto[]>> {
+  return call(() => commands.contactsProfiles());
+}
+
+/**
+ * Saves a column-mapping profile (CA-009-09).
+ *
+ * Resolves to the identifier in force — the one sent, or a fresh one when the
+ * form sent none. That is how a form that has just created a profile learns
+ * what to send next time instead of creating a second one.
+ */
+export function contactsSaveProfile(profile: ImportProfileDto): Promise<IpcOutcome<string>> {
+  return call(() => commands.contactsSaveProfile(profile));
+}
+
+/**
+ * Subscribes to import progress (CA-009-11).
+ *
+ * The importer already paces these — about one per thousand rows — so there is
+ * no throttle on this side. The **last** event carries `done`, and it is the
+ * one a progress bar needs; a throttle here would be free to drop it.
+ *
+ * Returns the unsubscribe function. Call it on unmount.
+ */
+export function onImportProgress(
+  handler: (payload: ImportProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return events.importProgress.listen((event) => handler(event.payload));
+}
+
+/**
+ * Opens the native file picker and returns the chosen path, or `null`.
+ *
+ * The picker runs in the **backend**, not here: it is what lets the backend
+ * remember which files the operator pointed at, so `contacts_import` can
+ * refuse every other path. The WebView holds no filesystem or dialog
+ * permission at all as a result.
+ *
+ * `null` means the operator dismissed the picker — an outcome, not a failure.
+ */
+export function pickContactFile(): Promise<IpcOutcome<string | null>> {
+  return call(() => commands.contactsPickFile());
 }

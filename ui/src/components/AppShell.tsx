@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import { usePreferences } from "../store/preferences";
+import { ContactsView } from "../views/Contacts/ContactsView";
 import { DashboardView } from "../views/Dashboard/DashboardView";
 import { LogsView } from "../views/Logs/LogsView";
 import { PlaceholderView } from "../views/PlaceholderView";
@@ -56,11 +57,13 @@ export function AppShell() {
         {screen === "send" ? <SendView /> : null}
         {screen === "dashboard" ? <DashboardView /> : null}
         {screen === "logs" ? <LogsView /> : null}
+        {screen === "contacts" ? <ContactsView /> : null}
         {screen !== "settings" &&
         screen !== "sessions" &&
         screen !== "send" &&
         screen !== "dashboard" &&
-        screen !== "logs" ? (
+        screen !== "logs" &&
+        screen !== "contacts" ? (
           <PlaceholderView screen={screen} />
         ) : null}
       </main>

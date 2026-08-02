@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT profile_id, name, mapping, created_at FROM import_profiles ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "profile_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_profiles",
+            "name": "profile_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_profiles",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "mapping",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_profiles",
+            "name": "mapping"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_profiles",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ee884e4f3a23dd0fc6e36279998e8254f186aa34adb9bf0f83a70d66d11c4994"
+}

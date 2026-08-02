@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT contacts.rowid AS \"rowid!: i64\",\n                              contacts.contact_id, contacts.msisdn, contacts.country,\n                              contacts.valid, contacts.line_type, contacts.attributes,\n                              contacts.source, contacts.created_at\n                       FROM contacts\n                       JOIN contact_list_members AS members\n                         ON members.contact_id = contacts.contact_id\n                       WHERE members.list_id = ?\n                       ORDER BY members.contact_id",
+  "query": "SELECT contacts.rowid AS \"rowid!: i64\",\n                      contacts.contact_id, contacts.msisdn, contacts.country,\n                      contacts.valid, contacts.line_type, contacts.attributes,\n                      contacts.source, contacts.created_at\n               FROM contacts\n               WHERE contacts.rowid > ?1\n                 AND (\n                       ?2\n                       OR (\n                           NOT ?3\n                           AND EXISTS (\n                               SELECT 1 FROM contact_list_members AS m\n                               WHERE m.contact_id = contacts.contact_id\n                                 AND m.list_id IN (SELECT value FROM json_each(?4))\n                           )\n                       )\n                       OR (\n                           ?3\n                           AND (\n                               SELECT COUNT(DISTINCT m.list_id)\n                               FROM contact_list_members AS m\n                               WHERE m.contact_id = contacts.contact_id\n                                 AND m.list_id IN (SELECT value FROM json_each(?4))\n                           ) = ?5\n                       )\n                     )\n                 AND NOT EXISTS (\n                       SELECT 1 FROM contact_list_members AS x\n                       WHERE x.contact_id = contacts.contact_id\n                         AND x.list_id IN (SELECT value FROM json_each(?6))\n                     )\n                 AND (?7 IS NULL\n                      OR contacts.msisdn LIKE ?7\n                      OR contacts.attributes LIKE ?7)\n               ORDER BY contacts.rowid\n               LIMIT ?8",
   "describe": {
     "columns": [
       {
@@ -104,7 +104,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 8
     },
     "nullable": [
       false,
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "fe1feac2f6375ef0dc47aecb8fb9efbaad8cefdccc3c0c226b1acdec78105235"
+  "hash": "05497660f87793ba2c96bb58f42db3f990831050090bf67a3b0535221cc9c9d0"
 }

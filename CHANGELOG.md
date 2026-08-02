@@ -9,6 +9,48 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 009, contacts : import CSV/XLSX, E.164 et listes
+
+- **Lecture en flux** (`contacts::import`) : le lecteur tourne sur
+  `spawn_blocking`, l'écrivain sur le runtime, et entre les deux une file
+  **bornée** à 1 024 lignes. Un disque lent fait attendre le lecteur au lieu de
+  faire grossir le processus. Séparateur, encodage et ligne d'en-tête sont
+  détectés sur un préfixe borné, le lecteur étant rendu non consommé
+  (CA-009-02).
+- **Validation E.164** (`contacts::validation`) : un numéro national plus un
+  pays donnent une forme internationale ; les refus portent un **motif précis**
+  parmi dix, exportable pour correction (CA-009-04, CA-009-05). L'option
+  « mobiles uniquement » s'appuie sur le plan de numérotation et non sur le
+  préfixe (CA-009-06).
+- **Déduplication sur le numéro normalisé** (CA-009-07), en deux stratégies :
+  première occurrence, qui ne retient que des empreintes de 64 bits, et fusion
+  des attributs, qui retient les contacts eux-mêmes — dit là où l'opérateur
+  choisit.
+- **Rapport exact** : `total = importées + rejetées + doublons` est un
+  invariant porté par le type qui compte, pas une assertion de test
+  (CA-009-08). Les lignes vides sont comptées à part.
+- **Annulation en cours d'import** : l'écrivain valide le lot qu'il tient — un
+  lot est une transaction — et rend un rapport marqué annulé dont le compte
+  d'importées est exactement ce qui est en base (CA-009-10).
+- **Profils de mapping** réutilisables sans ressaisie (CA-009-09), **listes**
+  avec union, intersection et exclusion (CA-009-12).
+- **Port `ContactRepository` défini côté `contacts`** et implémenté côté
+  `persistence` (CA-009-13, ADR 0012) : l'arête provisoire du jalon 002 est
+  retirée.
+- **Écran Contacts** : assistant d'import, rapport avec export des lignes
+  rejetées, table virtualisée paginée côté backend, recherche et filtre par
+  liste. `import:progress` est étranglé en amont, à raison d'un événement pour
+  mille lignes (CA-009-11).
+
+### Sécurité — jalon 009
+
+- **Le sélecteur de fichier natif s'ouvre côté Rust**, qui mémorise ce que
+  l'opérateur a désigné et refuse tout autre chemin. Sans cela, la commande
+  d'import acceptait un chemin arbitraire venu d'un frontend que CLAUDE.md §3
+  déclare non fiable, et le contenu du fichier revenait dans les lignes
+  rejetées. La fenêtre n'a plus **aucune** permission de dialogue ni de système
+  de fichiers.
+
 ### Ajouté — jalon 008, accusés de livraison et journal métier (M2)
 
 - **Lecture d'un `deliver_sm`** (`messaging::dlr`) : la distinction accusé /

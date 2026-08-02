@@ -36,6 +36,16 @@ smpp-core = { path = "../smpp-core" }
 # the graph stays acyclic.
 messaging = { path = "../messaging" }
 
+# THE SECOND UPWARD EDGE, and the same reasoning one milestone later.
+#
+# `contacts` declares `ContactRepository` and this crate implements it — the
+# deadline ADR 0007 set itself for that port, honoured by ADR 0012 and required
+# by CA-009-13. `contacts` depends on `smpp-core` and on nothing else of ours,
+# so the graph stays acyclic; there is deliberately no dev-dependency in the
+# other direction either, which would form a cycle Cargo tolerates and
+# CLAUDE.md §3 does not distinguish.
+contacts = { path = "../contacts" }
+
 # `tokio::fs` for creating the data directory. Async on purpose: the blocking
 # `std::fs` equivalent on a runtime thread is what CLAUDE.md §4 rules out.
 tokio = { workspace = true, features = ["fs"] }

@@ -38,12 +38,21 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::logs::logs_orphans,
             crate::commands::logs::logs_pdus,
             crate::commands::logs::logs_set_pdu_logging,
+            crate::commands::contacts::contacts_pick_file,
+            crate::commands::contacts::contacts_import,
+            crate::commands::contacts::contacts_cancel_import,
+            crate::commands::contacts::contacts_page,
+            crate::commands::contacts::contacts_lists,
+            crate::commands::contacts::contacts_create_list,
+            crate::commands::contacts::contacts_profiles,
+            crate::commands::contacts::contacts_save_profile,
         ])
         .events(collect_events![
             crate::events::ErrorNotify,
             crate::events::SessionsState,
             crate::events::MessageUpdate,
-            crate::events::MetricsTick
+            crate::events::MetricsTick,
+            crate::events::ImportProgressEvent
         ])
         // A command that fails must produce a *value* on the TypeScript side,
         // not a thrown exception: `Result<T, ErrorDto>` forces the caller to

@@ -8,11 +8,25 @@
 //! database in sight.
 
 mod enums;
-mod ids;
 
 pub use enums::{BindType, CampaignStatus, PduDirection};
-pub use ids::{ContactId, ListId};
 pub use smpp_core::types::CampaignId;
+
+/// The contact aggregate, its identifiers and its lists.
+///
+/// Defined in `contacts` since milestone 009 (ADR 0012, CA-009-13): the crate
+/// that owns the import owns the types the import produces, and this crate
+/// implements its port. Re-exported because the whole contact half of this
+/// crate's public surface speaks in them, so `persistence::Contact` still
+/// resolves.
+pub use contacts::model::{Contact, ContactId, ContactList, LineType, ListId, ProfileId};
+
+/// A saved column-mapping profile (CA-009-09, `import_profiles`).
+///
+/// Defined in `contacts` for the same reason as the aggregate above: the shape
+/// of a mapping is the importer's business, and this crate stores it as the
+/// opaque JSON document spec §14.2 prescribes.
+pub use contacts::import::ImportProfile;
 
 /// The message aggregate, its lifecycle and its transitions.
 ///
@@ -24,7 +38,7 @@ pub use messaging::correlation::IdMatching;
 pub use messaging::message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 
 use smpp_core::time::Timestamp;
-use smpp_core::types::{Msisdn, SessionId};
+use smpp_core::types::SessionId;
 use smpp_core::values::{Gsm7BitCharset, Gsm7BitPacking, SmppVersion};
 
 /// A connection profile (spec §14.2, `session_profiles`).
@@ -142,38 +156,6 @@ impl core::fmt::Debug for SessionProfile {
             .field("updated_at", &self.updated_at)
             .finish()
     }
-}
-
-/// A contact (spec §14.2, `contacts`; spec §11.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Contact {
-    /// Primary key.
-    pub contact_id: ContactId,
-    /// Subscriber number, normalised by `smpp_core::types::Msisdn`.
-    pub msisdn: Msisdn,
-    /// ISO 3166-1 alpha-2 country, when it could be derived.
-    pub country: Option<String>,
-    /// Whether the number passed validation at import time.
-    pub valid: bool,
-    /// Line type reported by the numbering plan (`mobile`, `fixed_line`…).
-    pub line_type: Option<String>,
-    /// Template variables, as an opaque JSON document.
-    pub attributes: Option<String>,
-    /// Where the contact came from (`import_xlsx`, `generated`…).
-    pub source: Option<String>,
-    /// When the contact was created.
-    pub created_at: Timestamp,
-}
-
-/// A named group of contacts (spec §14.2, `contact_lists`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContactList {
-    /// Primary key.
-    pub list_id: ListId,
-    /// Name shown in the interface.
-    pub name: String,
-    /// When the list was created.
-    pub created_at: Timestamp,
 }
 
 /// A bulk-send campaign (spec §14.2, `campaigns`).

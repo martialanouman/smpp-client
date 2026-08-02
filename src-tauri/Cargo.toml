@@ -33,6 +33,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The one plugin the application takes, and only for what CLAUDE.md §8 already
+# allows: a file the operator picked in a native dialog. Nothing else of the
+# filesystem is reachable — `dialog:default` carries no read or write.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror.workspace = true
@@ -71,6 +75,11 @@ smpp-session = { path = "../crates/smpp-session" }
 # The send orchestrator of milestone 006. `src-tauri` holds it and calls it;
 # every rule it applies — validation, segmentation, the write-ahead order —
 # belongs to the crate, not to the command (CLAUDE.md §3).
+contacts = { path = "../crates/contacts" }
+
+# `CancellationToken` for the import: the same primitive the session
+# actors use, so cancelling an import reads like cancelling a session.
+tokio-util = { version = "0.7", default-features = false }
 messaging = { path = "../crates/messaging" }
 
 # The business journal and the PDU recorder of milestone 008. Same rule: the

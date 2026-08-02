@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
+use crate::contacts::ContactServices;
 use crate::events::EventEmitter;
 use crate::logs::LogServices;
 use crate::messages::MessageServices;
@@ -32,6 +33,8 @@ pub(crate) struct AppState {
     /// The business journal, the PDU recorder and the receipt pipeline
     /// (milestone 008).
     logs: LogServices,
+    /// Contact import, lists and import profiles (milestone 009).
+    contacts: ContactServices,
 }
 
 impl AppState {
@@ -49,7 +52,8 @@ impl AppState {
             settings: RwLock::new(settings),
             sessions: SessionServices::new(database.clone(), Arc::clone(&events)),
             messages: MessageServices::new(database.clone(), Arc::clone(&events)),
-            logs: LogServices::new(database, Arc::clone(&events)),
+            logs: LogServices::new(database.clone(), Arc::clone(&events)),
+            contacts: ContactServices::new(database, Arc::clone(&events)),
             events,
         }
     }
@@ -119,6 +123,11 @@ impl AppState {
     /// The log services (milestone 008).
     pub(crate) const fn logs(&self) -> &LogServices {
         &self.logs
+    }
+
+    /// The contact services (milestone 009).
+    pub(crate) const fn contacts(&self) -> &ContactServices {
+        &self.contacts
     }
 }
 
