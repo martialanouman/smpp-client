@@ -71,3 +71,33 @@ Le défi n'est pas d'envoyer beaucoup, c'est de rester **borné** : lire les des
 - La back-pressure doit être **de bout en bout** : si la file d'émission est pleine, le lecteur de destinataires doit se bloquer sur l'envoi, pas accumuler dans un tampon intermédiaire. Un seul tampon non borné annule tout le dispositif.
 - « Reprise sans doublon » et « aucune perte » sont en tension : un message `SENT` sans réponse au moment du crash a pu être reçu ou non par le SMSC. Décider explicitement de la politique (rejouer au risque d'un doublon, ou marquer incertain) et la documenter — c'est un arbitrage produit, pas un détail technique.
 - Le planning horaire doit gérer le passage de minuit et les fuseaux : utiliser une horloge injectée et tester les bornes.
+
+## 7. Dette connue à la fin de la sous-PR D (jalon 010)
+
+Consignée ici plutôt que dans une description de PR, parce que c'est ici qu'on la
+relira.
+
+- **CA-010-12 (recette M3) n'est pas vérifié.** Il n'existe aucun
+  `src-tauri/tests/`, et aucune campagne n'a jamais envoyé un message à travers
+  l'IPC. Chaque pièce est couverte séparément — le runner contre un SMSC factice,
+  la source de destinataires et le cycle de vie contre une vraie base, la
+  validation des commandes — mais pas l'assemblage, ni le redémarrage à froid au
+  milieu d'une campagne massive.
+- **CA-010-11 n'est vérifié que comme mécanisme.** Le débit d'émission de
+  `campaign:progress` est prouvé à 4 Hz quel que soit le débit de la campagne, et
+  c'est testé ; personne n'a lancé une campagne à débit maximal avec l'écran
+  ouvert pour mesurer une dégradation.
+- **`campaigns.delivered_count` n'est alimenté par rien.** La colonne existe, le
+  DTO la porte, et l'écran ne l'affiche **pas** — un zéro permanent à côté de
+  cinq chiffres exacts se lit comme « le SMSC a tout accepté et rien n'est
+  arrivé ». Elle revient avec les statistiques du jalon 014.
+- **`campaigns.send_config` n'a ni version ni migration.** `#[serde(default)]`
+  sur le conteneur fait qu'un champ ajouté plus tard ne casse pas la relecture
+  d'une ligne existante ; un champ dont le *sens* change demanderait un numéro de
+  version, que ce document n'a pas.
+- **Le groupage `submit_multi` n'est pas branché au runner** (arbitrage produit :
+  il le sera, mais seulement lorsque `registered_delivery = 0`).
+- **L'arrêt de l'application ne joint pas les campagnes**, il signale leur
+  annulation et rend la main : un message déjà en route vers `submit` peut encore
+  partir pendant que les sessions se délient. C'est la reprise qui couvre le
+  résidu.

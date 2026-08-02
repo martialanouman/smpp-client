@@ -3746,6 +3746,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "contacts",
+ "futures-core",
+ "futures-util",
  "logging-export",
  "messaging",
  "persistence",

@@ -144,6 +144,36 @@ pub(crate) enum ErrorCode {
     /// interface, not at something the operator can fix by editing a
     /// spreadsheet.
     ContactsInvalidInput,
+
+    /// A field of a campaign call could not be read.
+    ///
+    /// `details` names the field: the campaign form has twenty of them, and
+    /// "invalid input" without a name sends the operator hunting.
+    CampaignInvalidInput,
+    /// No campaign carries that identifier.
+    CampaignNotFound,
+    /// The campaign is already running.
+    ///
+    /// Its own code rather than a storage one: nothing is broken, and what the
+    /// interface has to say is "it is already sending", not "retry".
+    CampaignBusy,
+    /// The lifecycle of spec §10.3 does not allow that move.
+    ///
+    /// `details` carries `from` and `to`. Starting a cancelled campaign, or
+    /// pausing one that has completed, lands here — and it is emphatically not
+    /// a storage failure: the campaign is exactly where the operator left it.
+    CampaignInvalidTransition,
+    /// The campaign selects no recipient.
+    ///
+    /// Refused at creation rather than run as an empty campaign: a campaign
+    /// over an empty list is a mistake in the list selection, and one that
+    /// completes instantly with a total of zero looks like a bug in the
+    /// sending.
+    CampaignNoRecipients,
+    /// No live session carries the identifier the campaign was configured with.
+    CampaignSessionNotBound,
+    /// The campaign store could not be read or written.
+    CampaignStorage,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -441,6 +471,68 @@ impl ErrorDto {
             &"a contacts field could not be read",
             [(FIELD, field.to_owned())],
         )
+    }
+}
+
+impl ErrorDto {
+    /// A field of a campaign call could not be read.
+    ///
+    /// `details` names the field and never carries its value, for the reason
+    /// [`Self::logs_invalid_filter`] gives.
+    pub(crate) fn campaign_invalid_input(field: &'static str) -> Self {
+        Self::detailed(
+            ErrorCode::CampaignInvalidInput,
+            &"a campaign field could not be read",
+            [(FIELD, field.to_owned())],
+        )
+    }
+
+    /// No campaign carries that identifier.
+    pub(crate) fn campaign_not_found() -> Self {
+        Self::bare(ErrorCode::CampaignNotFound, &"no such campaign")
+    }
+
+    /// The campaign is already sending.
+    pub(crate) fn campaign_busy() -> Self {
+        Self::bare(ErrorCode::CampaignBusy, &"this campaign is already running")
+    }
+
+    /// The lifecycle of spec §10.3 refused the move.
+    ///
+    /// Both ends travel, and they are safe to: they are two of the seven
+    /// constants of [`messaging::CampaignStatus`], not operator data.
+    pub(crate) fn campaign_invalid_transition(
+        rejection: &messaging::InvalidCampaignTransition,
+    ) -> Self {
+        Self::detailed(
+            ErrorCode::CampaignInvalidTransition,
+            rejection,
+            [
+                ("from", rejection.from.as_str().to_owned()),
+                ("to", rejection.to.as_str().to_owned()),
+            ],
+        )
+    }
+
+    /// The campaign selects nobody.
+    pub(crate) fn campaign_no_recipients() -> Self {
+        Self::bare(
+            ErrorCode::CampaignNoRecipients,
+            &"the selected contacts hold no recipient",
+        )
+    }
+
+    /// No live session carries the campaign's session identifier.
+    pub(crate) fn campaign_session_not_bound() -> Self {
+        Self::bare(
+            ErrorCode::CampaignSessionNotBound,
+            &"the session this campaign sends on is not bound",
+        )
+    }
+
+    /// The campaign store would not answer.
+    pub(crate) fn campaign_storage(error: &impl ToString) -> Self {
+        Self::bare(ErrorCode::CampaignStorage, error)
     }
 }
 

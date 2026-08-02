@@ -165,6 +165,36 @@ impl Default for CampaignControl {
     }
 }
 
+impl From<RunState> for super::CampaignStatus {
+    /// The lifecycle status a campaign under this command is **in**.
+    ///
+    /// # Why this projection exists at all
+    ///
+    /// Whoever reports on a running campaign — the progress sampler of the IPC
+    /// layer — holds the control and not the row. Asking the database four
+    /// times a second for a status it already knows would be a read per
+    /// reading; hard-wiring `Running` instead is what a first cut did, and it
+    /// made a paused campaign publish `RUNNING` 250 ms after the operator
+    /// paused it, taking the resume button away with it.
+    ///
+    /// # `Cancelled` is reported as soon as it is asked for
+    ///
+    /// A cancelled campaign is not finished: it drains its queue and journals
+    /// what is in flight before its task returns. Reporting `Running` for that
+    /// stretch would offer a pause on a campaign that is stopping, and
+    /// inventing a "stopping" status would add an eighth to a machine spec
+    /// §10.3 closes at seven. `CANCELLED` is where it is going, the operator
+    /// asked for it, and the reading that carries it also says the counters are
+    /// still moving.
+    fn from(state: RunState) -> Self {
+        match state {
+            RunState::Running => Self::Running,
+            RunState::Paused => Self::Paused,
+            RunState::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
 /// One task's view of the controls.
 ///
 /// Cloneable, and each clone tracks its own "has it changed since I looked"
@@ -448,5 +478,39 @@ mod tests {
 
         assert_eq!(feeder.wait_until_running().await, Resumption::Proceed);
         assert_eq!(emitter.wait_until_running().await, Resumption::Proceed);
+    }
+
+    /// **The regression of the progress sampler.** A reporter that reads the
+    /// control rather than assuming `Running` is the only thing that keeps a
+    /// paused campaign showing as paused on the screen.
+    #[tokio::test]
+    async fn the_reported_status_follows_the_command_in_force() {
+        use crate::campaign::CampaignStatus;
+
+        let control = CampaignControl::new();
+
+        assert_eq!(
+            CampaignStatus::from(control.state()),
+            CampaignStatus::Running
+        );
+
+        control.pause();
+        assert_eq!(
+            CampaignStatus::from(control.state()),
+            CampaignStatus::Paused
+        );
+
+        control.resume();
+        assert_eq!(
+            CampaignStatus::from(control.state()),
+            CampaignStatus::Running
+        );
+
+        control.cancel();
+        assert_eq!(
+            CampaignStatus::from(control.state()),
+            CampaignStatus::Cancelled,
+            "a campaign draining after a cancellation is not running"
+        );
     }
 }

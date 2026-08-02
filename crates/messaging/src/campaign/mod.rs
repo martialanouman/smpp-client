@@ -69,12 +69,14 @@
 //! | [`control`] | — | start, pause, resume, cancel, carried to every task of one campaign |
 //! | [`schedule`] | — | when a campaign may send (CA-010-10) |
 //! | [`runner`] | — | the loop that ties them together and counts what happened |
+//! | [`progress`] | L-010-07 | what an observer may read of a campaign that has not finished |
 //!
 //! [`resume`] is the one to read first: it states the invariant this milestone
 //! exists to hold, and everything else is arranged around it.
 
 pub mod control;
 pub mod feeder;
+pub mod progress;
 pub mod resume;
 pub mod runner;
 pub mod schedule;

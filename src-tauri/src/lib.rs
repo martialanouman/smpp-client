@@ -26,6 +26,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use tauri::Manager as _;
 
+mod campaigns;
 mod commands;
 mod config;
 mod contacts;
@@ -145,6 +146,22 @@ pub fn run() -> anyhow::Result<()> {
                 let state = app.state::<state::AppState>();
 
                 tauri::async_runtime::block_on(async {
+                    // Campaigns are told to stop FIRST, so that a runner still
+                    // feeding the send window has the earliest chance to see
+                    // it: every message submitted into a session that is about
+                    // to unbind is journalled `SENT` with no answer — the
+                    // uncertain family of ADR 0014, manufactured by our own
+                    // shutdown order.
+                    //
+                    // It is an ordering, not a guarantee, and the difference is
+                    // worth stating: `shutdown` **signals** cancellation and
+                    // returns — it does not wait for the campaigns to stop, so
+                    // a message already on its way to `submit` can still leave
+                    // while `sessions().shutdown()` unbinds behind it. Joining
+                    // them would mean waiting out whatever is in flight, on an
+                    // application the operator has just asked to close; the
+                    // resume path is what covers the residue.
+                    state.campaigns().shutdown().await;
                     state.sessions().shutdown().await;
                     // And whatever the PDU recorder still holds: the last PDUs
                     // before a shutdown are the ones somebody turned it on for,

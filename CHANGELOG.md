@@ -9,6 +9,86 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 010, campagnes : commandes IPC, `campaign:progress` et écran Campagne
+
+- **Six commandes IPC** (`src-tauri/src/commands/campaign.rs`, L-010-07) :
+  `campaign_create`, `campaign_list`, `campaign_start`, `campaign_pause`,
+  `campaign_resume`, `campaign_cancel`. Chaque champ traverse un constructeur de
+  `messaging` qui **est** la validation — `Template::parse`, `RetryPolicy::new`,
+  `DailyWindow::parse`, `SourceAddress::parse` — et la commande ne fait que
+  projeter le refus sur un `ErrorCode` stable. La WebView reste non fiable : un
+  `invoke` fabriqué à la main emprunte exactement le même chemin que le
+  formulaire.
+- **La configuration d'envoi est persistée telle que l'opérateur l'a soumise**,
+  et **revalidée** à chaque démarrage : une ligne SQLite éditée à la main
+  repasse par le même `parse` que la création. C'est ce qui rend le redémarrage
+  à froid possible sans faire confiance à la base (CA-010-12).
+- **`campaign:progress`, throttlé par construction** (CA-010-11, ADR 0015) :
+  `run_reporting` échantillonne les compteurs de la campagne toutes les 250 ms
+  (4 Hz, la même limite que `metrics:tick`). Il n'existe **aucun chemin** entre
+  un message émis et une émission d'événement, donc une campagne à dix mille
+  messages par seconde produit exactement les quatre événements par seconde
+  d'une campagne à dix.
+- **Le dernier événement ne peut pas être perdu.** L'échantillonneur et
+  l'exécution sont deux moitiés d'un `tokio::join!` ; quand `run_reporting` rend
+  la main l'échantillonneur a terminé, et l'appelant publie alors la lecture
+  finale — statut terminal et `done: true` — par un émetteur **inconditionnel**.
+  C'est le défaut de `sessions:state` au jalon 007, refusé à l'endroit où il
+  aurait coûté le plus cher.
+- **Le débit porté est celui de la campagne**, pas celui de la session
+  (spec §15.3, ADR 0015) : les messages que le SMSC a **acceptés** pour cette
+  campagne, par seconde, sur une fenêtre glissante de dix secondes
+  (`messaging::AcceptanceRate`). Mesuré dans le producteur contre l'horloge
+  injectée du runner, jamais dérivé côté WebView — sa précision dépendrait sinon
+  de la cadence d'affichage. `metrics:tick` mesure la **session** : un envoi
+  unitaire effectué pendant qu'une campagne tourne y est compté, donc à côté des
+  compteurs d'une campagne il décrirait autre chose.
+- **Des acceptations, pas des tentatives** : un message refusé puis rejoué deux
+  fois est une livraison de travail. Compter les tentatives mettrait le débit
+  d'une campagne à son maximum au moment précis où le SMSC refuse tout.
+- **La progression n'est pas le journal** : une campagne de 500 000
+  destinataires ne pousse pas 500 000 événements. Le détail message par message
+  se lit par pagination via `logs_query`, filtré sur la campagne — la même règle,
+  pour la même raison, que `message:update` (CA-008-08) et `import:progress`.
+- **`messaging::CampaignProgress`** (`campaign/progress.rs`) : un
+  `tokio::sync::watch` sur un `CampaignTally` `Copy`, publié par le runner
+  **après chaque élément** et dans une seule branche — les trois issues qui
+  n'atteignent jamais le site d'émission (destinataire rejeté, destinataire
+  annulé, fenêtre horaire fermée) font bouger la lecture comme les autres.
+- **`DailyWindow::parse`** lit une plage horaire depuis deux champs `HH:MM` et
+  un décalage en minutes, et refuse ce qui n'en est pas : `8:00`, `08:00:00`,
+  `25:00`, un décalage hors de `-720..=840`. Un fuseau à l'ouest garde ses deux
+  parties négatives (`-270` est `-04:30`, pas `-5:+30`).
+- **Écran Envoi › onglet Campagne** (`ui/src/views/Send/Campaign/`, L-010-08) :
+  formulaire de création (modèle, liste, politique de variable manquante, rejeu,
+  planning), liste des campagnes, barre de progression, compteurs et débit.
+  L'onglet Envoi unitaire et l'onglet Campagne partagent la barre d'onglets qui
+  arrive avec le second.
+- **Les boutons suivent `live`, pas le statut** : une campagne qu'un `kill -9` a
+  laissée en `RUNNING` sans rien derrière est signalée comme interrompue et
+  propose *Reprendre*, pas *Mettre en pause*. La reprise relance en mode
+  `Resuming`, qui interroge le journal avant chaque émission (CA-010-05).
+- **Aucune campagne n'est relancée toute seule au démarrage.** Un client d'envoi
+  en masse qui reprendrait l'envoi vers deux cent mille personnes parce que
+  quelqu'un a double-cliqué sur l'icône est exactement ce contre quoi CLAUDE.md
+  §8 demande des garde-fous. La reprise est un clic explicite.
+- Sept codes d'erreur (`CAMPAIGN_*`), traduits en français et en anglais.
+
+### Non couvert par le jalon 010, sous-PR D
+
+- **CA-010-12 (recette M3) n'est pas vérifié** : aucun `src-tauri/tests/`, et
+  aucune campagne n'a jamais envoyé un message à travers l'IPC. Chaque pièce est
+  testée séparément — runner contre SMSC factice, source de destinataires et
+  cycle de vie contre une vraie base, validation des commandes — l'assemblage et
+  le redémarrage à froid en cours de campagne massive ne le sont pas.
+- **CA-010-11 n'est vérifié que comme mécanisme** : le débit d'émission de
+  l'événement est prouvé à 4 Hz quel que soit celui de la campagne ; « sans
+  dégradation à débit maximal » n'a pas été mesuré à l'écran.
+- **`campaigns.delivered_count` n'est alimenté par rien** et n'est donc **pas**
+  affiché : un zéro permanent à côté de cinq chiffres exacts se lit comme « le
+  SMSC a tout accepté et rien n'est arrivé ». Il revient au jalon 014.
+- La liste complète est dans `tasks-todo/step-010.md` §7.
+
 ### Ajouté — jalon 010, campagnes : `submit_multi` et repli automatique
 
 - **`submit_multi` pour les destinataires partageant le même contenu**

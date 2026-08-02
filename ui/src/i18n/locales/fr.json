@@ -3,6 +3,90 @@
     "name": "ShinobiSMPP",
     "tagline": "Client ESME SMPP"
   },
+  "campaign": {
+    "intro": "Créez une campagne, suivez sa progression et son débit. Les destinataires sont lus en flux depuis les contacts ; le détail message par message se consulte dans l'écran Journaux.",
+    "name": "Nom de la campagne",
+    "session": "Session",
+    "sessionPlaceholder": "Choisissez une session ouverte",
+    "noBoundSession": "Aucune session n'est ouverte. Connectez-vous depuis l'écran Sessions.",
+    "list": "Liste de destinataires",
+    "allContacts": "Tous les contacts",
+    "listHint": "Les numéros invalides ne sont pas filtrés ici : ils sont comptés comme rejetés et restent visibles dans les totaux.",
+    "template": "Modèle de message",
+    "templateHint": "Les variables prenom, ville… s'écrivent entre doubles accolades et sont résolues par destinataire à partir des attributs de contact.",
+    "source": "Expéditeur",
+    "sourceHint": "Laissez vide pour laisser le SMSC choisir.",
+    "destTon": "Type de numéro (destinataire)",
+    "destNpi": "Plan de numérotation (destinataire)",
+    "encoding": "Encodage (DCS)",
+    "mode": "Concaténation",
+    "registeredDelivery": "Accusé de réception",
+    "advanced": "Options avancées, rejeu et planning",
+    "create": "Créer la campagne",
+    "creating": "Création en cours…",
+    "listHeading": "Campagnes",
+    "empty": "Aucune campagne pour l'instant.",
+    "progress": "Progression",
+    "progressSpoken": "{{processed}} destinataires traités sur {{total}}",
+    "throughput": "Débit campagne (msg/s)",
+    "detailHint": "Le détail message par message se consulte dans l'écran Journaux, filtré sur la campagne.",
+    "interrupted": "Cette campagne a été interrompue (arrêt de l'application ou coupure). Reprenez-la : les messages déjà acceptés ne seront pas réémis.",
+    "duplicateRisk": "{{count}} message(s) laissé(s) en vol par une exécution précédente ont été réémis ; leurs destinataires peuvent les recevoir deux fois.",
+    "notJournalled": "{{count}} message(s) ont été émis sans que leur issue puisse être enregistrée.",
+    "start": "Démarrer",
+    "pause": "Mettre en pause",
+    "resume": "Reprendre",
+    "cancel": "Annuler",
+    "status": {
+      "CREATED": "Créée",
+      "VALIDATED": "Validée",
+      "RUNNING": "En cours",
+      "PAUSED": "En pause",
+      "COMPLETED": "Terminée",
+      "CANCELLED": "Annulée",
+      "FAILED": "Échec"
+    },
+    "counters": {
+      "accepted": "Acceptés",
+      "failed": "Échecs",
+      "rejected": "Rejetés",
+      "skipped": "Ignorés",
+      "cancelled": "Annulés",
+      "retried": "Rejeux"
+    },
+    "missing": {
+      "legend": "Variable manquante",
+      "substitute": "Remplacer par une valeur par défaut",
+      "value": "Valeur de remplacement",
+      "rejectHint": "Par défaut, un destinataire dont une variable manque est écarté : aucun message contenant une variable non résolue n'est jamais émis."
+    },
+    "unanswered": {
+      "abandon": "Ne pas réémettre un message resté sans réponse après un arrêt brutal",
+      "hint": "Par défaut, un message émis dont la réponse n'a pas été enregistrée est réémis à la reprise : rien n'est perdu, mais un destinataire peut le recevoir deux fois. L'option inverse échange ce risque contre celui d'une non-livraison silencieuse."
+    },
+    "retry": {
+      "legend": "Politique de rejeu",
+      "maxAttempts": "Tentatives",
+      "initialDelay": "Délai initial (s)",
+      "maxDelay": "Délai maximal (s)",
+      "backoff": "Progression du délai",
+      "hint": "Un ESME_RTHROTTLED, un ESME_RMSGQFUL ou une absence de réponse sont rejoués ; un ESME_RINVDSTADR ne l'est jamais."
+    },
+    "backoff": {
+      "fixed": "Constante",
+      "exponential": "Exponentielle"
+    },
+    "schedule": {
+      "legend": "Planning",
+      "startAt": "Démarrage différé",
+      "startAtHint": "Heure locale de cette machine. Laissez vide pour démarrer immédiatement.",
+      "windowed": "Limiter l'envoi à une plage horaire",
+      "open": "Début",
+      "close": "Fin",
+      "offset": "Décalage UTC (minutes)",
+      "hint": "La plage peut franchir minuit (22:00–06:00). Le décalage est fixe : une zone à heure d'été décale d'une heure deux fois par an."
+    }
+  },
   "contacts": {
     "import": {
       "cancel": "Annuler",
@@ -112,6 +196,13 @@
     "title": "Écran à venir"
   },
   "error": {
+    "CAMPAIGN_BUSY": "Cette campagne est déjà en cours d'envoi.",
+    "CAMPAIGN_INVALID_INPUT": "Un champ de la campagne est illisible.",
+    "CAMPAIGN_INVALID_TRANSITION": "Le cycle de vie de la campagne n'autorise pas cette action depuis son état actuel.",
+    "CAMPAIGN_NOT_FOUND": "Cette campagne n'existe pas.",
+    "CAMPAIGN_NO_RECIPIENTS": "La sélection de contacts ne contient aucun destinataire.",
+    "CAMPAIGN_SESSION_NOT_BOUND": "La session de cette campagne n'est pas ouverte.",
+    "CAMPAIGN_STORAGE": "La base des campagnes n'a pas répondu.",
     "CONFIG_INVALID_LANGUAGE": "Langue non prise en charge.",
     "CONFIG_INVALID_LOG_LEVEL": "Niveau de journalisation inconnu.",
     "CONFIG_INVALID_RETENTION": "Durée de rétention hors des bornes autorisées.",
@@ -374,6 +465,11 @@
       "SENT": "Émis"
     },
     "submit": "Envoyer",
+    "tabs": {
+      "label": "Mode d'envoi",
+      "simple": "Envoi unitaire",
+      "campaign": "Campagne"
+    },
     "text": "Message",
     "timeHint": "Vide, ou exactement seize caractères.",
     "tlv": {

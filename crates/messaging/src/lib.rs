@@ -74,7 +74,10 @@
 //!   of one campaign;
 //! * [`campaign::schedule`] answers when a campaign may send — a deferred start
 //!   and a daily window, midnight crossings and time zones included (CA-010-10);
-//! * [`campaign::runner`] ties them together and counts what happened.
+//! * [`campaign::runner`] ties them together and counts what happened;
+//! * [`campaign::progress`] is what an observer reads of a campaign that has
+//!   **not** finished — the counters a progress bar needs, published on every
+//!   item and sampled at whatever cadence the reader chooses (L-010-07).
 //!
 //! * [`submit_multi`] batches the recipients that share a body into one PDU and
 //!   falls back onto individual `submit_sm` when the message centre refuses the
@@ -105,9 +108,12 @@ pub mod testing;
 
 pub use campaign::control::{CampaignControl, ControlHandle, Resumption, RunState};
 pub use campaign::feeder::{Fed, FeedItem, FeedRejection, FeedSummary, Feeder};
+pub use campaign::progress::{
+    AcceptanceRate, CampaignProgress, CampaignReading, RATE_WINDOW_SECONDS,
+};
 pub use campaign::resume::{message_key, Admission, EmissionGuard, SkipReason, UnansweredPolicy};
 pub use campaign::runner::{
-    CampaignOutcome, CampaignPlan, CampaignRunner, CampaignTally, StartMode,
+    CampaignOutcome, CampaignPlan, CampaignRunner, CampaignSummary, CampaignTally, StartMode,
 };
 pub use campaign::schedule::{DailyWindow, Schedule, ScheduleDecision, ScheduleError};
 pub use campaign::{CampaignStatus, InvalidCampaignTransition};

@@ -12,6 +12,7 @@
 //! A command validates, calls, serialises. Anything longer than that is
 //! business logic and belongs in a module or a crate below.
 
+pub(crate) mod campaign;
 pub(crate) mod config;
 pub(crate) mod contacts;
 pub(crate) mod logs;
