@@ -76,34 +76,25 @@ stored_enum!(
     }
 );
 
-stored_enum!(
-    /// Where a campaign stands in the lifecycle of spec §10.3.
-    ///
-    /// Unlike `MessageState` this set is **not** mirrored by a `CHECK`
-    /// constraint: spec §14.2 writes the column's domain as
-    /// `CREATED|RUNNING|PAUSED|COMPLETED|...`, and freezing an open list into
-    /// the file format would turn a future status into a migration.
-    CampaignStatus,
-    "campaigns",
-    "status",
-    "one of CREATED, VALIDATED, RUNNING, PAUSED, COMPLETED, CANCELLED, FAILED"
-    {
-        /// Created, recipients not resolved yet.
-        Created => "CREATED",
-        /// Recipients and template checked, ready to start.
-        Validated => "VALIDATED",
-        /// Sending.
-        Running => "RUNNING",
-        /// Feeding suspended; the in-flight window drains normally.
-        Paused => "PAUSED",
-        /// Every message reached a terminal state.
-        Completed => "COMPLETED",
-        /// Stopped by the operator.
-        Cancelled => "CANCELLED",
-        /// Stopped by an error the campaign could not recover from.
-        Failed => "FAILED",
-    }
-);
+// NO `CampaignStatus` here. It was one of these until milestone 010, when the
+// crate that owns the campaign lifecycle took the type carrying it
+// (`messaging::campaign`, ADR 0013) — the move ADR 0010 made for
+// `MessageState` and ADR 0012 for `Contact`. Its column is read by
+// `repositories::convert::read_campaign_status`, which restores the
+// `MalformedRow` context this macro would have produced.
+//
+// **Unlike** `MessageState`, and unlike the enums that remain here, its set is
+// not mirrored by a `CHECK` constraint. `messages.state` has one
+// (`20260726120000_initial_schema.up.sql`, line 114) and so do `bind_type` and
+// `pdu_log.direction`; `campaigns.status` deliberately has none, because spec
+// §14.2 writes that column's domain as `CREATED|RUNNING|PAUSED|COMPLETED|...`
+// — an open list, which a `CHECK` would freeze into the file format and turn a
+// future status into a migration. The same reasoning is written at the column
+// itself, in the migration.
+//
+// The consequence is that `read_campaign_status` is the *only* thing standing
+// between a hand-edited file and a campaign read back as something it never
+// was, which is why it has a test of its own.
 
 stored_enum!(
     /// Which way a logged PDU travelled (spec §14.2, `pdu_log.direction`).
@@ -121,7 +112,7 @@ stored_enum!(
 
 #[cfg(test)]
 mod tests {
-    use super::{BindType, CampaignStatus, PduDirection};
+    use super::{BindType, PduDirection};
 
     /// A variant whose text form does not parse back is a row this version
     /// wrote and cannot read. Checking every variant of every stored enum is
@@ -140,7 +131,6 @@ mod tests {
     #[test]
     fn every_stored_variant_parses_back() {
         assert_round_trips!(BindType);
-        assert_round_trips!(CampaignStatus);
         assert_round_trips!(PduDirection);
     }
 
@@ -152,10 +142,13 @@ mod tests {
 
     #[test]
     fn an_unknown_value_is_rejected_without_being_echoed() {
-        let rejection = CampaignStatus::parse("PENDING").expect_err("must be rejected");
+        let rejection = BindType::parse("listener").expect_err("must be rejected");
 
         let rendered = rejection.to_string();
-        assert!(rendered.contains("campaigns.status"), "{rendered}");
-        assert!(!rendered.contains("PENDING"), "{rendered}");
+        assert!(
+            rendered.contains("session_profiles.bind_type"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("listener"), "{rendered}");
     }
 }

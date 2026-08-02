@@ -11,6 +11,7 @@
 // the ban would apply here as if this were production code.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use messaging::template::{MissingVariablePolicy, Template, Variables};
 use messaging::{
     encoding::{preview::preview, Encoding, EncodingChoice, Gsm7BitPacking},
     segmentation::{
@@ -395,5 +396,93 @@ proptest! {
         // The one field that is always determined: `text:` swallows the rest
         // of the body, so whatever was put there comes back.
         prop_assert_eq!(receipt.text.as_deref(), Some(text.trim_start()));
+    }
+}
+
+// --- Milestone 010 — the template engine ------------------------------------
+
+/// The whole of CA-010-06, as a property rather than as a list of examples.
+///
+/// The example-based tests in `messaging::template` pin the cases somebody
+/// thought of. This one pins the invariant *between* them, over **every**
+/// source: a rendered message never holds a `{{` with a `}}` after it. No
+/// exception for the escape — a review found that the earlier form of this
+/// test, which excused any source containing `{{{{`, excluded precisely the
+/// family where the invariant fell over.
+///
+/// # Why the source is assembled from fragments rather than drawn from an
+/// alphabet
+///
+/// A character-level generator over `[a-c{} ]` looks brace-heavy and is
+/// useless: it almost never produces a *well-formed* placeholder naming a
+/// variable the recipient has, so nearly every draw is a template that fails to
+/// parse or holds no variable at all, and the substitution path — the one the
+/// criterion is about — is never reached. Measured, not assumed: with that
+/// generator, removing **both** defences of the module header left this test
+/// green.
+///
+/// The fragments below are the pieces a real template is made of, malformed
+/// ones included, so a draw of a few of them exercises escapes, nesting,
+/// unterminated openings and values holding braces at the same time. Two of
+/// them are multi-byte: every offset in the parser is a **byte** offset, and an
+/// off-by-one on a `é` is a panic, which CLAUDE.md §4 forbids outright.
+const FRAGMENTS: &[&str] = &[
+    "{{a}}",
+    "{{ b }}",
+    "{{c}}",
+    "{{a",
+    "{{}}",
+    "{{{{",
+    "}}",
+    "{",
+    "}",
+    " ",
+    "x",
+    "é",
+    "🕴€中",
+    "{{a{{b}}}}",
+];
+
+/// Whether a text reads as holding a placeholder.
+///
+/// Transcribed from the criterion, not from the engine: a `{{` with a `}}`
+/// anywhere after it.
+fn reads_as_a_placeholder(text: &str) -> bool {
+    match text.find("{{") {
+        Some(opening) => text[opening + 2..].contains("}}"),
+        None => false,
+    }
+}
+
+proptest! {
+    #[test]
+    fn no_rendered_message_ever_reads_as_holding_a_placeholder(
+        pieces in prop::collection::vec(prop::sample::select(FRAGMENTS), 0..6),
+        first in "[a-c{}é€ ]{0,6}",
+        second in "[a-c{}é€ ]{0,6}",
+        substitute in "[a-c{}é€ ]{0,6}",
+    ) {
+        let source: String = pieces.concat();
+        let Ok(template) = Template::parse(&source) else {
+            // A template that does not parse never reaches a recipient, which
+            // is the first of the three mechanisms.
+            return Ok(());
+        };
+
+        let variables = Variables::new().with("a", &first).with("b", &second);
+
+        for policy in [
+            MissingVariablePolicy::Reject,
+            MissingVariablePolicy::Substitute(substitute.clone()),
+        ] {
+            let Ok(rendered) = template.render(&variables, &policy) else {
+                continue;
+            };
+
+            prop_assert!(
+                !reads_as_a_placeholder(&rendered),
+                "{source:?} rendered as {rendered:?}"
+            );
+        }
     }
 }

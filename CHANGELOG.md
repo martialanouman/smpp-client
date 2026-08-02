@@ -9,6 +9,46 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 010, campagnes : fondations (modèles, rejeu, cycle de vie)
+
+- **Moteur de modèles à variables** (`messaging::template`) : `{{prenom}}` et
+  `{{ville}}` résolues par destinataire depuis les attributs JSON du contact.
+  L'invariant de CA-010-06 — aucun message porteur d'un `{{…}}` ne sort du
+  moteur — est **vérifié sur le texte produit** et par position, non par
+  comptage : un message ne peut pas contenir un `{{` suivi d'un `}}`, quelle que
+  soit la source. Politique de variable manquante explicite (valeur de
+  remplacement ou rejet de la ligne, rejet par défaut) ; une valeur vide compte
+  comme absente, sans quoi la politique de rejet serait inatteignable pour les
+  cellules vides que l'import écrit en `""`.
+- **Deux restrictions volontaires du moteur de modèles**, conséquences de
+  l'invariant ci-dessus et signalées comme telles : une **valeur** de contact ne
+  peut contenir **aucune accolade** (`Yamoussoukro {ancienne capitale}` fait
+  rejeter la ligne, nommément), et un modèle qui échappe `{{{{` avec un `}}`
+  quelque part après est refusé **à la validation** de la campagne. Les deux
+  ferment un contre-exemple trouvé en revue : `{{{{{{a}}` avec `a = "ville}}"`
+  produisait `{{ville}}` chez le destinataire, l'échappement fournissant
+  l'ouverture et la donnée la fermeture — aucune règle regardant les deux
+  moitiés séparément, ni aucun comptage, ne le voyait.
+- **Politique de rejeu par code d'erreur** (`messaging::retry`) : s'appuie sur la
+  classification du jalon 003 et ne reclasse rien. `ESME_RINVDSTADR` jamais
+  rejoué, `ESME_RTHROTTLED` et `ESME_RMSGQFUL` rejoués après délai, timeout
+  rejoué (CA-010-07). Le délai est une fonction pure du numéro de tentative —
+  l'attente appartient à l'exécuteur, qui détient le jeton d'annulation.
+- **Machine d'états de campagne** (`messaging::campaign`) : le cycle de la spec
+  §10.3, transitions énumérées et refus explicite des invalides, avec les deux
+  propriétés héritées de la machine des messages — transition vers soi-même
+  autorisée, statut terminal sans successeur. **Écart assumé avec le diagramme
+  de la spec §10.3**, détaillé dans l'ADR 0013 : `CANCELLED`/`FAILED` sont
+  atteignables depuis tout statut vivant et non depuis `RUNNING` seulement, et
+  `PAUSED → COMPLETED` est autorisé. Le chemin nominal n'est pas raccourci —
+  `CREATED → RUNNING` sans validation reste refusé.
+- **Le débit de rejeu a un plancher** : une politique construite avec un délai
+  nul est refusée, sans quoi un `ESME_RTHROTTLED` — le SMSC demandant
+  explicitement de ralentir — recevait dix réémissions immédiates.
+- **`CampaignStatus` déplacé de `persistence` vers `messaging`** (ADR 0013) : la
+  crate qui possède le cycle de vie possède le type qui le porte. Format stocké
+  inchangé, aucune migration, `persistence::CampaignStatus` résout toujours.
+
 ### Ajouté — jalon 009, contacts : import CSV/XLSX, E.164 et listes
 
 - **Lecture en flux** (`contacts::import`) : le lecteur tourne sur

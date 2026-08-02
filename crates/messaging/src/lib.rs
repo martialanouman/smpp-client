@@ -47,24 +47,49 @@
 //! assert_eq!(split.segments()[1].content_units(), 8);
 //! # Ok::<(), messaging::encoding::EncodingError>(())
 //! ```
+//!
+//! # Milestone 010 — campaigns: the decisions, before the machinery
+//!
+//! Three modules, none of which touches a database, a session or a clock, so
+//! all three are decided and tested without a runtime:
+//!
+//! * [`template`] resolves `{{prenom}}` per recipient and guarantees that no
+//!   text holding an unresolved placeholder ever leaves it (CA-010-06);
+//! * [`retry`] answers "send this message again?" from the `command_status`
+//!   classification of milestone 003, and says how long to wait — as a pure
+//!   function of the attempt number (CA-010-07);
+//! * [`campaign`] holds the lifecycle of spec §10.3 and refuses the transitions
+//!   it does not allow.
+//!
+//! What feeds a campaign from the database, what resumes it after a crash and
+//! what puts a `submit_multi` on the wire (L-010-02, L-010-04, L-010-06) is
+//! built on top of these and is not here yet.
 
 pub mod addressing;
+pub mod campaign;
 pub mod correlation;
 pub mod dlr;
 pub mod encoding;
 mod error;
 pub mod message;
 pub mod ports;
+pub mod retry;
 pub mod segmentation;
 pub mod sender;
 pub mod submit;
+pub mod template;
 
+pub use campaign::{CampaignStatus, InvalidCampaignTransition};
 pub use correlation::{Correlated, Correlator, OrphanReason, OrphanReceipt, OrphanReceiptStore};
 pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
+pub use retry::{
+    GiveUpReason, RetryBackoff, RetryDecision, RetryPolicy, RetryPolicyError, SendFailure,
+};
 pub use sender::{SegmentOutcome, SendObserver, SendReport, SendRequest, Sender};
+pub use template::{MissingVariablePolicy, RenderError, Template, TemplateError, Variables};
 
 /// Crate version, as declared in its manifest.
 ///

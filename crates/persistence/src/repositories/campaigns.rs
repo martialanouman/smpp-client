@@ -2,9 +2,10 @@
 
 use crate::db::Database;
 use crate::ports::CampaignRepository;
-use crate::records::{Campaign, CampaignId, CampaignStatus};
+use crate::records::{Campaign, CampaignId};
 use crate::repositories::convert::{
-    read_campaign_id, read_optional_timestamp, read_timestamp, read_u32, store_u32,
+    read_campaign_id, read_campaign_status, read_optional_timestamp, read_timestamp, read_u32,
+    store_u32,
 };
 use crate::repositories::page::{into_page, PagedRow};
 use crate::{Cursor, Page, PersistenceError};
@@ -53,7 +54,7 @@ impl PagedRow for CampaignRow {
         Ok(Campaign {
             campaign_id: read_campaign_id(&self.campaign_id)?,
             name: self.name,
-            status: CampaignStatus::parse(&self.status)?,
+            status: read_campaign_status(&self.status)?,
             template: self.template,
             send_config: self.send_config,
             total_count: read_u32(self.total_count, TABLE, "total_count")?,
@@ -181,5 +182,95 @@ impl CampaignRepository for SqliteCampaignRepository {
             .rows_affected();
 
         Ok(affected > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // `#[tokio::test]` expands to `Runtime::block_on`, which `clippy.toml`
+    // reserves for "the binary entry point". A test harness is one.
+    #![allow(clippy::disallowed_methods)]
+
+    use super::SqliteCampaignRepository;
+    use crate::db::{Database, DatabaseConfig};
+    use crate::ports::CampaignRepository;
+    use crate::records::{Campaign, CampaignId, CampaignStatus};
+    use crate::{PersistenceError, Timestamp};
+
+    fn a_campaign(campaign_id: CampaignId) -> Campaign {
+        Campaign {
+            campaign_id,
+            name: String::from("juillet"),
+            status: CampaignStatus::Cancelled,
+            template: String::from("Bonjour"),
+            send_config: String::from("{}"),
+            total_count: 0,
+            sent_count: 0,
+            delivered_count: 0,
+            failed_count: 0,
+            created_at: Timestamp::parse("2026-08-02T10:00:00Z").expect("valid RFC 3339"),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    /// `campaigns.status` carries **no** `CHECK` constraint — spec §14.2 leaves
+    /// the set open — so `read_campaign_status` is the only thing between a
+    /// value this version does not know and a campaign read back as something
+    /// it never was. Written inside the crate rather than in `tests/` because
+    /// the injection needs the pool, which stays `pub(crate)` (CA-002-03).
+    ///
+    /// Three failures this pins, all of them live once the milestone-010 move
+    /// retired the `stored_enum!` round-trip test: reading an unknown status as
+    /// a default (a cancelled campaign coming back `CREATED`, and startable),
+    /// naming the wrong table or column, and echoing the offending value into
+    /// an error that crosses the IPC boundary (CA-001-06).
+    #[tokio::test]
+    async fn a_status_this_version_does_not_know_is_a_malformed_row() {
+        let directory = tempfile::TempDir::new().expect("creating a temporary directory");
+        let database = Database::open(DatabaseConfig::new(directory.path().join("campaigns.db")))
+            .await
+            .expect("opening a fresh database");
+        let repository = SqliteCampaignRepository::new(database.clone());
+
+        let campaign = a_campaign(CampaignId::new());
+        repository
+            .upsert_campaign(&campaign)
+            .await
+            .expect("seeding the campaign");
+
+        // Runtime SQL rather than `sqlx::query!`: the macro would put this
+        // deliberately invalid write in the `.sqlx` cache, next to the queries
+        // the application actually runs.
+        let identifier = campaign.campaign_id.to_string();
+        let injected = sqlx::query("UPDATE campaigns SET status = ? WHERE campaign_id = ?")
+            .bind("ARCHIVED")
+            .bind(&identifier)
+            .execute(database.pool())
+            .await
+            .expect("the column takes any text, having no CHECK");
+
+        assert_eq!(injected.rows_affected(), 1, "nothing was injected");
+
+        let rejection = repository
+            .find_campaign(campaign.campaign_id)
+            .await
+            .expect_err("an unknown status must not be read as a campaign");
+
+        assert!(
+            matches!(
+                rejection,
+                PersistenceError::MalformedRow {
+                    table: "campaigns",
+                    column: "status",
+                    ..
+                }
+            ),
+            "{rejection:?}"
+        );
+
+        let rendered = rejection.to_string();
+        assert!(rendered.contains("campaigns.status"), "{rendered}");
+        assert!(!rendered.contains("ARCHIVED"), "{rendered}");
     }
 }
