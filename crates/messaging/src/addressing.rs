@@ -98,6 +98,13 @@ pub struct Destination {
     npi: Npi,
 }
 
+/// The number [`Destination::campaign_placeholder`] is built from.
+///
+/// Unallocated by construction — see that constructor for why a campaign needs
+/// one at all, and why a message that ever carried it would be refused by the
+/// message centre rather than delivered to somebody.
+const CAMPAIGN_PLACEHOLDER: &str = "+10000000000";
+
 impl Destination {
     /// Parses a recipient, defaulting TON and NPI to the safe pair.
     ///
@@ -131,6 +138,42 @@ impl Destination {
         let number = Msisdn::parse(raw).map_err(|_| AddressError::InvalidDestination)?;
 
         Ok(Self { number, ton, npi })
+    }
+
+    /// The stand-in a campaign's [`crate::submit::SubmitOptions`] carries.
+    ///
+    /// # Why a fabricated number exists at all
+    ///
+    /// `SubmitOptions` carries **one** recipient and a campaign has one per
+    /// message, so the options a campaign is configured with hold a placeholder
+    /// that [`crate::campaign::runner::CampaignPlan`] replaces for every
+    /// recipient the feeder resolves. That type's own header records why the
+    /// alternative — a second options type with the field removed — was
+    /// rejected.
+    ///
+    /// # Why it is here and not at the boundary
+    ///
+    /// It was a `const` in the IPC layer, which put a manufactured MSISDN in a
+    /// layer CLAUDE.md §3 keeps free of business decisions, and left the number
+    /// beside the form rather than beside the type that explains it.
+    ///
+    /// The `ton` and `npi` are the campaign's own, and they are **validated**:
+    /// a combination the address rules refuse fails when the campaign is
+    /// created rather than on the first of two hundred thousand messages.
+    ///
+    /// # The number
+    ///
+    /// `+1 000 000 0000` — the `+1` country code with a national number of
+    /// zeroes. It is syntactically an E.164 number and it is allocated to
+    /// nobody, so a bug that let it reach a message centre produces an
+    /// `ESME_RINVDSTADR` rather than a message to a stranger.
+    ///
+    /// # Errors
+    ///
+    /// [`AddressError::InvalidDestination`] if `ton` and `npi` cannot describe
+    /// it.
+    pub fn campaign_placeholder(ton: Ton, npi: Npi) -> Result<Self, AddressError> {
+        Self::parse_with(CAMPAIGN_PLACEHOLDER, ton, npi)
     }
 
     /// The normalised number, digits only.
@@ -537,5 +580,34 @@ mod tests {
 
         let source = SourceAddress::parse("ShinobiSMS").expect("valid");
         assert_eq!(source.to_field().expect("fits").as_str(), "ShinobiSMS");
+    }
+
+    /// The placeholder carries the campaign's own TON and NPI, so a combination
+    /// the address rules refuse is refused when the campaign is created and not
+    /// on the first of two hundred thousand messages.
+    #[test]
+    fn the_campaign_placeholder_carries_the_campaign_type_of_number() {
+        let placeholder = Destination::campaign_placeholder(Ton::NetworkSpecific, Npi::National)
+            .expect("the placeholder parses");
+
+        assert_eq!(placeholder.ton(), Ton::NetworkSpecific);
+        assert_eq!(placeholder.npi(), Npi::National);
+        assert!(placeholder.to_field().is_ok());
+    }
+
+    /// It must not be a number anybody has. A bug that let it reach a message
+    /// centre has to produce an `ESME_RINVDSTADR`, not a message to a stranger.
+    #[test]
+    fn the_campaign_placeholder_is_not_an_allocated_number() {
+        let placeholder = Destination::campaign_placeholder(Ton::International, Npi::Isdn)
+            .expect("the placeholder parses");
+
+        let digits = placeholder.number().as_str();
+
+        assert!(digits.starts_with('1'), "{digits}");
+        assert!(
+            digits.chars().skip(1).all(|digit| digit == '0'),
+            "the national part must be zeroes, not a routable number: {digits}"
+        );
     }
 }
