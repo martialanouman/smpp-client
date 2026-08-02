@@ -32,8 +32,8 @@ use contacts::import::{
 };
 use contacts::lists::ListSelection;
 use contacts::model::{Contact, ContactList, LineType, ListId, ProfileId};
-use contacts::validation::{Region, ValidationOptions};
 use contacts::ports::ContactRepository as _;
+use contacts::validation::{Region, ValidationOptions};
 use persistence::ports::ContactDirectory as _;
 use persistence::Cursor;
 use smpp_core::time::Timestamp;
@@ -249,11 +249,10 @@ impl ImportOptionsInput {
     fn parse(self) -> Result<ImportOptions, ErrorDto> {
         let default_region = match self.default_region.as_deref().filter(|raw| !raw.is_empty()) {
             None => None,
-            Some(raw) => {
-                Some(Region::parse(raw).ok_or_else(|| {
-                    ErrorDto::contacts_invalid_input("defaultRegion")
-                })?)
-            }
+            Some(raw) => Some(
+                Region::parse(raw)
+                    .ok_or_else(|| ErrorDto::contacts_invalid_input("defaultRegion"))?,
+            ),
         };
 
         let list = match self.list_id.as_deref().filter(|raw| !raw.is_empty()) {
@@ -471,7 +470,9 @@ impl From<Contact> for ContactRowDto {
             msisdn: contact.msisdn.as_str().to_owned(),
             country: contact.country,
             valid: contact.valid,
-            line_type: contact.line_type.map(|kind| LineType::code(kind).to_owned()),
+            line_type: contact
+                .line_type
+                .map(|kind| LineType::code(kind).to_owned()),
             attributes: contact.attributes,
             source: contact.source,
             created_at: contact.created_at.to_storage(),

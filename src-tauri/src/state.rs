@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::{AppConfig, ConfigError, ConfigStore};
-use crate::events::EventEmitter;
 use crate::contacts::ContactServices;
+use crate::events::EventEmitter;
 use crate::logs::LogServices;
 use crate::messages::MessageServices;
 use crate::sessions::SessionServices;

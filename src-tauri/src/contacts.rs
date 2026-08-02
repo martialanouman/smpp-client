@@ -106,11 +106,8 @@ impl ContactServices {
         }
 
         let (sender, receiver) = mpsc::channel(PROGRESS_QUEUE_CAPACITY);
-        let forwarder = tauri::async_runtime::spawn(forward(
-            app.clone(),
-            Arc::clone(&self.events),
-            receiver,
-        ));
+        let forwarder =
+            tauri::async_runtime::spawn(forward(app.clone(), Arc::clone(&self.events), receiver));
 
         let outcome = self
             .importer
@@ -161,9 +158,7 @@ impl ContactServices {
     /// # Errors
     ///
     /// [`ErrorDto`] if the store cannot be read.
-    pub(crate) async fn profiles(
-        &self,
-    ) -> Result<Vec<contacts::import::ImportProfile>, ErrorDto> {
+    pub(crate) async fn profiles(&self) -> Result<Vec<contacts::import::ImportProfile>, ErrorDto> {
         self.repository
             .list_import_profiles()
             .await

@@ -3,9 +3,104 @@
     "name": "ShinobiSMPP",
     "tagline": "Client ESME SMPP"
   },
+  "contacts": {
+    "import": {
+      "cancel": "Annuler",
+      "columnHint": "Nom de l'en-tête, ou position à partir de 0.",
+      "columnPlaceholder": "msisdn",
+      "countryColumn": "Colonne du pays",
+      "countryHint": "Facultative. Elle l'emporte sur le pays par défaut.",
+      "dedup": {
+        "firstWins": "Garder la première occurrence",
+        "mergeAttributes": "Fusionner les attributs",
+        "mergeWarning": "La fusion garde tous les contacts distincts en mémoire jusqu'à la fin de l'import."
+      },
+      "deduplication": "Doublons",
+      "defaultRegion": "Pays par défaut",
+      "fileFilter": "Fichiers de contacts",
+      "headerMode": {
+        "absent": "Toutes les lignes sont des données",
+        "detect": "Détecter automatiquement",
+        "present": "La première ligne nomme les colonnes"
+      },
+      "headers": "Ligne d'en-tête",
+      "heading": "Importer des contacts",
+      "list": "Ajouter à la liste",
+      "listHint": "Chaque contact importé rejoint cette liste.",
+      "mobilesOnly": "Mobiles uniquement",
+      "msisdnColumn": "Colonne du numéro",
+      "noFile": "Aucun fichier sélectionné",
+      "noList": "Aucune liste",
+      "pick": "Choisir un fichier…",
+      "progress": "{{processed}} lignes traitées — {{imported}} importées, {{rejected}} rejetées, {{duplicates}} doublons.",
+      "regionHint": "Code ISO à deux lettres, pour les numéros au format national.",
+      "sheet": "Feuille",
+      "sheetHint": "Laissez vide pour la première feuille du classeur.",
+      "start": "Lancer l'import",
+      "starting": "Démarrage de l'import…"
+    },
+    "lineType": {
+      "fixed_line": "Fixe",
+      "fixed_line_or_mobile": "Fixe ou mobile",
+      "mobile": "Mobile",
+      "other": "Autre",
+      "unknown": "Inconnu"
+    },
+    "reason": {
+      "EMPTY": "Colonne du numéro vide",
+      "ILLEGAL_CHARACTER": "Caractère interdit dans le numéro",
+      "LINE_TYPE_EXCLUDED": "Type de ligne exclu",
+      "MISSING_REGION": "Format national sans pays indiqué",
+      "NOT_IN_PLAN": "Numéro absent du plan de numérotation",
+      "TOO_LONG": "Numéro trop long pour son pays",
+      "TOO_SHORT": "Numéro trop court pour son pays",
+      "UNKNOWN_COUNTRY_CODE": "Indicatif pays inconnu",
+      "UNKNOWN_REGION": "Pays inconnu",
+      "UNREADABLE_CELL": "Cellule illisible"
+    },
+    "report": {
+      "blank": "Lignes vides",
+      "byReason": "Motifs de rejet",
+      "dismiss": "Fermer",
+      "duplicates": "Doublons",
+      "export": "Exporter les lignes rejetées",
+      "fixedLines": "Lignes fixes",
+      "heading": "Rapport d'import",
+      "headingCancelled": "Rapport d'import (annulé)",
+      "imported": "Importées",
+      "line": "Ligne",
+      "mobiles": "Mobiles",
+      "reason": "Motif",
+      "rejected": "Rejetées",
+      "rejectedCaption": "Lignes rejetées, avec leur numéro de ligne et leur motif",
+      "total": "Lignes traitées",
+      "truncated": "La liste est tronquée ; les compteurs restent exacts.",
+      "value": "Valeur"
+    },
+    "source": {
+      "import_csv": "Import CSV",
+      "import_xlsx": "Import XLSX"
+    },
+    "table": {
+      "caption": "Contacts importés, avec leur numéro, leur pays et leur origine",
+      "complete": "Fin de la liste.",
+      "count": "{{count}} contact",
+      "count_other": "{{count}} contacts",
+      "country": "Pays",
+      "createdAt": "Ajouté le",
+      "empty": "Aucun contact. Importez un fichier pour commencer.",
+      "heading": "Contacts",
+      "lineType": "Type de ligne",
+      "loading": "Chargement…",
+      "msisdn": "Numéro",
+      "search": "Recherche",
+      "searchPlaceholder": "Numéro ou attribut",
+      "source": "Origine"
+    }
+  },
   "empty": {
-    "title": "Écran à venir",
-    "body": "Cet écran est un emplacement réservé : sa mise en œuvre arrive à un jalon ultérieur."
+    "body": "Cet écran est un emplacement réservé : sa mise en œuvre arrive à un jalon ultérieur.",
+    "title": "Écran à venir"
   },
   "error": {
     "CONFIG_INVALID_LANGUAGE": "Langue non prise en charge.",
@@ -15,6 +110,12 @@
     "CONFIG_MALFORMED": "Le fichier de préférences est illisible.",
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
+    "CONTACTS_DUPLICATE": "Un contact ou une liste existe déjà sous cet identifiant.",
+    "CONTACTS_IMPORT_BUSY": "Un import est déjà en cours. Attendez la fin ou annulez-le.",
+    "CONTACTS_IMPORT_REJECTED": "Le fichier n'a pas pu être lu ou associé aux colonnes indiquées.",
+    "CONTACTS_INVALID_INPUT": "Un champ de l'appel est illisible.",
+    "CONTACTS_NOT_FOUND": "Le contact, la liste ou le profil demandé n'existe pas.",
+    "CONTACTS_STORAGE": "Le répertoire de contacts n'a pas répondu.",
     "LOGS_INVALID_FILTER": "Un critère de filtre est illisible.",
     "LOGS_UNAVAILABLE": "Le journal n'a pas répondu.",
     "MESSAGE_DUPLICATE": "Un message existe déjà sous cet identifiant ; il n'a pas été réémis.",
@@ -36,95 +137,95 @@
     "unknown": "Une erreur est survenue."
   },
   "logs": {
+    "column": {
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "createdAt": "Créé le",
+      "dest": "Destinataire",
+      "direction": "Sens",
+      "dlrErr": "Erreur",
+      "dlrStat": "Accusé",
+      "raw": "Corps brut",
+      "reason": "Raison",
+      "receivedAt": "Reçu le",
+      "segments": "Segments",
+      "sequence": "sequence_number",
+      "smscId": "Identifiant SMSC",
+      "state": "État",
+      "status": "Statut",
+      "text": "Message",
+      "ts": "Horodatage"
+    },
+    "count": "{{count}} ligne(s)",
+    "detail": {
+      "close": "Fermer",
+      "label": "Détail de la ligne",
+      "none": "Sélectionnez une ligne pour en voir le détail.",
+      "pduDisabled": "L'enregistrement des PDU est désactivé : aucun en-tête, aucun corps décodé et aucun hexadécimal n'est conservé tant qu'il ne l'est pas.",
+      "pduLogging": "Enregistrer les PDU",
+      "title": "Détail"
+    },
+    "empty": "Aucune ligne ne correspond au filtre.",
+    "failure": "Le journal n'a pas pu être lu.",
+    "field": {
+      "attempts": "Tentatives",
+      "clientMessageId": "Identifiant client",
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "createdAt": "Créé le",
+      "decoded": "Corps décodé",
+      "dest": "Destinataire",
+      "direction": "Sens",
+      "dlrAt": "Accusé reçu le",
+      "dlrErr": "err de l'accusé",
+      "dlrStat": "stat de l'accusé",
+      "raw": "Corps brut",
+      "rawHex": "Hexadécimal brut",
+      "reason": "Raison",
+      "receivedAt": "Reçu le",
+      "respAt": "Répondu le",
+      "segments": "Segments",
+      "sentAt": "Émis le",
+      "sequence": "sequence_number",
+      "sessionId": "Session",
+      "smscMessageId": "Identifiant SMSC",
+      "source": "Expéditeur",
+      "state": "État",
+      "text": "Message",
+      "ts": "Horodatage"
+    },
+    "filters": {
+      "anyState": "Tous",
+      "apply": "Filtrer",
+      "clear": "Réinitialiser",
+      "destPrefix": "Préfixe destinataire",
+      "dlrErr": "Code d'erreur",
+      "from": "Depuis",
+      "label": "Filtres du journal",
+      "search": "Recherche",
+      "state": "État",
+      "to": "Jusqu'à",
+      "unsupported": "Ces critères ne s'appliquent qu'aux messages : un accusé orphelin et une PDU n'ont ni état, ni destinataire, ni contenu."
+    },
+    "pending": "{{count}} mise(s) à jour",
+    "reason": {
+      "NO_IDENTIFIER": "Aucun identifiant lisible",
+      "UNKNOWN_ID": "Identifiant inconnu"
+    },
+    "refresh": "Actualiser",
+    "state": {
+      "ACCEPTED": "Accepté",
+      "DELIVERED": "Livré",
+      "EXPIRED": "Expiré",
+      "FAILED": "Échoué",
+      "QUEUED": "En file",
+      "SENT": "Émis"
+    },
     "tab": {
       "messages": "Messages",
       "orphans": "Accusés orphelins",
       "pdus": "PDU"
-    },
-    "count": "{{count}} ligne(s)",
-    "refresh": "Actualiser",
-    "empty": "Aucune ligne ne correspond au filtre.",
-    "failure": "Le journal n'a pas pu être lu.",
-    "state": {
-      "QUEUED": "En file",
-      "SENT": "Émis",
-      "ACCEPTED": "Accepté",
-      "DELIVERED": "Livré",
-      "FAILED": "Échoué",
-      "EXPIRED": "Expiré"
-    },
-    "filters": {
-      "label": "Filtres du journal",
-      "search": "Recherche",
-      "destPrefix": "Préfixe destinataire",
-      "state": "État",
-      "anyState": "Tous",
-      "dlrErr": "Code d'erreur",
-      "from": "Depuis",
-      "to": "Jusqu'à",
-      "apply": "Filtrer",
-      "clear": "Réinitialiser",
-      "unsupported": "Ces critères ne s'appliquent qu'aux messages : un accusé orphelin et une PDU n'ont ni état, ni destinataire, ni contenu."
-    },
-    "column": {
-      "createdAt": "Créé le",
-      "dest": "Destinataire",
-      "state": "État",
-      "status": "Statut",
-      "dlrStat": "Accusé",
-      "dlrErr": "Erreur",
-      "segments": "Segments",
-      "text": "Message",
-      "receivedAt": "Reçu le",
-      "smscId": "Identifiant SMSC",
-      "reason": "Raison",
-      "raw": "Corps brut",
-      "ts": "Horodatage",
-      "direction": "Sens",
-      "commandId": "command_id",
-      "commandStatus": "command_status",
-      "sequence": "sequence_number"
-    },
-    "detail": {
-      "label": "Détail de la ligne",
-      "title": "Détail",
-      "none": "Sélectionnez une ligne pour en voir le détail.",
-      "close": "Fermer",
-      "pduLogging": "Enregistrer les PDU",
-      "pduDisabled": "L'enregistrement des PDU est désactivé : aucun en-tête, aucun corps décodé et aucun hexadécimal n'est conservé tant qu'il ne l'est pas."
-    },
-    "field": {
-      "clientMessageId": "Identifiant client",
-      "smscMessageId": "Identifiant SMSC",
-      "sessionId": "Session",
-      "source": "Expéditeur",
-      "dest": "Destinataire",
-      "state": "État",
-      "commandStatus": "command_status",
-      "dlrStat": "stat de l'accusé",
-      "dlrErr": "err de l'accusé",
-      "segments": "Segments",
-      "attempts": "Tentatives",
-      "createdAt": "Créé le",
-      "sentAt": "Émis le",
-      "respAt": "Répondu le",
-      "dlrAt": "Accusé reçu le",
-      "text": "Message",
-      "reason": "Raison",
-      "receivedAt": "Reçu le",
-      "raw": "Corps brut",
-      "direction": "Sens",
-      "commandId": "command_id",
-      "sequence": "sequence_number",
-      "ts": "Horodatage",
-      "decoded": "Corps décodé",
-      "rawHex": "Hexadécimal brut"
-    },
-    "reason": {
-      "UNKNOWN_ID": "Identifiant inconnu",
-      "NO_IDENTIFIER": "Aucun identifiant lisible"
-    },
-    "pending": "{{count}} mise(s) à jour"
+    }
   },
   "metrics": {
     "accepted": "Acceptés",
@@ -151,179 +252,158 @@
     "windowSpoken": "{{value}} emplacements occupés sur {{total}}."
   },
   "nav": {
-    "label": "Navigation principale",
-    "dashboard": "Tableau de bord",
-    "sessions": "Sessions",
-    "send": "Envoi",
     "contacts": "Contacts",
-    "numbers": "Générateur",
+    "dashboard": "Tableau de bord",
+    "label": "Navigation principale",
     "logs": "Journaux",
-    "stats": "Statistiques",
-    "settings": "Réglages"
+    "numbers": "Générateur",
+    "send": "Envoi",
+    "sessions": "Sessions",
+    "settings": "Réglages",
+    "stats": "Statistiques"
   },
   "notification": {
-    "region": "Notifications",
-    "dismiss": "Fermer la notification"
+    "dismiss": "Fermer la notification",
+    "region": "Notifications"
   },
   "screen": {
-    "dashboard": "Vue d'ensemble des sessions et du débit.",
-    "sessions": "Connexions aux SMSC, bind et supervision.",
-    "send": "Envoi unitaire et campagnes.",
     "contacts": "Import, validation E.164 et listes.",
-    "numbers": "Génération de numéros valides par pays.",
+    "dashboard": "Vue d'ensemble des sessions et du débit.",
     "logs": "Journal des messages et des accusés de réception.",
-    "stats": "Statistiques d'envoi et de livraison.",
-    "settings": "Langue, thème, journalisation et rétention."
+    "numbers": "Génération de numéros valides par pays.",
+    "send": "Envoi unitaire et campagnes.",
+    "sessions": "Connexions aux SMSC, bind et supervision.",
+    "settings": "Langue, thème, journalisation et rétention.",
+    "stats": "Statistiques d'envoi et de livraison."
   },
   "send": {
-    "intro": "Envoyez un message unitaire vers un SMSC et lisez sa réponse. Les champs avancés reprennent la table de la spécification SMPP §7.3.",
-    "session": "Session",
-    "sessionPlaceholder": "Choisissez une session ouverte",
-    "noBoundSession": "Aucune session n'est ouverte. Connectez-vous depuis l'écran Sessions.",
+    "advanced": "Champs avancés (spec §7.3)",
+    "alphanumericWarning": "Un expéditeur alphanumérique impose source_addr_ton = 5 et n'est pas accepté par tous les opérateurs.",
+    "counter": {
+      "characters": "{{count}} caractère(s)",
+      "encoding": "Encodage :",
+      "pending": "Compteur en cours de calcul…",
+      "segments": "{{count}} segment(s)",
+      "units": "{{used}} unité(s) utilisées, {{remaining}} restantes dans le segment"
+    },
+    "derived": "Déduit de l'adresse",
+    "destNpi": "Plan de numérotation (destinataire)",
+    "destTon": "Type de numéro (destinataire)",
     "destination": "Destinataire",
     "destinationHint": "Format international, indicatif pays compris.",
-    "destTon": "Type de numéro (destinataire)",
-    "destNpi": "Plan de numérotation (destinataire)",
-    "source": "Expéditeur",
-    "sourceHint": "Laissez vide pour laisser le SMSC choisir.",
-    "sourceTon": "Type de numéro (expéditeur)",
-    "sourceNpi": "Plan de numérotation (expéditeur)",
-    "alphanumericWarning": "Un expéditeur alphanumérique impose source_addr_ton = 5 et n'est pas accepté par tous les opérateurs.",
-    "text": "Message",
-    "encodingLabel": "Encodage (DCS)",
-    "mode": "Concaténation",
-    "registeredDelivery": "Accusé de réception",
-    "advanced": "Champs avancés (spec §7.3)",
-    "serviceType": "service_type",
-    "serviceTypeHint": "Cinq caractères au plus ; vide pour le défaut du SMSC.",
-    "protocolId": "protocol_id",
-    "priorityFlag": "priority_flag",
-    "priorityFlagHint": "0 à 3.",
-    "scheduleDeliveryTime": "schedule_delivery_time",
-    "validityPeriod": "validity_period",
-    "timeHint": "Vide, ou exactement seize caractères.",
-    "smDefaultMsgId": "sm_default_msg_id",
-    "replaceIfPresent": "Remplacer un message existant (replace_if_present_flag)",
-    "submit": "Envoyer",
-    "sending": "Envoi en cours…",
-    "counter": {
-      "pending": "Compteur en cours de calcul…",
-      "encoding": "Encodage :",
-      "characters": "{{count}} caractère(s)",
-      "units": "{{used}} unité(s) utilisées, {{remaining}} restantes dans le segment",
-      "segments": "{{count}} segment(s)"
-    },
     "encoding": {
       "automatic": "Automatique",
       "gsm7Bit": "GSM 7 bits",
       "latin1": "ISO-8859-1",
       "ucs2": "UCS2"
     },
+    "encodingLabel": "Encodage (DCS)",
+    "intro": "Envoyez un message unitaire vers un SMSC et lisez sa réponse. Les champs avancés reprennent la table de la spécification SMPP §7.3.",
+    "mode": "Concaténation",
     "modes": {
-      "udh": "En-tête UDH (portable)",
+      "messagePayload": "message_payload (sans découpage)",
       "sar": "TLV sar_*",
-      "messagePayload": "message_payload (sans découpage)"
+      "udh": "En-tête UDH (portable)"
     },
+    "noBoundSession": "Aucune session n'est ouverte. Connectez-vous depuis l'écran Sessions.",
+    "npi": {
+      "data": "Données, X.121 (3)",
+      "isdn": "ISDN / E.164 (1)",
+      "landMobile": "Mobile terrestre, E.212 (6)",
+      "national": "National (8)",
+      "private": "Privé (9)",
+      "telex": "Télex, F.69 (4)",
+      "unknown": "Inconnu (0)"
+    },
+    "outcomes": {
+      "answered": "Répondu",
+      "notAttempted": "Non émis",
+      "unanswered": "Sans réponse"
+    },
+    "priorityFlag": "priority_flag",
+    "priorityFlagHint": "0 à 3.",
+    "protocolId": "protocol_id",
     "receipts": {
+      "none": "Aucun (0)",
       "onAnyOutcome": "À l'issue, succès ou échec (1)",
-      "onFailure": "En cas d'échec seulement (2)",
-      "none": "Aucun (0)"
+      "onFailure": "En cas d'échec seulement (2)"
+    },
+    "registeredDelivery": "Accusé de réception",
+    "replaceIfPresent": "Remplacer un message existant (replace_if_present_flag)",
+    "result": {
+      "clientMessageId": "Identifiant local",
+      "noAnswer": "Aucune réponse du SMSC.",
+      "notJournalled": "Le message est bien parti, mais son enregistrement a échoué. Ne le renvoyez pas : il serait émis une seconde fois.",
+      "outcome": "Issue",
+      "retryable": "Le même message peut être réémis.",
+      "segment": "Segment",
+      "segments": "{{count}} segment(s)",
+      "smscMessageId": "Identifiant SMSC",
+      "status": "command_status",
+      "title": "Résultat",
+      "unknownStatus": "Code inconnu",
+      "vendorSpecific": "Ce code appartient à la plage réservée à l'opérateur ; seule sa documentation l'explique."
+    },
+    "scheduleDeliveryTime": "schedule_delivery_time",
+    "sending": "Envoi en cours…",
+    "serviceType": "service_type",
+    "serviceTypeHint": "Cinq caractères au plus ; vide pour le défaut du SMSC.",
+    "session": "Session",
+    "sessionPlaceholder": "Choisissez une session ouverte",
+    "smDefaultMsgId": "sm_default_msg_id",
+    "source": "Expéditeur",
+    "sourceHint": "Laissez vide pour laisser le SMSC choisir.",
+    "sourceNpi": "Plan de numérotation (expéditeur)",
+    "sourceTon": "Type de numéro (expéditeur)",
+    "state": {
+      "ACCEPTED": "Accepté",
+      "DELIVERED": "Délivré",
+      "EXPIRED": "Expiré",
+      "FAILED": "Échec",
+      "QUEUED": "En file",
+      "SENT": "Émis"
+    },
+    "submit": "Envoyer",
+    "text": "Message",
+    "timeHint": "Vide, ou exactement seize caractères.",
+    "tlv": {
+      "add": "Ajouter un TLV",
+      "empty": "Aucun paramètre optionnel.",
+      "legend": "Paramètres optionnels (TLV)",
+      "remove": "Retirer",
+      "tag": "Tag (hex)",
+      "value": "Valeur (hex)"
     },
     "ton": {
-      "unknown": "Inconnu (0)",
+      "abbreviated": "Abrégé (6)",
+      "alphanumeric": "Alphanumérique (5)",
       "international": "International, E.164 (1)",
       "national": "National (2)",
       "networkSpecific": "Spécifique réseau (3)",
       "subscriberNumber": "Numéro d'abonné (4)",
-      "alphanumeric": "Alphanumérique (5)",
-      "abbreviated": "Abrégé (6)"
+      "unknown": "Inconnu (0)"
     },
-    "npi": {
-      "unknown": "Inconnu (0)",
-      "isdn": "ISDN / E.164 (1)",
-      "data": "Données, X.121 (3)",
-      "telex": "Télex, F.69 (4)",
-      "landMobile": "Mobile terrestre, E.212 (6)",
-      "national": "National (8)",
-      "private": "Privé (9)"
-    },
-    "tlv": {
-      "legend": "Paramètres optionnels (TLV)",
-      "empty": "Aucun paramètre optionnel.",
-      "tag": "Tag (hex)",
-      "value": "Valeur (hex)",
-      "add": "Ajouter un TLV",
-      "remove": "Retirer"
-    },
-    "state": {
-      "QUEUED": "En file",
-      "SENT": "Émis",
-      "ACCEPTED": "Accepté",
-      "DELIVERED": "Délivré",
-      "FAILED": "Échec",
-      "EXPIRED": "Expiré"
-    },
-    "outcomes": {
-      "answered": "Répondu",
-      "unanswered": "Sans réponse",
-      "notAttempted": "Non émis"
-    },
-    "result": {
-      "title": "Résultat",
-      "segments": "{{count}} segment(s)",
-      "clientMessageId": "Identifiant local",
-      "smscMessageId": "Identifiant SMSC",
-      "status": "command_status",
-      "noAnswer": "Aucune réponse du SMSC.",
-      "unknownStatus": "Code inconnu",
-      "vendorSpecific": "Ce code appartient à la plage réservée à l'opérateur ; seule sa documentation l'explique.",
-      "retryable": "Le même message peut être réémis.",
-      "segment": "Segment",
-      "outcome": "Issue",
-      "notJournalled": "Le message est bien parti, mais son enregistrement a échoué. Ne le renvoyez pas : il serait émis une seconde fois."
-    },
-    "derived": "Déduit de l'adresse"
+    "validityPeriod": "validity_period"
   },
   "sessions": {
-    "empty": "Aucun profil de connexion. Créez-en un pour ouvrir une session vers un SMSC.",
-    "newProfile": "Nouveau profil",
-    "edit": "Modifier",
+    "bind": "Se connecter",
+    "bindType": {
+      "receiver": "Réception (RX)",
+      "transceiver": "Émission et réception (TRX)",
+      "transmitter": "Émission (TX)"
+    },
+    "cancel": "Annuler",
     "close": "Fermer",
     "delete": "Supprimer",
-    "save": "Enregistrer",
-    "cancel": "Annuler",
-    "bind": "Se connecter",
-    "unbind": "Se déconnecter",
-    "password": "Mot de passe SMSC",
-    "inFlight": "{{count}} en attente",
-    "gsm7Hint": "La disposition GSM 7 bits est imposée par le SMSC : elle ne se devine pas, et une erreur ne se voit que sur le téléphone du destinataire.",
-    "state": {
-      "CLOSED": "Fermée",
-      "CONNECTING": "Connexion…",
-      "BINDING": "Bind en cours…",
-      "BOUND": "Connectée",
-      "UNBOUND": "Déconnectée",
-      "RECONNECT": "Reconnexion…",
-      "ERROR": "Erreur"
+    "dlrIdMatching": {
+      "bases": "Souple + autre base",
+      "exact": "Stricte",
+      "relaxed": "Souple (casse, zéros)"
     },
-    "giveUp": {
-      "FATAL_STATUS": "Le SMSC a refusé le bind définitivement. Vérifiez les identifiants : aucune nouvelle tentative ne sera faite.",
-      "RECONNECT_DISABLED": "La reconnexion automatique est désactivée sur ce profil.",
-      "SESSION_ENDED": "La session s'est terminée et ne redémarrera pas d'elle-même."
-    },
-    "bindType": {
-      "transmitter": "Émission (TX)",
-      "receiver": "Réception (RX)",
-      "transceiver": "Émission et réception (TRX)"
-    },
-    "gsm7Packing": {
-      "unpacked": "Non packé (défaut)",
-      "packed": "Packé"
-    },
-    "gsm7Charset": {
-      "gsm0338": "GSM 03.38 (défaut)",
-      "latin1": "Latin-1 (alt-charset)"
-    },
+    "dlrIdMatchingHint": "Souple compare aussi la casse et retire les zéros de tête : deux écritures du même identifiant, jamais deux identifiants différents.",
+    "dlrIdMatchingWarning": "« Autre base » relit l'identifiant en hexadécimal ou en décimal. Deux identifiants distincts peuvent alors se confondre, et un accusé créditer le mauvais message. À réserver à un SMSC dont vous savez qu'il change de base.",
+    "edit": "Modifier",
+    "empty": "Aucun profil de connexion. Créez-en un pour ouvrir une session vers un SMSC.",
     "field": {
       "bindType": "Type de bind",
       "dlrIdMatching": "Correspondance des identifiants d'accusé",
@@ -345,20 +425,41 @@
       "throughputTps": "Débit cible (msg/s)",
       "windowSize": "Fenêtre"
     },
-    "dlrIdMatching": {
-      "exact": "Stricte",
-      "relaxed": "Souple (casse, zéros)",
-      "bases": "Souple + autre base"
+    "giveUp": {
+      "FATAL_STATUS": "Le SMSC a refusé le bind définitivement. Vérifiez les identifiants : aucune nouvelle tentative ne sera faite.",
+      "RECONNECT_DISABLED": "La reconnexion automatique est désactivée sur ce profil.",
+      "SESSION_ENDED": "La session s'est terminée et ne redémarrera pas d'elle-même."
     },
-    "dlrIdMatchingHint": "Souple compare aussi la casse et retire les zéros de tête : deux écritures du même identifiant, jamais deux identifiants différents.",
-    "dlrIdMatchingWarning": "« Autre base » relit l'identifiant en hexadécimal ou en décimal. Deux identifiants distincts peuvent alors se confondre, et un accusé créditer le mauvais message. À réserver à un SMSC dont vous savez qu'il change de base.",
-    "throughputHint": "Zéro signifie illimité. Le plancher est la borne basse de l'adaptation au bridage ; il n'est atteint qu'à partir du jalon 012."
+    "gsm7Charset": {
+      "gsm0338": "GSM 03.38 (défaut)",
+      "latin1": "Latin-1 (alt-charset)"
+    },
+    "gsm7Hint": "La disposition GSM 7 bits est imposée par le SMSC : elle ne se devine pas, et une erreur ne se voit que sur le téléphone du destinataire.",
+    "gsm7Packing": {
+      "packed": "Packé",
+      "unpacked": "Non packé (défaut)"
+    },
+    "inFlight": "{{count}} en attente",
+    "newProfile": "Nouveau profil",
+    "password": "Mot de passe SMSC",
+    "save": "Enregistrer",
+    "state": {
+      "BINDING": "Bind en cours…",
+      "BOUND": "Connectée",
+      "CLOSED": "Fermée",
+      "CONNECTING": "Connexion…",
+      "ERROR": "Erreur",
+      "RECONNECT": "Reconnexion…",
+      "UNBOUND": "Déconnectée"
+    },
+    "throughputHint": "Zéro signifie illimité. Le plancher est la borne basse de l'adaptation au bridage ; il n'est atteint qu'à partir du jalon 012.",
+    "unbind": "Se déconnecter"
   },
   "settings": {
     "language": "Langue",
     "theme": "Thème",
-    "themeLight": "Clair",
     "themeDark": "Sombre",
+    "themeLight": "Clair",
     "themeSystem": "Système"
   }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window permissions. Deliberately reduced to the strict minimum (CLAUDE.md §8): no shell, no filesystem access, no network plugin. Every later addition must be justified in review — a capability granted 'for later' is attack surface acquired for nothing in return.",
+  "description": "Main window permissions. Deliberately reduced to the strict minimum (CLAUDE.md §8): no shell, no filesystem read or write, no network plugin. `dialog:default` opens the native picker and returns a path — reading that path is the backend's job, which is what keeps the WebView unable to name a file of its own choosing. Every later addition must be justified in review — a capability granted 'for later' is attack surface acquired for nothing in return.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

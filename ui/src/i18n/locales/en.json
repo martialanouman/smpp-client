@@ -3,9 +3,104 @@
     "name": "ShinobiSMPP",
     "tagline": "SMPP ESME client"
   },
+  "contacts": {
+    "import": {
+      "cancel": "Cancel",
+      "columnHint": "Header name, or zero-based position.",
+      "columnPlaceholder": "msisdn",
+      "countryColumn": "Country column",
+      "countryHint": "Optional. It wins over the default country.",
+      "dedup": {
+        "firstWins": "Keep the first occurrence",
+        "mergeAttributes": "Merge attributes",
+        "mergeWarning": "Merging holds every distinct contact in memory until the import ends."
+      },
+      "deduplication": "Duplicates",
+      "defaultRegion": "Default country",
+      "fileFilter": "Contact files",
+      "headerMode": {
+        "absent": "Every row is data",
+        "detect": "Detect automatically",
+        "present": "The first row names the columns"
+      },
+      "headers": "Header row",
+      "heading": "Import contacts",
+      "list": "Add to list",
+      "listHint": "Every imported contact joins this list.",
+      "mobilesOnly": "Mobiles only",
+      "msisdnColumn": "Number column",
+      "noFile": "No file selected",
+      "noList": "No list",
+      "pick": "Choose a file…",
+      "progress": "{{processed}} rows processed — {{imported}} imported, {{rejected}} rejected, {{duplicates}} duplicates.",
+      "regionHint": "Two-letter ISO code, for numbers in national form.",
+      "sheet": "Sheet",
+      "sheetHint": "Leave empty for the first sheet of the workbook.",
+      "start": "Start import",
+      "starting": "Starting the import…"
+    },
+    "lineType": {
+      "fixed_line": "Fixed line",
+      "fixed_line_or_mobile": "Fixed line or mobile",
+      "mobile": "Mobile",
+      "other": "Other",
+      "unknown": "Unknown"
+    },
+    "reason": {
+      "EMPTY": "Number column empty",
+      "ILLEGAL_CHARACTER": "Illegal character in the number",
+      "LINE_TYPE_EXCLUDED": "Line type excluded",
+      "MISSING_REGION": "National form with no country given",
+      "NOT_IN_PLAN": "Number absent from the numbering plan",
+      "TOO_LONG": "Number too long for its country",
+      "TOO_SHORT": "Number too short for its country",
+      "UNKNOWN_COUNTRY_CODE": "Unknown country code",
+      "UNKNOWN_REGION": "Unknown country",
+      "UNREADABLE_CELL": "Unreadable cell"
+    },
+    "report": {
+      "blank": "Blank rows",
+      "byReason": "Rejection reasons",
+      "dismiss": "Dismiss",
+      "duplicates": "Duplicates",
+      "export": "Export rejected rows",
+      "fixedLines": "Fixed lines",
+      "heading": "Import report",
+      "headingCancelled": "Import report (cancelled)",
+      "imported": "Imported",
+      "line": "Line",
+      "mobiles": "Mobiles",
+      "reason": "Reason",
+      "rejected": "Rejected",
+      "rejectedCaption": "Rejected rows, with their line number and reason",
+      "total": "Rows processed",
+      "truncated": "The list is truncated; the counts stay exact.",
+      "value": "Value"
+    },
+    "source": {
+      "import_csv": "CSV import",
+      "import_xlsx": "XLSX import"
+    },
+    "table": {
+      "caption": "Imported contacts, with their number, country and origin",
+      "complete": "End of the list.",
+      "count": "{{count}} contact",
+      "count_other": "{{count}} contacts",
+      "country": "Country",
+      "createdAt": "Added on",
+      "empty": "No contacts. Import a file to get started.",
+      "heading": "Contacts",
+      "lineType": "Line type",
+      "loading": "Loading…",
+      "msisdn": "Number",
+      "search": "Search",
+      "searchPlaceholder": "Number or attribute",
+      "source": "Origin"
+    }
+  },
   "empty": {
-    "title": "Screen to come",
-    "body": "This screen is a placeholder: its implementation lands in a later milestone."
+    "body": "This screen is a placeholder: its implementation lands in a later milestone.",
+    "title": "Screen to come"
   },
   "error": {
     "CONFIG_INVALID_LANGUAGE": "Unsupported language.",
@@ -15,6 +110,12 @@
     "CONFIG_MALFORMED": "The preferences file could not be parsed.",
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
+    "CONTACTS_DUPLICATE": "A contact or a list already exists under that identifier.",
+    "CONTACTS_IMPORT_BUSY": "An import is already running. Wait for it to finish, or cancel it.",
+    "CONTACTS_IMPORT_REJECTED": "The file could not be read or matched to the columns given.",
+    "CONTACTS_INVALID_INPUT": "A field of the call could not be read.",
+    "CONTACTS_NOT_FOUND": "The contact, list or profile does not exist.",
+    "CONTACTS_STORAGE": "The contact directory did not answer.",
     "LOGS_INVALID_FILTER": "A filter criterion could not be read.",
     "LOGS_UNAVAILABLE": "The journal did not answer.",
     "MESSAGE_DUPLICATE": "A message already exists under this identifier; it was not sent again.",
@@ -36,95 +137,95 @@
     "unknown": "Something went wrong."
   },
   "logs": {
+    "column": {
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "createdAt": "Created",
+      "dest": "Recipient",
+      "direction": "Direction",
+      "dlrErr": "Error",
+      "dlrStat": "Receipt",
+      "raw": "Raw body",
+      "reason": "Reason",
+      "receivedAt": "Received",
+      "segments": "Segments",
+      "sequence": "sequence_number",
+      "smscId": "SMSC identifier",
+      "state": "State",
+      "status": "Status",
+      "text": "Message",
+      "ts": "Timestamp"
+    },
+    "count": "{{count}} row(s)",
+    "detail": {
+      "close": "Close",
+      "label": "Row detail",
+      "none": "Select a row to see its detail.",
+      "pduDisabled": "PDU recording is off: no header, no decoded body and no hexadecimal is kept until it is turned on.",
+      "pduLogging": "Record PDUs",
+      "title": "Detail"
+    },
+    "empty": "No row matches the filter.",
+    "failure": "The journal could not be read.",
+    "field": {
+      "attempts": "Attempts",
+      "clientMessageId": "Client identifier",
+      "commandId": "command_id",
+      "commandStatus": "command_status",
+      "createdAt": "Created",
+      "decoded": "Decoded body",
+      "dest": "Recipient",
+      "direction": "Direction",
+      "dlrAt": "Receipt received",
+      "dlrErr": "Receipt err",
+      "dlrStat": "Receipt stat",
+      "raw": "Raw body",
+      "rawHex": "Raw hexadecimal",
+      "reason": "Reason",
+      "receivedAt": "Received",
+      "respAt": "Answered",
+      "segments": "Segments",
+      "sentAt": "Sent",
+      "sequence": "sequence_number",
+      "sessionId": "Session",
+      "smscMessageId": "SMSC identifier",
+      "source": "Sender",
+      "state": "State",
+      "text": "Message",
+      "ts": "Timestamp"
+    },
+    "filters": {
+      "anyState": "Any",
+      "apply": "Filter",
+      "clear": "Reset",
+      "destPrefix": "Recipient prefix",
+      "dlrErr": "Error code",
+      "from": "From",
+      "label": "Journal filters",
+      "search": "Search",
+      "state": "State",
+      "to": "To",
+      "unsupported": "These criteria apply to messages only: an orphaned receipt and a PDU have no state, no recipient and no body."
+    },
+    "pending": "{{count}} update(s)",
+    "reason": {
+      "NO_IDENTIFIER": "No readable identifier",
+      "UNKNOWN_ID": "Unknown identifier"
+    },
+    "refresh": "Refresh",
+    "state": {
+      "ACCEPTED": "Accepted",
+      "DELIVERED": "Delivered",
+      "EXPIRED": "Expired",
+      "FAILED": "Failed",
+      "QUEUED": "Queued",
+      "SENT": "Sent"
+    },
     "tab": {
       "messages": "Messages",
       "orphans": "Orphaned receipts",
       "pdus": "PDUs"
-    },
-    "count": "{{count}} row(s)",
-    "refresh": "Refresh",
-    "empty": "No row matches the filter.",
-    "failure": "The journal could not be read.",
-    "state": {
-      "QUEUED": "Queued",
-      "SENT": "Sent",
-      "ACCEPTED": "Accepted",
-      "DELIVERED": "Delivered",
-      "FAILED": "Failed",
-      "EXPIRED": "Expired"
-    },
-    "filters": {
-      "label": "Journal filters",
-      "search": "Search",
-      "destPrefix": "Recipient prefix",
-      "state": "State",
-      "anyState": "Any",
-      "dlrErr": "Error code",
-      "from": "From",
-      "to": "To",
-      "apply": "Filter",
-      "clear": "Reset",
-      "unsupported": "These criteria apply to messages only: an orphaned receipt and a PDU have no state, no recipient and no body."
-    },
-    "column": {
-      "createdAt": "Created",
-      "dest": "Recipient",
-      "state": "State",
-      "status": "Status",
-      "dlrStat": "Receipt",
-      "dlrErr": "Error",
-      "segments": "Segments",
-      "text": "Message",
-      "receivedAt": "Received",
-      "smscId": "SMSC identifier",
-      "reason": "Reason",
-      "raw": "Raw body",
-      "ts": "Timestamp",
-      "direction": "Direction",
-      "commandId": "command_id",
-      "commandStatus": "command_status",
-      "sequence": "sequence_number"
-    },
-    "detail": {
-      "label": "Row detail",
-      "title": "Detail",
-      "none": "Select a row to see its detail.",
-      "close": "Close",
-      "pduLogging": "Record PDUs",
-      "pduDisabled": "PDU recording is off: no header, no decoded body and no hexadecimal is kept until it is turned on."
-    },
-    "field": {
-      "clientMessageId": "Client identifier",
-      "smscMessageId": "SMSC identifier",
-      "sessionId": "Session",
-      "source": "Sender",
-      "dest": "Recipient",
-      "state": "State",
-      "commandStatus": "command_status",
-      "dlrStat": "Receipt stat",
-      "dlrErr": "Receipt err",
-      "segments": "Segments",
-      "attempts": "Attempts",
-      "createdAt": "Created",
-      "sentAt": "Sent",
-      "respAt": "Answered",
-      "dlrAt": "Receipt received",
-      "text": "Message",
-      "reason": "Reason",
-      "receivedAt": "Received",
-      "raw": "Raw body",
-      "direction": "Direction",
-      "commandId": "command_id",
-      "sequence": "sequence_number",
-      "ts": "Timestamp",
-      "decoded": "Decoded body",
-      "rawHex": "Raw hexadecimal"
-    },
-    "reason": {
-      "UNKNOWN_ID": "Unknown identifier",
-      "NO_IDENTIFIER": "No readable identifier"
-    },
-    "pending": "{{count}} update(s)"
+    }
   },
   "metrics": {
     "accepted": "Accepted",
@@ -151,179 +252,158 @@
     "windowSpoken": "{{value}} slots in use out of {{total}}."
   },
   "nav": {
-    "label": "Main navigation",
-    "dashboard": "Dashboard",
-    "sessions": "Sessions",
-    "send": "Send",
     "contacts": "Contacts",
-    "numbers": "Generator",
+    "dashboard": "Dashboard",
+    "label": "Main navigation",
     "logs": "Logs",
-    "stats": "Statistics",
-    "settings": "Settings"
+    "numbers": "Generator",
+    "send": "Send",
+    "sessions": "Sessions",
+    "settings": "Settings",
+    "stats": "Statistics"
   },
   "notification": {
-    "region": "Notifications",
-    "dismiss": "Dismiss notification"
+    "dismiss": "Dismiss notification",
+    "region": "Notifications"
   },
   "screen": {
-    "dashboard": "Overview of sessions and throughput.",
-    "sessions": "SMSC connections, bind and supervision.",
-    "send": "Single messages and campaigns.",
     "contacts": "Import, E.164 validation and lists.",
-    "numbers": "Country-aware phone number generation.",
+    "dashboard": "Overview of sessions and throughput.",
     "logs": "Message log and delivery receipts.",
-    "stats": "Sending and delivery statistics.",
-    "settings": "Language, theme, logging and retention."
+    "numbers": "Country-aware phone number generation.",
+    "send": "Single messages and campaigns.",
+    "sessions": "SMSC connections, bind and supervision.",
+    "settings": "Language, theme, logging and retention.",
+    "stats": "Sending and delivery statistics."
   },
   "send": {
-    "intro": "Send one message to a message centre and read its answer. The advanced fields follow the SMPP §7.3 table.",
-    "session": "Session",
-    "sessionPlaceholder": "Choose an open session",
-    "noBoundSession": "No session is open. Connect one from the Sessions screen.",
+    "advanced": "Advanced fields (spec §7.3)",
+    "alphanumericWarning": "An alphanumeric sender forces source_addr_ton = 5 and is not accepted by every operator.",
+    "counter": {
+      "characters": "{{count}} character(s)",
+      "encoding": "Encoding:",
+      "pending": "Counter being computed…",
+      "segments": "{{count}} segment(s)",
+      "units": "{{used}} unit(s) used, {{remaining}} left in the segment"
+    },
+    "derived": "Derived from the address",
+    "destNpi": "Numbering plan (recipient)",
+    "destTon": "Type of number (recipient)",
     "destination": "Recipient",
     "destinationHint": "International format, country code included.",
-    "destTon": "Type of number (recipient)",
-    "destNpi": "Numbering plan (recipient)",
-    "source": "Sender",
-    "sourceHint": "Leave empty to let the message centre choose.",
-    "sourceTon": "Type of number (sender)",
-    "sourceNpi": "Numbering plan (sender)",
-    "alphanumericWarning": "An alphanumeric sender forces source_addr_ton = 5 and is not accepted by every operator.",
-    "text": "Message",
-    "encodingLabel": "Encoding (DCS)",
-    "mode": "Concatenation",
-    "registeredDelivery": "Delivery receipt",
-    "advanced": "Advanced fields (spec §7.3)",
-    "serviceType": "service_type",
-    "serviceTypeHint": "Five characters at most; empty for the centre's default.",
-    "protocolId": "protocol_id",
-    "priorityFlag": "priority_flag",
-    "priorityFlagHint": "0 to 3.",
-    "scheduleDeliveryTime": "schedule_delivery_time",
-    "validityPeriod": "validity_period",
-    "timeHint": "Empty, or exactly sixteen characters.",
-    "smDefaultMsgId": "sm_default_msg_id",
-    "replaceIfPresent": "Replace an existing message (replace_if_present_flag)",
-    "submit": "Send",
-    "sending": "Sending…",
-    "counter": {
-      "pending": "Counter being computed…",
-      "encoding": "Encoding:",
-      "characters": "{{count}} character(s)",
-      "units": "{{used}} unit(s) used, {{remaining}} left in the segment",
-      "segments": "{{count}} segment(s)"
-    },
     "encoding": {
       "automatic": "Automatic",
       "gsm7Bit": "GSM 7-bit",
       "latin1": "ISO-8859-1",
       "ucs2": "UCS2"
     },
+    "encodingLabel": "Encoding (DCS)",
+    "intro": "Send one message to a message centre and read its answer. The advanced fields follow the SMPP §7.3 table.",
+    "mode": "Concatenation",
     "modes": {
-      "udh": "UDH header (portable)",
+      "messagePayload": "message_payload (no splitting)",
       "sar": "sar_* TLVs",
-      "messagePayload": "message_payload (no splitting)"
+      "udh": "UDH header (portable)"
     },
+    "noBoundSession": "No session is open. Connect one from the Sessions screen.",
+    "npi": {
+      "data": "Data, X.121 (3)",
+      "isdn": "ISDN / E.164 (1)",
+      "landMobile": "Land mobile, E.212 (6)",
+      "national": "National (8)",
+      "private": "Private (9)",
+      "telex": "Telex, F.69 (4)",
+      "unknown": "Unknown (0)"
+    },
+    "outcomes": {
+      "answered": "Answered",
+      "notAttempted": "Not sent",
+      "unanswered": "No answer"
+    },
+    "priorityFlag": "priority_flag",
+    "priorityFlagHint": "0 to 3.",
+    "protocolId": "protocol_id",
     "receipts": {
+      "none": "None (0)",
       "onAnyOutcome": "On final outcome, success or failure (1)",
-      "onFailure": "On failure only (2)",
-      "none": "None (0)"
+      "onFailure": "On failure only (2)"
+    },
+    "registeredDelivery": "Delivery receipt",
+    "replaceIfPresent": "Replace an existing message (replace_if_present_flag)",
+    "result": {
+      "clientMessageId": "Local identifier",
+      "noAnswer": "No answer from the message centre.",
+      "notJournalled": "The message was sent, but recording it failed. Do not send it again: it would go out a second time.",
+      "outcome": "Outcome",
+      "retryable": "The same message may be sent again.",
+      "segment": "Segment",
+      "segments": "{{count}} segment(s)",
+      "smscMessageId": "Message centre identifier",
+      "status": "command_status",
+      "title": "Result",
+      "unknownStatus": "Unknown code",
+      "vendorSpecific": "This code is in the operator's reserved range; only their documentation explains it."
+    },
+    "scheduleDeliveryTime": "schedule_delivery_time",
+    "sending": "Sending…",
+    "serviceType": "service_type",
+    "serviceTypeHint": "Five characters at most; empty for the centre's default.",
+    "session": "Session",
+    "sessionPlaceholder": "Choose an open session",
+    "smDefaultMsgId": "sm_default_msg_id",
+    "source": "Sender",
+    "sourceHint": "Leave empty to let the message centre choose.",
+    "sourceNpi": "Numbering plan (sender)",
+    "sourceTon": "Type of number (sender)",
+    "state": {
+      "ACCEPTED": "Accepted",
+      "DELIVERED": "Delivered",
+      "EXPIRED": "Expired",
+      "FAILED": "Failed",
+      "QUEUED": "Queued",
+      "SENT": "Sent"
+    },
+    "submit": "Send",
+    "text": "Message",
+    "timeHint": "Empty, or exactly sixteen characters.",
+    "tlv": {
+      "add": "Add a TLV",
+      "empty": "No optional parameter.",
+      "legend": "Optional parameters (TLV)",
+      "remove": "Remove",
+      "tag": "Tag (hex)",
+      "value": "Value (hex)"
     },
     "ton": {
-      "unknown": "Unknown (0)",
+      "abbreviated": "Abbreviated (6)",
+      "alphanumeric": "Alphanumeric (5)",
       "international": "International, E.164 (1)",
       "national": "National (2)",
       "networkSpecific": "Network specific (3)",
       "subscriberNumber": "Subscriber number (4)",
-      "alphanumeric": "Alphanumeric (5)",
-      "abbreviated": "Abbreviated (6)"
+      "unknown": "Unknown (0)"
     },
-    "npi": {
-      "unknown": "Unknown (0)",
-      "isdn": "ISDN / E.164 (1)",
-      "data": "Data, X.121 (3)",
-      "telex": "Telex, F.69 (4)",
-      "landMobile": "Land mobile, E.212 (6)",
-      "national": "National (8)",
-      "private": "Private (9)"
-    },
-    "tlv": {
-      "legend": "Optional parameters (TLV)",
-      "empty": "No optional parameter.",
-      "tag": "Tag (hex)",
-      "value": "Value (hex)",
-      "add": "Add a TLV",
-      "remove": "Remove"
-    },
-    "state": {
-      "QUEUED": "Queued",
-      "SENT": "Sent",
-      "ACCEPTED": "Accepted",
-      "DELIVERED": "Delivered",
-      "FAILED": "Failed",
-      "EXPIRED": "Expired"
-    },
-    "outcomes": {
-      "answered": "Answered",
-      "unanswered": "No answer",
-      "notAttempted": "Not sent"
-    },
-    "result": {
-      "title": "Result",
-      "segments": "{{count}} segment(s)",
-      "clientMessageId": "Local identifier",
-      "smscMessageId": "Message centre identifier",
-      "status": "command_status",
-      "noAnswer": "No answer from the message centre.",
-      "unknownStatus": "Unknown code",
-      "vendorSpecific": "This code is in the operator's reserved range; only their documentation explains it.",
-      "retryable": "The same message may be sent again.",
-      "segment": "Segment",
-      "outcome": "Outcome",
-      "notJournalled": "The message was sent, but recording it failed. Do not send it again: it would go out a second time."
-    },
-    "derived": "Derived from the address"
+    "validityPeriod": "validity_period"
   },
   "sessions": {
-    "empty": "No connection profile yet. Create one to open a session to a message centre.",
-    "newProfile": "New profile",
-    "edit": "Edit",
+    "bind": "Bind",
+    "bindType": {
+      "receiver": "Receive only (RX)",
+      "transceiver": "Transmit and receive (TRX)",
+      "transmitter": "Transmit only (TX)"
+    },
+    "cancel": "Cancel",
     "close": "Close",
     "delete": "Delete",
-    "save": "Save",
-    "cancel": "Cancel",
-    "bind": "Bind",
-    "unbind": "Unbind",
-    "password": "SMSC password",
-    "inFlight": "{{count}} in flight",
-    "gsm7Hint": "The GSM 7-bit layout is dictated by the message centre: it cannot be guessed, and getting it wrong only shows on the recipient's handset.",
-    "state": {
-      "CLOSED": "Closed",
-      "CONNECTING": "Connecting…",
-      "BINDING": "Binding…",
-      "BOUND": "Bound",
-      "UNBOUND": "Unbound",
-      "RECONNECT": "Reconnecting…",
-      "ERROR": "Error"
+    "dlrIdMatching": {
+      "bases": "Lenient + other base",
+      "exact": "Strict",
+      "relaxed": "Lenient (case, zeroes)"
     },
-    "giveUp": {
-      "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
-      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
-      "SESSION_ENDED": "The session ended and will not restart on its own."
-    },
-    "bindType": {
-      "transmitter": "Transmit only (TX)",
-      "receiver": "Receive only (RX)",
-      "transceiver": "Transmit and receive (TRX)"
-    },
-    "gsm7Packing": {
-      "unpacked": "Unpacked (default)",
-      "packed": "Packed"
-    },
-    "gsm7Charset": {
-      "gsm0338": "GSM 03.38 (default)",
-      "latin1": "Latin-1 (alt-charset)"
-    },
+    "dlrIdMatchingHint": "Lenient also compares case and strips leading zeroes: two spellings of the same identifier, never two different identifiers.",
+    "dlrIdMatchingWarning": "“Other base” re-reads the identifier as hexadecimal or decimal. Two distinct identifiers can then be confused, and a receipt credit the wrong message. Reserve it for a message centre you know changes base.",
+    "edit": "Edit",
+    "empty": "No connection profile yet. Create one to open a session to a message centre.",
     "field": {
       "bindType": "Bind type",
       "dlrIdMatching": "Receipt identifier matching",
@@ -345,20 +425,41 @@
       "throughputTps": "Target throughput (msg/s)",
       "windowSize": "Window"
     },
-    "dlrIdMatching": {
-      "exact": "Strict",
-      "relaxed": "Lenient (case, zeroes)",
-      "bases": "Lenient + other base"
+    "giveUp": {
+      "FATAL_STATUS": "The message centre refused the bind for good. Check the credentials: no further attempt will be made.",
+      "RECONNECT_DISABLED": "Automatic reconnection is turned off on this profile.",
+      "SESSION_ENDED": "The session ended and will not restart on its own."
     },
-    "dlrIdMatchingHint": "Lenient also compares case and strips leading zeroes: two spellings of the same identifier, never two different identifiers.",
-    "dlrIdMatchingWarning": "“Other base” re-reads the identifier as hexadecimal or decimal. Two distinct identifiers can then be confused, and a receipt credit the wrong message. Reserve it for a message centre you know changes base.",
-    "throughputHint": "Zero means unlimited. The floor is the lower bound of the congestion adaptation; nothing reaches it before milestone 012."
+    "gsm7Charset": {
+      "gsm0338": "GSM 03.38 (default)",
+      "latin1": "Latin-1 (alt-charset)"
+    },
+    "gsm7Hint": "The GSM 7-bit layout is dictated by the message centre: it cannot be guessed, and getting it wrong only shows on the recipient's handset.",
+    "gsm7Packing": {
+      "packed": "Packed",
+      "unpacked": "Unpacked (default)"
+    },
+    "inFlight": "{{count}} in flight",
+    "newProfile": "New profile",
+    "password": "SMSC password",
+    "save": "Save",
+    "state": {
+      "BINDING": "Binding…",
+      "BOUND": "Bound",
+      "CLOSED": "Closed",
+      "CONNECTING": "Connecting…",
+      "ERROR": "Error",
+      "RECONNECT": "Reconnecting…",
+      "UNBOUND": "Unbound"
+    },
+    "throughputHint": "Zero means unlimited. The floor is the lower bound of the congestion adaptation; nothing reaches it before milestone 012.",
+    "unbind": "Unbind"
   },
   "settings": {
     "language": "Language",
     "theme": "Theme",
-    "themeLight": "Light",
     "themeDark": "Dark",
+    "themeLight": "Light",
     "themeSystem": "System"
   }
 }
