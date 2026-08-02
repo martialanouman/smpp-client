@@ -204,6 +204,126 @@ impl From<contacts::import::ImportProgress> for ImportProgressEvent {
     }
 }
 
+/// Interval between two paced `campaign:progress` emissions.
+///
+/// 250 ms, the same 4 Hz ceiling as [`METRICS_TICK_INTERVAL`] and for the same
+/// reason: four repaints a second is at the top of what a progress bar needs,
+/// and the two channels feed the same panel — a bar at 4 Hz beside a gauge at
+/// 10 Hz would look like two different clocks.
+///
+/// # This is a cadence, not a rate limit on a stream of events
+///
+/// CA-010-11 asks for `campaign:progress` to be throttled. It is, and the
+/// throttling is **structural**: the sampler in [`crate::campaigns`] sleeps this
+/// long and then reads the campaign's counters
+/// ([`messaging::CampaignProgress`]). There is no path from a submitted message
+/// to an emission, so a campaign at ten thousand messages a second produces
+/// exactly the same four events a second as one at ten.
+///
+/// A [`Throttle`] here would have been the defect `sessions:state` had — see
+/// [`SESSIONS_STATE_INTERVAL`]. It would be free to discard the emission
+/// carrying [`CampaignProgressEvent::done`], and a campaign that had finished
+/// would leave a progress bar running under a terminal status for ever.
+pub(crate) const CAMPAIGN_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Payload of `campaign:progress` — how far one campaign has got (CA-010-11).
+///
+/// # Counters, and where the detail is
+///
+/// A campaign of 500 000 recipients cannot push 500 000 events: this channel
+/// carries **aggregated counters** and nothing per message, exactly as
+/// `import:progress` does for a contact import and for the same reason
+/// (CA-008-08 states the rule for the journal). The per-message detail is read
+/// through `logs_query`, page by page, filtered on the campaign — that is what
+/// the Journaux screen is, and there is no second way to it.
+///
+/// # Where the throughput is *not*
+///
+/// Spec §15.3 describes this payload as "compteurs + débit". The counters are
+/// here; the rate is not, and [`Self::session_id`] is why: milestone 007 already
+/// measures the throughput of a session at full rate and publishes it on
+/// `metrics:tick` (spec §9.6). A second figure computed here — or worse, in the
+/// WebView from the four samples a second that reach it — would be a different
+/// number for the same thing, and its accuracy would depend on this very
+/// constant. The interface reads the rate from the tick of the session named
+/// here. The deviation is deliberate and is recorded in `docs/adr/0015`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "campaign:progress")]
+pub(crate) struct CampaignProgressEvent {
+    /// Which campaign these figures belong to.
+    pub(crate) campaign_id: String,
+    /// The session it is sending on, and whose `metrics:tick` carries the rate.
+    pub(crate) session_id: String,
+    /// `RUNNING`, `PAUSED`, `COMPLETED`… — the names of spec §10.3.
+    pub(crate) status: String,
+    /// Recipients the campaign was created over.
+    ///
+    /// Counted once, when the campaign was created, and stored on the row. It
+    /// is what the bar is drawn against, so it is a **planned** figure and not a
+    /// running one: contacts added to the list afterwards are not in it.
+    pub(crate) total: u32,
+    /// Recipients dealt with — the sum of the five buckets below.
+    pub(crate) processed: u32,
+    /// Messages the message centre accepted.
+    pub(crate) accepted: u32,
+    /// Messages that ended `FAILED`.
+    pub(crate) failed: u32,
+    /// Recipients no message could be built for (CA-010-06).
+    pub(crate) rejected: u32,
+    /// Recipients that already had a message and were not sent to again.
+    pub(crate) skipped: u32,
+    /// Recipients queued but never emitted to, because the campaign stopped.
+    pub(crate) cancelled: u32,
+    /// Replays issued, across every message.
+    pub(crate) retried: u32,
+    /// Messages re-emitted although a previous run may already have sent them.
+    ///
+    /// The duplicate-risk figure of ADR 0014, surfaced rather than buried: under
+    /// the default arbitration each of these may reach its recipient twice.
+    pub(crate) reemitted_unanswered: u32,
+    /// Messages that were sent and whose outcome could not be written down.
+    pub(crate) not_journalled: u32,
+    /// Whether this is the **last** event of this run.
+    ///
+    /// Emitted once, outside the paced loop, after the campaign has ended — see
+    /// [`CAMPAIGN_PROGRESS_INTERVAL`]. Nothing can suppress it and nothing can
+    /// arrive after it.
+    pub(crate) done: bool,
+}
+
+impl CampaignProgressEvent {
+    /// One reading of one campaign.
+    ///
+    /// `total` is the planned recipient count read off the campaign row;
+    /// everything else comes from the tally the runner keeps.
+    pub(crate) fn of(
+        campaign_id: &str,
+        session_id: &str,
+        status: messaging::CampaignStatus,
+        total: u32,
+        tally: &messaging::CampaignTally,
+        done: bool,
+    ) -> Self {
+        Self {
+            campaign_id: campaign_id.to_owned(),
+            session_id: session_id.to_owned(),
+            status: status.as_str().to_owned(),
+            total,
+            processed: narrow(tally.total()),
+            accepted: narrow(tally.accepted),
+            failed: narrow(tally.failed),
+            rejected: narrow(tally.rejected),
+            skipped: narrow(tally.skipped),
+            cancelled: narrow(tally.cancelled),
+            retried: narrow(tally.retried),
+            reemitted_unanswered: narrow(tally.reemitted_unanswered),
+            not_journalled: narrow(tally.not_journalled),
+            done,
+        }
+    }
+}
+
 /// Interval between two `metrics:tick` emissions.
 ///
 /// 250 ms — the 4 Hz ceiling of spec §15.3 and CA-007-07. Four repaints a
@@ -436,6 +556,26 @@ impl EventEmitter {
     pub(crate) fn emit_sessions<R: Runtime>(&self, app: &AppHandle<R>, payload: &SessionsState) {
         if let Err(error) = payload.clone().emit(app) {
             tracing::warn!(error = %error, "failed to emit sessions:state");
+        }
+    }
+
+    /// Emits `campaign:progress`.
+    ///
+    /// Unconditional, and this is the one that most needs to be: the sampler
+    /// paces the intermediate readings, and the **final** one — the event
+    /// carrying `done` and the terminal status — is emitted by the supervisor
+    /// after the sampling has stopped. A throttle here would sit between the
+    /// campaign ending and the interface hearing about it, and it would be free
+    /// to drop precisely that event. That is the defect `sessions:state` had at
+    /// milestone 007 and `import:progress` was written to avoid at milestone
+    /// 009.
+    pub(crate) fn emit_campaign_progress<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        payload: &CampaignProgressEvent,
+    ) {
+        if let Err(error) = payload.clone().emit(app) {
+            tracing::warn!(error = %error, "failed to emit campaign:progress");
         }
     }
 

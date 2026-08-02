@@ -26,6 +26,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use tauri::Manager as _;
 
+mod campaigns;
 mod commands;
 mod config;
 mod contacts;
@@ -145,6 +146,12 @@ pub fn run() -> anyhow::Result<()> {
                 let state = app.state::<state::AppState>();
 
                 tauri::async_runtime::block_on(async {
+                    // Campaigns first: a runner still feeding the send window
+                    // would keep submitting into a session that is about to
+                    // unbind, and each of those messages would be journalled
+                    // `SENT` with no answer — the uncertain family of ADR 0014,
+                    // manufactured by our own shutdown order.
+                    state.campaigns().shutdown().await;
                     state.sessions().shutdown().await;
                     // And whatever the PDU recorder still holds: the last PDUs
                     // before a shutdown are the ones somebody turned it on for,

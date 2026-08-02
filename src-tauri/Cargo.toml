@@ -82,6 +82,15 @@ contacts = { path = "../crates/contacts" }
 tokio-util = { version = "0.7", default-features = false }
 messaging = { path = "../crates/messaging" }
 
+# Milestone 010. `messaging::ports::RecipientSource` is a `BoxStream`, and its
+# implementor is this layer (see that port's own table): the campaign reads the
+# contacts of a list through `contacts::ports::ContactRepository::stream_contacts`
+# and maps each row onto a `Recipient`. `futures-core` holds the alias, and
+# `futures-util` the `StreamExt::map` that builds the stream — the same split,
+# for the same reason, as `messaging` and `contacts` already make.
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+
 # The business journal and the PDU recorder of milestone 008. Same rule: the
 # commands hold them and call them, and every decision they appear to make —
 # the page ceiling, the content policy, whether recording is on — belongs to

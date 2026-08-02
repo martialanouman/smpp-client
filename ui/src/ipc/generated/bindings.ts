@@ -314,10 +314,103 @@ export const commands = {
 	 *  `CONTACTS_STORAGE` if the write fails.
 	 */
 	contactsSaveProfile: (profile: ImportProfileDto) => typedError<string, ErrorDto>(__TAURI_INVOKE("contacts_save_profile", { profile })),
+	/**
+	 *  Creates a campaign (EF-MSG-02, spec §10.2).
+	 * 
+	 *  Validates the template and the whole configuration, counts the recipients the
+	 *  selection picks out, and stores the campaign as `VALIDATED`.
+	 * 
+	 *  # Why it is stored `VALIDATED` and not `CREATED`
+	 * 
+	 *  Spec §10.3 gates sending behind a validation step, and this command **is**
+	 *  it: the template has parsed, every field has crossed a constructor of
+	 *  `messaging`, and the recipients have been counted. A row stored `CREATED`
+	 *  would need a second command to move it, which spec §15.2 does not list and
+	 *  which would have nothing left to check. The machine still refuses
+	 *  `CREATED → RUNNING`, so a row hand-edited back to `CREATED` cannot be
+	 *  started.
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `CAMPAIGN_INVALID_INPUT` — a field could not be read; `details` names it;
+	 *  * `MESSAGE_INVALID_SOURCE` — the sender address was refused;
+	 *  * `CAMPAIGN_NO_RECIPIENTS` — the selection picks nobody out;
+	 *  * `CAMPAIGN_STORAGE` — the store refused the write.
+	 */
+	campaignCreate: (input: CampaignCreateInput) => typedError<string, ErrorDto>(__TAURI_INVOKE("campaign_create", { input })),
+	/**
+	 *  One page of campaigns, oldest first.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CAMPAIGN_INVALID_INPUT` for a malformed cursor, or
+	 *  `CAMPAIGN_STORAGE` if the store will not answer.
+	 */
+	campaignList: (cursor: string | null, limit: number | null) => typedError<CampaignPageDto, ErrorDto>(__TAURI_INVOKE("campaign_list", { cursor, limit })),
+	/**
+	 *  Starts a campaign (spec §10.3).
+	 * 
+	 *  Returns as soon as the campaign is running, **not** when it has finished: a
+	 *  campaign of half a million recipients runs for hours. Progress arrives on
+	 *  `campaign:progress`, and the per-message detail through `logs_query`.
+	 * 
+	 *  # Errors
+	 * 
+	 *  * `CAMPAIGN_INVALID_INPUT` — the identifier or the stored configuration
+	 *    could not be read;
+	 *  * `CAMPAIGN_NOT_FOUND` — no campaign carries that identifier;
+	 *  * `CAMPAIGN_BUSY` — it is already running;
+	 *  * `CAMPAIGN_INVALID_TRANSITION` — the lifecycle refuses it; `details` carries
+	 *    `from` and `to`;
+	 *  * `CAMPAIGN_SESSION_NOT_BOUND` — its session is not open;
+	 *  * `CAMPAIGN_STORAGE` — the status could not be written.
+	 */
+	campaignStart: (campaignId: string) => typedError<null, ErrorDto>(__TAURI_INVOKE("campaign_start", { campaignId })),
+	/**
+	 *  Suspends the feeding of a running campaign (spec §10.3, CA-010-03).
+	 * 
+	 *  The messages already in the send window finish normally and the session stays
+	 *  bound; only the feeding stops.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `CAMPAIGN_NOT_FOUND`, `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
+	 */
+	campaignPause: (campaignId: string) => typedError<null, ErrorDto>(__TAURI_INVOKE("campaign_pause", { campaignId })),
+	/**
+	 *  Resumes a campaign (spec §10.3, CA-010-03).
+	 * 
+	 *  Two different things behind one command, and the interface does not have to
+	 *  know which:
+	 * 
+	 *  * a campaign **paused in this process** is told to carry on, and picks up
+	 *    from the queue it was holding;
+	 *  * a campaign a restart or a crash left behind is **run again in resuming
+	 *    mode** — the runner then asks the journal about every recipient before
+	 *    emitting, so a message already accepted is never sent twice (CA-010-05).
+	 * 
+	 *  # Errors
+	 * 
+	 *  The codes of [`campaign_start`], plus `CAMPAIGN_NOT_FOUND`.
+	 */
+	campaignResume: (campaignId: string) => typedError<null, ErrorDto>(__TAURI_INVOKE("campaign_resume", { campaignId })),
+	/**
+	 *  Stops a campaign for good (CA-010-09).
+	 * 
+	 *  The emission stops at once; the messages already on the wire are journalled
+	 *  rather than abandoned, and every recipient the campaign queued ends in one of
+	 *  its counters.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `CAMPAIGN_NOT_FOUND`, `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
+	 */
+	campaignCancel: (campaignId: string) => typedError<null, ErrorDto>(__TAURI_INVOKE("campaign_cancel", { campaignId })),
 };
 
 /** Events */
 export const events = {
+	campaignProgress: makeEvent<CampaignProgressEvent>("campaign:progress"),
 	errorNotify: makeEvent<ErrorNotify>("error:notify"),
 	importProgress: makeEvent<ImportProgressEvent>("import:progress"),
 	messageUpdate: makeEvent<MessageUpdate>("message:update"),
@@ -359,6 +452,177 @@ export type BindTypeDto =
 "receiver" | 
 /**  Both, on one connection. */
 "transceiver";
+
+/**  Input of [`campaign_create`]. */
+export type CampaignCreateInput = {
+	/**  The name shown in the interface. */
+	name: string,
+	/**  The message template, with its `{{variables}}` (spec §10.2). */
+	template: string,
+	/**  Everything the campaign sends with. */
+	config: CampaignSendConfigInput,
+};
+
+/**  One page of the campaign list. */
+export type CampaignPageDto = {
+	/**  The campaigns, oldest first. */
+	rows: CampaignRowDto[],
+	/**  Cursor to pass back for the next page, or `null` at the end. */
+	next: string | null,
+};
+
+/**
+ *  Payload of `campaign:progress` — how far one campaign has got (CA-010-11).
+ * 
+ *  # Counters, and where the detail is
+ * 
+ *  A campaign of 500 000 recipients cannot push 500 000 events: this channel
+ *  carries **aggregated counters** and nothing per message, exactly as
+ *  `import:progress` does for a contact import and for the same reason
+ *  (CA-008-08 states the rule for the journal). The per-message detail is read
+ *  through `logs_query`, page by page, filtered on the campaign — that is what
+ *  the Journaux screen is, and there is no second way to it.
+ * 
+ *  # Where the throughput is *not*
+ * 
+ *  Spec §15.3 describes this payload as "compteurs + débit". The counters are
+ *  here; the rate is not, and [`Self::session_id`] is why: milestone 007 already
+ *  measures the throughput of a session at full rate and publishes it on
+ *  `metrics:tick` (spec §9.6). A second figure computed here — or worse, in the
+ *  WebView from the four samples a second that reach it — would be a different
+ *  number for the same thing, and its accuracy would depend on this very
+ *  constant. The interface reads the rate from the tick of the session named
+ *  here. The deviation is deliberate and is recorded in `docs/adr/0015`.
+ */
+export type CampaignProgressEvent = {
+	/**  Which campaign these figures belong to. */
+	campaignId: string,
+	/**  The session it is sending on, and whose `metrics:tick` carries the rate. */
+	sessionId: string,
+	/**  `RUNNING`, `PAUSED`, `COMPLETED`… — the names of spec §10.3. */
+	status: string,
+	/**
+	 *  Recipients the campaign was created over.
+	 * 
+	 *  Counted once, when the campaign was created, and stored on the row. It
+	 *  is what the bar is drawn against, so it is a **planned** figure and not a
+	 *  running one: contacts added to the list afterwards are not in it.
+	 */
+	total: number,
+	/**  Recipients dealt with — the sum of the five buckets below. */
+	processed: number,
+	/**  Messages the message centre accepted. */
+	accepted: number,
+	/**  Messages that ended `FAILED`. */
+	failed: number,
+	/**  Recipients no message could be built for (CA-010-06). */
+	rejected: number,
+	/**  Recipients that already had a message and were not sent to again. */
+	skipped: number,
+	/**  Recipients queued but never emitted to, because the campaign stopped. */
+	cancelled: number,
+	/**  Replays issued, across every message. */
+	retried: number,
+	/**
+	 *  Messages re-emitted although a previous run may already have sent them.
+	 * 
+	 *  The duplicate-risk figure of ADR 0014, surfaced rather than buried: under
+	 *  the default arbitration each of these may reach its recipient twice.
+	 */
+	reemittedUnanswered: number,
+	/**  Messages that were sent and whose outcome could not be written down. */
+	notJournalled: number,
+	/**
+	 *  Whether this is the **last** event of this run.
+	 * 
+	 *  Emitted once, outside the paced loop, after the campaign has ended — see
+	 *  [`CAMPAIGN_PROGRESS_INTERVAL`]. Nothing can suppress it and nothing can
+	 *  arrive after it.
+	 */
+	done: boolean,
+};
+
+/**  One campaign, as the interface lists it. */
+export type CampaignRowDto = {
+	/**  Primary key, and the row's React key. */
+	campaignId: string,
+	/**  The name the operator gave it. */
+	name: string,
+	/**  `CREATED`, `VALIDATED`, `RUNNING`… — the names of spec §10.3. */
+	status: string,
+	/**  The message template. */
+	template: string,
+	/**
+	 *  Everything it sends with, or `null` when the stored document no longer
+	 *  parses.
+	 * 
+	 *  **Nullable on purpose.** A configuration written by an older version, or
+	 *  edited by hand, must not make the whole list unreadable: the campaign is
+	 *  shown, and the interface refuses to start it rather than pretending it
+	 *  has settings it cannot read.
+	 */
+	config: CampaignSendConfigInput | null,
+	/**  Recipients the campaign was created over. */
+	total: number,
+	/**  Messages the message centre accepted, as of the last write. */
+	sent: number,
+	/**  Messages a delivery receipt confirmed. */
+	delivered: number,
+	/**  Messages that failed for good. */
+	failed: number,
+	/**
+	 *  Whether a run of this campaign is live in this process **right now**.
+	 * 
+	 *  Not derivable from [`Self::status`], and that is the whole reason it is
+	 *  sent: a process killed mid-campaign leaves a row reading `RUNNING` with
+	 *  nothing behind it, and that is exactly the campaign the interface must
+	 *  offer to resume rather than to pause.
+	 */
+	live: boolean,
+	/**  When it was created. */
+	createdAt: string,
+	/**  When sending began. */
+	startedAt: string | null,
+	/**  When it reached a terminal status. */
+	completedAt: string | null,
+};
+
+/**
+ *  Everything a campaign sends with, minus its name and its template.
+ * 
+ *  Stored verbatim in `campaigns.send_config` — see the module header for why.
+ */
+export type CampaignSendConfigInput = {
+	/**
+	 *  Which session to send on. One session per campaign at this milestone;
+	 *  spreading a campaign over several is milestone 011.
+	 */
+	sessionId: string,
+	/**  The contact list to send to, or `null` for every contact. */
+	listId: string | null,
+	/**  Lists whose members are excluded whatever else says. */
+	excludedListIds?: string[],
+	/**  The sender, or `null` to let the message centre choose one. */
+	source: string | null,
+	/**  `dest_addr_ton` of every recipient. */
+	destTon: TonDto,
+	/**  `dest_addr_npi` of every recipient. */
+	destNpi: NpiDto,
+	/**  Which alphabet to write the messages in. */
+	encoding: EncodingDto,
+	/**  How a long message announces its parts. */
+	segmentationMode: SegmentationModeDto,
+	/**  What to ask for in `registered_delivery`. */
+	registeredDelivery: RegisteredDeliveryDto,
+	/**  What to do with a recipient a variable is missing for. */
+	onMissingVariable?: MissingVariableInput,
+	/**  What to do with a message a previous run left in flight. */
+	onUnanswered?: UnansweredInput,
+	/**  The replay policy. */
+	retry: RetryInput,
+	/**  The optional planning. */
+	schedule?: ScheduleInput,
+};
 
 /**  Which column means what (CA-009-09). */
 export type ColumnMappingInput = {
@@ -469,6 +733,24 @@ export type ContactRowDto = {
 	source: string | null,
 	/**  When the contact was written. */
 	createdAt: string,
+};
+
+/**  The hours of the day a campaign may send in (CA-010-10). */
+export type DailyWindowInput = {
+	/**  When sending starts, `HH:MM`. */
+	open: string,
+	/**  When sending stops, `HH:MM`. */
+	close: string,
+	/**
+	 *  Minutes east of UTC the two ends are read in — `0`, `60`, `-300`.
+	 * 
+	 *  A fixed offset and not a named zone, for the reason
+	 *  `messaging::campaign::schedule` states: shipping the IANA database for a
+	 *  "do not text people at three in the morning" setting is not a dependency
+	 *  CLAUDE.md §2 would accept. The consequence — an hour of drift twice a
+	 *  year where daylight saving applies — is shown beside the field.
+	 */
+	offsetMinutes: number,
 };
 
 /**  What to do with a row whose number was already seen. */
@@ -621,7 +903,44 @@ export type ErrorCode =
  *  interface, not at something the operator can fix by editing a
  *  spreadsheet.
  */
-"CONTACTS_INVALID_INPUT";
+"CONTACTS_INVALID_INPUT" | 
+/**
+ *  A field of a campaign call could not be read.
+ * 
+ *  `details` names the field: the campaign form has twenty of them, and
+ *  "invalid input" without a name sends the operator hunting.
+ */
+"CAMPAIGN_INVALID_INPUT" | 
+/**  No campaign carries that identifier. */
+"CAMPAIGN_NOT_FOUND" | 
+/**
+ *  The campaign is already running.
+ * 
+ *  Its own code rather than a storage one: nothing is broken, and what the
+ *  interface has to say is "it is already sending", not "retry".
+ */
+"CAMPAIGN_BUSY" | 
+/**
+ *  The lifecycle of spec §10.3 does not allow that move.
+ * 
+ *  `details` carries `from` and `to`. Starting a cancelled campaign, or
+ *  pausing one that has completed, lands here — and it is emphatically not
+ *  a storage failure: the campaign is exactly where the operator left it.
+ */
+"CAMPAIGN_INVALID_TRANSITION" | 
+/**
+ *  The campaign selects no recipient.
+ * 
+ *  Refused at creation rather than run as an empty campaign: a campaign
+ *  over an empty list is a mistake in the list selection, and one that
+ *  completes instantly with a total of zero looks like a bug in the
+ *  sending.
+ */
+"CAMPAIGN_NO_RECIPIENTS" | 
+/**  No live session carries the identifier the campaign was configured with. */
+"CAMPAIGN_SESSION_NOT_BOUND" | 
+/**  The campaign store could not be read or written. */
+"CAMPAIGN_STORAGE";
 
 /**  The error handed to the WebView. */
 export type ErrorDto = {
@@ -1159,6 +1478,20 @@ export type MetricsTick = {
 	adaptivePermille: number,
 };
 
+/**  What to do with a recipient a template variable is missing for (CA-010-06). */
+export type MissingVariableInput = 
+/**  Drop the recipient. The default, and the safe half of spec §10.2. */
+{ policy: "reject" } | 
+/**
+ *  Put this text in place of the placeholder.
+ * 
+ *  The empty string is a legitimate substitute — "greet by name when we
+ *  have one" — which is why the value is not optional.
+ */
+{ policy: "substitute"; 
+/**  What replaces the placeholder. */
+value: string };
+
 /**  Numbering plan indicator, as spec §7.4 tabulates it. */
 export type NpiDto = 
 /**  `0` — unknown. */
@@ -1314,6 +1647,33 @@ export type RejectedRowDto = {
  *  not a check every caller has to remember.
  */
 export type RetentionDays = number;
+
+/**  How the wait grows between two attempts (spec §10.7). */
+export type RetryBackoffInput = 
+/**  The same wait every time. */
+"fixed" | 
+/**  Doubling, capped. */
+"exponential";
+
+/**  The replay policy of spec §10.7. */
+export type RetryInput = {
+	/**  Attempts per message, the first one included. */
+	maxAttempts: number,
+	/**  The wait before the second attempt, in seconds. */
+	initialDelayS: number,
+	/**  The ceiling the wait never passes, in seconds. */
+	maxDelayS: number,
+	/**  How the wait grows. */
+	backoff: RetryBackoffInput,
+};
+
+/**  The optional planning of a campaign (spec §10.2). */
+export type ScheduleInput = {
+	/**  Nothing goes out before this instant, in RFC 3339. `null` for at once. */
+	startAt: string | null,
+	/**  The daily window, or `null` for every hour. */
+	window: DailyWindowInput | null,
+};
 
 /**
  *  A string that must never be formatted.
@@ -1515,6 +1875,16 @@ export type TonDto =
 "alphanumeric" | 
 /**  `6` — abbreviated. */
 "abbreviated";
+
+/**  What to do with a message a previous run left in flight (ADR 0014). */
+export type UnansweredInput = 
+/**
+ *  Send it again. The default: no message is lost, and the duplicate risk
+ *  is counted and reported.
+ */
+"reemit" | 
+/**  Leave it alone. One recipient may receive nothing, and nobody sees it. */
+"abandon";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

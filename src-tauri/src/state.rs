@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::campaigns::CampaignServices;
 use crate::config::{AppConfig, ConfigError, ConfigStore};
 use crate::contacts::ContactServices;
 use crate::events::EventEmitter;
@@ -35,6 +36,8 @@ pub(crate) struct AppState {
     logs: LogServices,
     /// Contact import, lists and import profiles (milestone 009).
     contacts: ContactServices,
+    /// Campaign entities, controls and progress reporting (milestone 010).
+    campaigns: CampaignServices,
 }
 
 impl AppState {
@@ -53,7 +56,8 @@ impl AppState {
             sessions: SessionServices::new(database.clone(), Arc::clone(&events)),
             messages: MessageServices::new(database.clone(), Arc::clone(&events)),
             logs: LogServices::new(database.clone(), Arc::clone(&events)),
-            contacts: ContactServices::new(database, Arc::clone(&events)),
+            contacts: ContactServices::new(database.clone(), Arc::clone(&events)),
+            campaigns: CampaignServices::new(database, Arc::clone(&events)),
             events,
         }
     }
@@ -128,6 +132,11 @@ impl AppState {
     /// The contact services (milestone 009).
     pub(crate) const fn contacts(&self) -> &ContactServices {
         &self.contacts
+    }
+
+    /// The campaign services (milestone 010).
+    pub(crate) const fn campaigns(&self) -> &CampaignServices {
+        &self.campaigns
     }
 }
 
