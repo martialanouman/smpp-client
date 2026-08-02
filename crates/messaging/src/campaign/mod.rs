@@ -58,7 +58,14 @@
 //!   that could be resumed would send the messages the operator stopped.
 
 /// Where a campaign stands in the lifecycle of spec §10.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// **No `PartialOrd`/`Ord`**, deliberately, where every other stored enum of
+/// this workspace derives them. It came free from the `stored_enum!` macro this
+/// type used to be built by, and it contradicts the machine below: `PAUSED ⇄
+/// RUNNING` is a cycle, so no ordering of these seven statuses means anything,
+/// and a derived one would let `status > CampaignStatus::Running` compile and
+/// read as "further along" — which is exactly the reasoning the header rejects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CampaignStatus {
     /// Created, recipients not resolved yet.

@@ -74,6 +74,30 @@ contexte de colonne est restitué là où il est connu, par
 Aucun cycle n'apparaît : l'arête `persistence → messaging` existe depuis le
 jalon 006, et le déplacement n'en crée aucune.
 
+## Écart assumé avec la spec §10.3 — signalé, pas tranché en silence
+
+CLAUDE.md §1 demande de **signaler** un écart à la spec. En voici un, porté par
+la machine que cette ADR rend possible.
+
+Le diagramme de la spec §10.3 ne fait partir `CANCELLED` / `FAILED` que de
+`RUNNING`, et `COMPLETED` que de `RUNNING`. La machine livrée autorise en plus
+quatre transitions :
+
+| Transition | Pourquoi elle est autorisée |
+|---|---|
+| `CREATED → CANCELLED` · `VALIDATED → CANCELLED` | Annuler une campagne préparée mais jamais démarrée est une opération réelle ; sans elle, l'opérateur n'a que la suppression, qui détache les messages (`ON DELETE SET NULL`, spec §17.6). |
+| `CREATED → FAILED` · `VALIDATED → FAILED` | Un échec de validation — modèle illisible, source de destinataires vide — doit pouvoir marquer la campagne, sinon elle reste `CREATED` sans que rien ne dise pourquoi. |
+| `PAUSED → CANCELLED` · `PAUSED → FAILED` | Une campagne en pause s'annule comme une campagne en cours ; l'interdire obligerait à reprendre l'envoi pour pouvoir l'arrêter. |
+| `PAUSED → COMPLETED` | Une campagne dont le dernier message a été accepté pendant la pause n'a plus rien à faire. Exiger une reprise la laisserait `PAUSED` pour toujours alors que ses compteurs (CA-010-02) diraient qu'elle est terminée. |
+
+Aucune ne raccourcit le chemin nominal : `CREATED → RUNNING` sans validation
+reste refusé, et c'est ce refus qui garantit qu'aucune campagne ne part avec un
+modèle que personne n'a lu (CA-010-06).
+
+**Si la lecture littérale du diagramme prime, ce sont quatre lignes de la table
+et deux tests à retirer** — la décision appartient au propriétaire de la spec,
+pas à cette ADR.
+
 ## Ce qui n'est **pas** décidé ici
 
 L'ADR 0012 a fixé le jalon 010 comme point de réexamen de
