@@ -83,10 +83,18 @@ stored_enum!(
 // `repositories::convert::read_campaign_status`, which restores the
 // `MalformedRow` context this macro would have produced.
 //
-// Like `MessageState`, and unlike the enums that remain here, its set is
-// **not** mirrored by a `CHECK` constraint: spec §14.2 writes the column's
-// domain as `CREATED|RUNNING|PAUSED|COMPLETED|...`, and freezing an open list
-// into the file format would turn a future status into a migration.
+// **Unlike** `MessageState`, and unlike the enums that remain here, its set is
+// not mirrored by a `CHECK` constraint. `messages.state` has one
+// (`20260726120000_initial_schema.up.sql`, line 114) and so do `bind_type` and
+// `pdu_log.direction`; `campaigns.status` deliberately has none, because spec
+// §14.2 writes that column's domain as `CREATED|RUNNING|PAUSED|COMPLETED|...`
+// — an open list, which a `CHECK` would freeze into the file format and turn a
+// future status into a migration. The same reasoning is written at the column
+// itself, in the migration.
+//
+// The consequence is that `read_campaign_status` is the *only* thing standing
+// between a hand-edited file and a campaign read back as something it never
+// was, which is why it has a test of its own.
 
 stored_enum!(
     /// Which way a logged PDU travelled (spec §14.2, `pdu_log.direction`).
