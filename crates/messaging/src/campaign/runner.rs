@@ -61,6 +61,7 @@
 //! test of `tests/campaign_invariant.rs` is what will hold them to it.
 
 use core::time::Duration;
+use std::sync::Arc;
 
 use smpp_core::time::Clock;
 use smpp_core::types::CampaignId;
@@ -69,6 +70,7 @@ use tokio::sync::mpsc;
 
 use crate::campaign::control::{CampaignControl, ControlHandle, Resumption};
 use crate::campaign::feeder::{Fed, FeedItem, Feeder, RECIPIENT_QUEUE_CAPACITY};
+use crate::campaign::progress::CampaignProgress;
 use crate::campaign::resume::{Admission, EmissionGuard, UnansweredPolicy};
 use crate::campaign::schedule::Schedule;
 use crate::campaign::CampaignStatus;
@@ -304,13 +306,30 @@ pub struct CampaignOutcome {
 pub struct CampaignRunner<R, C> {
     sender: Sender<R, C>,
     plan: CampaignPlan,
+    progress: Option<Arc<CampaignProgress>>,
 }
 
 impl<R: MessageRepository, C: Clock> CampaignRunner<R, C> {
     /// A runner over a send orchestrator and a plan.
     #[must_use]
     pub const fn new(sender: Sender<R, C>, plan: CampaignPlan) -> Self {
-        Self { sender, plan }
+        Self {
+            sender,
+            plan,
+            progress: None,
+        }
+    }
+
+    /// The same runner, publishing its counters as it goes (L-010-07).
+    ///
+    /// Optional because the runner does not need one: a caller that only wants
+    /// the [`CampaignOutcome`] gets it either way. What a handle buys is the
+    /// ability to read the counters **before** the campaign ends, which is what
+    /// a progress bar over half a million recipients requires.
+    #[must_use]
+    pub fn reporting_to(mut self, progress: Arc<CampaignProgress>) -> Self {
+        self.progress = Some(progress);
+        self
     }
 
     /// The plan this runner executes.
@@ -408,42 +427,80 @@ impl<R: MessageRepository, C: Clock> CampaignRunner<R, C> {
         let mut stopped = false;
 
         while let Some(fed) = queue.recv().await {
-            let item = match fed {
-                // Counted HERE rather than taken from the feeder's own summary:
-                // every bucket has to be filled by the loop that reads the
-                // queue, or the total would count an item the feeder prepared
-                // and a cancellation dropped before it was pushed.
-                Fed::Rejected(_) => {
-                    tally.rejected += 1;
-                    continue;
-                }
-                Fed::Ready(item) => item,
-            };
+            let outcome = self
+                .step(session, fed, &mut control, &mut stopped, &mut tally)
+                .await;
 
-            if stopped {
-                tally.cancelled += 1;
-                continue;
-            }
+            // Published AFTER every item, in one place, whatever branch it
+            // took. A report written at the emission site would miss the three
+            // branches that never reach it — a recipient the template rejected,
+            // one the cancellation dropped, one the daily window shut out — and
+            // a campaign made of nothing but those would show a progress bar
+            // frozen at zero while its counters climbed.
+            self.report(&tally);
 
-            if control.wait_until_running().await == Resumption::Cancelled {
-                stopped = true;
-                tally.cancelled += 1;
-                continue;
-            }
-
-            // The daily window is checked HERE rather than once at the start:
-            // a window that closes mid-campaign has to stop the sending, and a
-            // campaign started at 19:59 would otherwise run all night.
-            if !self.await_schedule(&control).await {
-                stopped = true;
-                tally.cancelled += 1;
-                continue;
-            }
-
-            self.emit(session, &item, &control, &mut tally).await?;
+            outcome?;
         }
 
         Ok(tally)
+    }
+
+    /// Deals with one item off the queue.
+    ///
+    /// Split out of the loop above so that "count, then publish" holds for
+    /// every path without a `report` call per branch — see the call site.
+    async fn step<S: SmscSession>(
+        &self,
+        session: &S,
+        fed: Fed,
+        control: &mut ControlHandle,
+        stopped: &mut bool,
+        tally: &mut CampaignTally,
+    ) -> Result<(), MessagingError> {
+        let item = match fed {
+            // Counted HERE rather than taken from the feeder's own summary:
+            // every bucket has to be filled by the loop that reads the queue,
+            // or the total would count an item the feeder prepared and a
+            // cancellation dropped before it was pushed.
+            Fed::Rejected(_) => {
+                tally.rejected += 1;
+
+                return Ok(());
+            }
+            Fed::Ready(item) => item,
+        };
+
+        if *stopped {
+            tally.cancelled += 1;
+
+            return Ok(());
+        }
+
+        if control.wait_until_running().await == Resumption::Cancelled {
+            *stopped = true;
+            tally.cancelled += 1;
+
+            return Ok(());
+        }
+
+        // The daily window is checked HERE rather than once at the start: a
+        // window that closes mid-campaign has to stop the sending, and a
+        // campaign started at 19:59 would otherwise run all night.
+        if !self.await_schedule(control).await {
+            *stopped = true;
+            tally.cancelled += 1;
+
+            return Ok(());
+        }
+
+        self.emit(session, &item, control, tally).await
+    }
+
+    /// Offers the counters to whoever is watching, if anybody is.
+    fn report(&self, tally: &CampaignTally) {
+        if let Some(progress) = self.progress.as_ref() {
+            progress.publish(tally);
+        }
     }
 
     /// Waits until the planning allows sending. `false` when cancelled.
@@ -763,6 +820,7 @@ mod tests {
     use super::{CampaignPlan, CampaignRunner, StartMode};
     use crate::addressing::Destination;
     use crate::campaign::control::CampaignControl;
+    use crate::campaign::progress::CampaignProgress;
     use crate::campaign::resume::{message_key, UnansweredPolicy};
     use crate::campaign::schedule::{DailyWindow, Schedule};
     use crate::campaign::CampaignStatus;
@@ -780,6 +838,7 @@ mod tests {
     use smpp_core::types::{CampaignId, Msisdn};
     use smpp_core::values::CommandStatus;
     use std::collections::HashSet;
+    use std::sync::Arc;
     use time::{Time, UtcOffset};
 
     const SETTLE: Duration = Duration::from_millis(50);
@@ -1795,4 +1854,132 @@ mod tests {
         assert_eq!(plan("Bonjour").start, StartMode::Fresh);
         assert_eq!(plan("Bonjour").resuming().start, StartMode::Resuming);
     }
+
+    // --- progress (L-010-07) -------------------------------------------------
+
+    /// The whole reason [`CampaignProgress`] exists: a campaign of half a
+    /// million recipients is a future that does not resolve for an hour, and
+    /// the counters have to be readable **while** it runs.
+    ///
+    /// The gate holds the message centre at two answers, so at the moment the
+    /// snapshot is taken the campaign is provably unfinished.
+    #[tokio::test(start_paused = true)]
+    async fn a_running_campaign_publishes_its_counters_before_it_ends() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting().gated(2);
+        let progress = Arc::new(CampaignProgress::new());
+        let runner =
+            CampaignRunner::new(Sender::new(journal, FixedClock::default()), plan("Bonjour"))
+                .reporting_to(Arc::clone(&progress));
+
+        let source = recipients(6);
+        let control = CampaignControl::new();
+        let (outcome, midway) = tokio::join!(runner.run(&smsc, &source, &control), {
+            let smsc = smsc.clone();
+            let progress = Arc::clone(&progress);
+
+            async move {
+                tokio::time::sleep(SETTLE).await;
+
+                let midway = progress.snapshot();
+
+                smsc.release(10);
+                midway
+            }
+        });
+
+        let outcome = outcome.expect("the campaign runs");
+
+        assert!(
+            midway.accepted > 0,
+            "nothing was published while the campaign was running"
+        );
+        assert!(
+            midway.total() < 6,
+            "the campaign had already finished when the snapshot was taken: {midway:?}"
+        );
+        assert_eq!(outcome.tally.accepted, 6);
+    }
+
+    /// And what is left in the handle at the end is what the outcome says, so a
+    /// reader that only ever samples cannot be told a different story from the
+    /// one the caller gets.
+    #[tokio::test]
+    async fn the_last_reading_published_is_the_final_tally() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::scripted([Reply::Rejected(CommandStatus::EsmeRinvdstadr)]);
+        let progress = Arc::new(CampaignProgress::new());
+
+        let outcome =
+            CampaignRunner::new(Sender::new(journal, FixedClock::default()), plan("Bonjour"))
+                .reporting_to(Arc::clone(&progress))
+                .run(&smsc, &recipients(4), &CampaignControl::new())
+                .await
+                .expect("the campaign runs");
+
+        // Not a vacuous equality: the campaign really did produce a mixture.
+        assert_eq!(outcome.tally.accepted, 3);
+        assert_eq!(outcome.tally.failed, 1);
+        assert_eq!(progress.snapshot(), outcome.tally);
+    }
+
+    /// A recipient the template rejected never reaches [`CampaignRunner::emit`],
+    /// so it is the branch a report written at the emission site would miss.
+    /// The reading has to move for it too, or a campaign of nothing but
+    /// rejections would show a progress bar frozen at zero.
+    #[tokio::test]
+    async fn a_reading_is_published_for_a_recipient_no_message_was_built_for() {
+        let journal = MemoryJournal::new();
+        let progress = Arc::new(CampaignProgress::new());
+        let source = StaticRecipients::new(vec![Recipient {
+            destination: number(1),
+            attributes: Some(String::from("{}")),
+        }]);
+
+        let outcome = CampaignRunner::new(
+            Sender::new(journal, FixedClock::default()),
+            plan("Bonjour {{prenom}}"),
+        )
+        .reporting_to(Arc::clone(&progress))
+        .run(&FakeSmsc::accepting(), &source, &CampaignControl::new())
+        .await
+        .expect("the campaign runs");
+
+        assert_eq!(outcome.tally.rejected, 1);
+        assert_eq!(progress.snapshot().rejected, 1);
+    }
+
+    /// The other branch that never reaches the emission site: a recipient the
+    /// queue held when the campaign was cancelled.
+    #[tokio::test(start_paused = true)]
+    async fn a_reading_is_published_for_a_recipient_the_cancellation_dropped() {
+        let journal = MemoryJournal::new();
+        let smsc = FakeSmsc::accepting().gated(2);
+        let control = CampaignControl::new();
+        let progress = Arc::new(CampaignProgress::new());
+        let runner =
+            CampaignRunner::new(Sender::new(journal, FixedClock::default()), plan("Bonjour"))
+                .reporting_to(Arc::clone(&progress));
+
+        let source = recipients(20);
+        let (outcome, ()) = tokio::join!(runner.run(&smsc, &source, &control), {
+            let smsc = smsc.clone();
+            let control = &control;
+
+            async move {
+                tokio::time::sleep(SETTLE).await;
+                control.cancel();
+                smsc.release(10);
+            }
+        });
+
+        let outcome = outcome.expect("the campaign runs");
+
+        assert!(outcome.tally.cancelled > 0);
+        assert_eq!(progress.snapshot(), outcome.tally);
+    }
+
+    // NO TEST for "a runner with no observer still runs": every other test in
+    // this module builds one without `reporting_to`, so one more asserting it
+    // would be a copy that can only fail when thirty others already have.
 }
