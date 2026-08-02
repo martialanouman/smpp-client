@@ -124,6 +124,13 @@ pub enum RetryPolicyError {
     /// The ceiling is below the base delay.
     #[error("the maximum delay is below the base delay")]
     DelayBoundsInverted,
+
+    /// The base delay is below the floor a replay must respect.
+    #[error("a retry waits at least {minimum_s} second(s)")]
+    DelayTooShort {
+        /// The floor, in seconds.
+        minimum_s: u64,
+    },
     /// The ceiling is above what a campaign may wait.
     #[error("a retry may not be delayed by more than {maximum_s} seconds")]
     DelayTooLong {
@@ -177,6 +184,19 @@ impl RetryPolicy {
     /// the operator should be told rather than left with a spinner.
     pub const MAX_DELAY_S: u64 = 3_600;
 
+    /// Shortest a retry may be held back, in seconds.
+    ///
+    /// CA-010-07 asks for a replay "after a delay", and the case it names is
+    /// `ESME_RTHROTTLED` — the message centre saying it is being pushed too
+    /// hard. A policy with no delay would answer that by resending at once, as
+    /// many times as the budget allows, which is the opposite of what the code
+    /// means.
+    ///
+    /// One second, the floor milestone 005 puts on the reconnection back-off
+    /// (`ReconnectPolicy::new`), so the two waits an operator can configure have
+    /// the same lower bound rather than two arbitrary ones.
+    pub const MIN_DELAY_S: u64 = 1;
+
     /// Builds a policy.
     ///
     /// # Errors
@@ -184,9 +204,17 @@ impl RetryPolicy {
     /// [`RetryPolicyError::AttemptsOutOfRange`] outside 1..=[`Self::MAX_ATTEMPTS`]
     /// — zero attempts is a campaign that sends nothing, which is a
     /// configuration mistake and not a policy —,
+    /// [`RetryPolicyError::DelayTooShort`] below [`Self::MIN_DELAY_S`],
     /// [`RetryPolicyError::DelayTooLong`] above [`Self::MAX_DELAY_S`], and
     /// [`RetryPolicyError::DelayBoundsInverted`] when the ceiling is below the
     /// base delay.
+    ///
+    /// This constructor is the **only** way to build a policy other than
+    /// [`Default`], and that is deliberate: the settings come from an operator
+    /// through the campaign form, and *parse, don't validate* (CLAUDE.md §4)
+    /// puts the check at the one point where the outside gets in. Every
+    /// [`RetryPolicy`] that exists therefore respects the bounds, and
+    /// [`Self::delay_for`] has nothing left to defend against.
     pub fn new(
         max_attempts: u32,
         base_delay: Duration,
@@ -196,6 +224,12 @@ impl RetryPolicy {
         if !(1..=Self::MAX_ATTEMPTS).contains(&max_attempts) {
             return Err(RetryPolicyError::AttemptsOutOfRange {
                 maximum: Self::MAX_ATTEMPTS,
+            });
+        }
+
+        if base_delay < Duration::from_secs(Self::MIN_DELAY_S) {
+            return Err(RetryPolicyError::DelayTooShort {
+                minimum_s: Self::MIN_DELAY_S,
             });
         }
 
@@ -352,7 +386,20 @@ impl SendFailure {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Rejected(status) => status_codes::classify(*status).is_retryable(),
-            Self::NoResponse(error) => !matches!(error, SubmitError::OperationNotAllowed),
+            // EXHAUSTIVE ON PURPOSE, and no `_` arm. `SubmitError` is
+            // `#[non_exhaustive]`, but that only binds other crates: within
+            // this one, a variant added to the port — a cancellation, which
+            // CA-010-09 is likely to bring — stops this file from compiling
+            // until somebody decides what it means. Written as a negation, the
+            // same variant would silently join "replayed" and be retried until
+            // the budget ran out.
+            Self::NoResponse(error) => match error {
+                SubmitError::ResponseTimeout
+                | SubmitError::Closed
+                | SubmitError::Transport { .. }
+                | SubmitError::NotBound { .. } => true,
+                SubmitError::OperationNotAllowed => false,
+            },
         }
     }
 }
@@ -573,6 +620,60 @@ mod tests {
                 RetryBackoff::Fixed,
             ),
             Err(RetryPolicyError::DelayBoundsInverted)
+        );
+    }
+
+    /// CA-010-07 says a throttled message is replayed **after a delay**. A
+    /// policy built with no delay at all would answer an `ESME_RTHROTTLED` —
+    /// the message centre asking, in so many words, to slow down — with ten
+    /// immediate retries.
+    #[test]
+    fn a_policy_with_no_delay_between_attempts_is_refused() {
+        assert_eq!(
+            RetryPolicy::new(
+                3,
+                Duration::ZERO,
+                Duration::from_secs(60),
+                RetryBackoff::Fixed,
+            ),
+            Err(RetryPolicyError::DelayTooShort {
+                minimum_s: RetryPolicy::MIN_DELAY_S,
+            })
+        );
+        assert_eq!(
+            RetryPolicy::new(
+                3,
+                Duration::from_millis(999),
+                Duration::from_secs(60),
+                RetryBackoff::Fixed,
+            ),
+            Err(RetryPolicyError::DelayTooShort {
+                minimum_s: RetryPolicy::MIN_DELAY_S,
+            })
+        );
+    }
+
+    /// The floor is a property of every policy that exists, not of the ones
+    /// built carefully: no reachable configuration answers a throttling status
+    /// without waiting.
+    #[test]
+    fn no_replay_a_policy_can_produce_is_immediate() {
+        let policy = RetryPolicy::new(
+            RetryPolicy::MAX_ATTEMPTS,
+            Duration::from_secs(RetryPolicy::MIN_DELAY_S),
+            Duration::from_secs(RetryPolicy::MIN_DELAY_S),
+            RetryBackoff::Fixed,
+        )
+        .expect("the floor itself is accepted");
+
+        let decision = policy.decide(&SendFailure::Rejected(CommandStatus::EsmeRthrottled), 1);
+
+        assert_eq!(
+            decision,
+            RetryDecision::RetryAfter {
+                attempt: 2,
+                delay: Duration::from_secs(RetryPolicy::MIN_DELAY_S),
+            }
         );
     }
 
