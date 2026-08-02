@@ -3,6 +3,7 @@
 use crate::addressing::AddressError;
 use crate::encoding::EncodingError;
 use crate::ports::MessageStoreError;
+use crate::retry::RetryPolicyError;
 use crate::submit::SubmitBuildError;
 use crate::template::{RenderError, TemplateError};
 
@@ -64,4 +65,8 @@ pub enum MessagingError {
     /// rejects one line and the campaign carries on (CA-010-06).
     #[error("the message could not be rendered for this recipient")]
     Render(#[from] RenderError),
+
+    /// The replay settings of a campaign are not usable (spec §10.7).
+    #[error("the retry policy was refused")]
+    RetryPolicy(#[from] RetryPolicyError),
 }

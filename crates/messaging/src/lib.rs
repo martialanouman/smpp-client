@@ -55,6 +55,7 @@ pub mod encoding;
 mod error;
 pub mod message;
 pub mod ports;
+pub mod retry;
 pub mod segmentation;
 pub mod sender;
 pub mod submit;
@@ -65,6 +66,9 @@ pub use dlr::{DeliveryReceipt, DeliveryStatus, Incoming};
 pub use error::MessagingError;
 pub use message::{Message, MessageState, MessageStateUpdate, SmscMessageIdUpdate};
 pub use ports::{MessageRepository, MessageStoreError, SmscSession, SubmitError};
+pub use retry::{
+    GiveUpReason, RetryBackoff, RetryDecision, RetryPolicy, RetryPolicyError, SendFailure,
+};
 pub use sender::{SegmentOutcome, SendObserver, SendReport, SendRequest, Sender};
 pub use template::{MissingVariablePolicy, RenderError, Template, TemplateError, Variables};
 
