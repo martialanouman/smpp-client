@@ -602,3 +602,38 @@ async fn a_cancellation_mid_import_returns_rather_than_hanging() {
         "the cancellation actually cut the import short"
     );
 }
+
+/// A spreadsheet export whose first line is empty still finds its header row.
+///
+/// # Why this is a regression test and not a feature test
+///
+/// The reader used to skip blank records, so the header candidate was the
+/// first row that held something. Making blank rows visible — which is what
+/// `ImportReport::blank` needs — also made them candidates: a leading `;;`
+/// looks like a header (no cell holds a number), so the mapping resolved
+/// against three empty names and the WHOLE import failed with a mapping error
+/// on a file that had imported cleanly the day before.
+#[tokio::test]
+async fn a_file_starting_with_a_blank_row_still_finds_its_header() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = write(
+        &directory,
+        "export.csv",
+        b";;\nnom;telephone;ville\nKouassi;0700000000;Abidjan\n",
+    );
+    let store = MemoryStore::new();
+
+    let report = run(
+        &store,
+        ImportSource::Csv { path },
+        ivorian(ColumnMapping::by_name("telephone")),
+    )
+    .await;
+
+    assert_eq!(
+        report.imported, 1,
+        "the header row was found past the blank"
+    );
+    assert_eq!(report.blank, 1, "the blank row is still counted apart");
+    assert!(report.is_consistent());
+}

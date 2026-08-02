@@ -778,8 +778,14 @@ pub(crate) async fn contacts_lists(
 ///
 /// # Errors
 ///
-/// [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a blank name,
-/// `CONTACTS_DUPLICATE` if a list already carries that name.
+/// [`ErrorDto`] with `CONTACTS_INVALID_INPUT` for a blank name, or a storage
+/// code if the write fails.
+///
+/// **Not** a duplicate: `contact_lists.name` carries no unique constraint, so
+/// two lists may share a name. Stated because it is a real consequence — two
+/// identically named lists are indistinguishable in the selectors — and
+/// because adding the constraint is a migration, which belongs to the
+/// milestone that decides list management is a screen of its own.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn contacts_create_list(

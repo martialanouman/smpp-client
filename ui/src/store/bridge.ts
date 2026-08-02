@@ -20,7 +20,15 @@ function adopt(config: AppConfig): void {
  * produced one, and minting one here would be hand-writing a piece of the
  * contract ADR 0003 requires to be generated.
  */
-function report(failure: Extract<IpcOutcome<never>, { ok: false }>["failure"]): void {
+/**
+ * Surfaces a failed call as a notification.
+ *
+ * Exported because every store needs it and each one writing its own is how a
+ * screen ends up swallowing its failures: the operator clicks, nothing
+ * happens, and nothing says why. The `code` is what the toast translates; the
+ * English `message` is for the logs and never reaches the screen.
+ */
+export function report(failure: Extract<IpcOutcome<never>, { ok: false }>["failure"]): void {
   usePreferences
     .getState()
     .notify(

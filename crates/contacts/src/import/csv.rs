@@ -177,7 +177,10 @@ pub struct CsvRows {
     reader: csv::Reader<Box<dyn Read + Send>>,
     dialect: CsvDialect,
     headers: Option<Vec<String>>,
-    pending: Option<RawRow>,
+    /// Rows read during detection, handed out before the reader is touched
+    /// again. Holds the blank rows preceding the header candidate, plus the
+    /// candidate itself when it turned out to be data.
+    pending: std::collections::VecDeque<RawRow>,
     line: u64,
 }
 
@@ -245,7 +248,22 @@ impl CsvRows {
             .from_reader(Box::new(decoded) as Box<dyn Read + Send>);
 
         let mut line = 0_u64;
-        let first = read_record(&mut reader, &mut line)?;
+
+        // The header candidate is the first record that holds SOMETHING, and
+        // the blank rows before it are kept to be counted.
+        //
+        // The two cannot be conflated. A spreadsheet export whose first line is
+        // empty yields `;;` — a record of empty fields, which `looks_like_header`
+        // accepts (no cell holds a number) and which would then be taken as the
+        // header row, so every column name would resolve against `["","",""]`
+        // and the whole import would fail on a file that is perfectly ordinary.
+        let mut leading_blanks = Vec::new();
+        let first = loop {
+            match read_record(&mut reader, &mut line)? {
+                Some(row) if row.is_blank() => leading_blanks.push(row),
+                other => break other,
+            }
+        };
 
         let has_headers = match (headers, first.as_ref()) {
             (_, None) => false,
@@ -254,11 +272,17 @@ impl CsvRows {
             (HeaderMode::Detect, Some(row)) => looks_like_header(&row.values),
         };
 
-        let (headers, pending) = match (has_headers, first) {
+        let (headers, candidate) = match (has_headers, first) {
             (true, Some(row)) => (Some(row.values), None),
             (false, first) => (None, first),
             (true, None) => (None, None),
         };
+
+        // The blanks come first, in file order: they were read before the
+        // candidate, and a report that counted them is worth nothing if their
+        // line numbers move.
+        let mut pending: std::collections::VecDeque<RawRow> = leading_blanks.into();
+        pending.extend(candidate);
 
         Ok(Self {
             reader,
@@ -286,7 +310,7 @@ impl RowSource for CsvRows {
     }
 
     fn next_row(&mut self) -> Result<Option<RawRow>, ContactsError> {
-        if let Some(row) = self.pending.take() {
+        if let Some(row) = self.pending.pop_front() {
             return Ok(Some(row));
         }
 
@@ -294,13 +318,17 @@ impl RowSource for CsvRows {
     }
 }
 
-/// Reads one record, skipping records that hold nothing at all.
+/// Reads one record, blank ones included.
 ///
-/// A blank line is not a row: a file exported from a spreadsheet routinely ends
-/// with several, and counting them as rejected contacts would make the report
-/// say an import "failed" on rows that were never there. Blank lines still
-/// advance the line counter, so the line number in a rejection is the line
-/// number in the operator's editor.
+/// A blank row is handed over rather than skipped: the writer counts it apart
+/// from the total, so the report can tell the operator that the dozen rows
+/// their spreadsheet export left at the end of the file were seen and set
+/// aside. What must never happen is counting them as **rejected** contacts,
+/// which would make the report say an import failed on rows that were never
+/// there — and that is a decision of the writer, not of this function.
+///
+/// Blank lines still advance the line counter, so the line number in a
+/// rejection is the line number in the operator's editor.
 fn read_record(
     reader: &mut csv::Reader<Box<dyn Read + Send>>,
     line: &mut u64,

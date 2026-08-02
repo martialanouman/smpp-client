@@ -85,7 +85,7 @@ export function ImportWizard() {
   const storeProfile = async () => {
     if (profileName.trim() === "" || msisdnColumn === "") return;
 
-    await saveProfile({
+    const saved = await saveProfile({
       // The identifier in force, so saving twice under the same name updates
       // the profile instead of leaving two of them in the selector.
       profileId: profileId === "" ? null : profileId,
@@ -97,6 +97,13 @@ export function ImportWizard() {
       },
       createdAt: null,
     });
+
+    // Adopting the identifier is what makes the next click an update rather
+    // than a second profile under the same name — which `UNIQUE(name)` refuses
+    // outright.
+    if (saved !== null) {
+      setProfileId(saved);
+    }
   };
 
   const addList = async () => {

@@ -17,6 +17,7 @@ import {
   type ImportSourceInput,
   type SelectionInput,
 } from "../ipc";
+import { report } from "./bridge";
 
 /**
  * State of the contacts screen (spec §13.4).
@@ -101,8 +102,15 @@ interface ContactsState {
   readonly cancelImport: () => Promise<void>;
   /** Records a progress reading arriving from `import:progress`. */
   readonly applyProgress: (progress: ImportProgressEvent) => void;
-  /** Saves a mapping profile and refreshes the list. */
-  readonly saveProfile: (profile: ImportProfileDto) => Promise<void>;
+  /**
+   * Saves a mapping profile and refreshes the list.
+   *
+   * Resolves to the identifier in force — the one sent, or the fresh one the
+   * backend minted. The assistant needs it: without it, a second click saves
+   * a *second* profile under the same name instead of updating the first, and
+   * `import_profiles.name` is `UNIQUE`, so the write simply fails.
+   */
+  readonly saveProfile: (profile: ImportProfileDto) => Promise<string | null>;
   /** Creates a contact list and refreshes the selector. */
   readonly createList: (name: string) => Promise<string | null>;
   /** Clears the report panel. */
@@ -155,6 +163,7 @@ export const useContacts = create<ContactsState>((set, get) => ({
         loading: false,
       });
     } else {
+      report(outcome.failure);
       set({ loading: false });
     }
   },
@@ -214,6 +223,10 @@ export const useContacts = create<ContactsState>((set, get) => ({
 
     const outcome = await contactsImport(source, options);
 
+    if (!outcome.ok) {
+      report(outcome.failure);
+    }
+
     set({
       importing: false,
       progress: null,
@@ -241,15 +254,23 @@ export const useContacts = create<ContactsState>((set, get) => ({
   saveProfile: async (profile) => {
     const outcome = await contactsSaveProfile(profile);
 
-    if (outcome.ok) {
-      await get().loadReferences();
+    if (!outcome.ok) {
+      report(outcome.failure);
+      return null;
     }
+
+    await get().loadReferences();
+
+    return outcome.value;
   },
 
   createList: async (name) => {
     const outcome = await contactsCreateList(name);
 
-    if (!outcome.ok) return null;
+    if (!outcome.ok) {
+      report(outcome.failure);
+      return null;
+    }
 
     await get().loadReferences();
 

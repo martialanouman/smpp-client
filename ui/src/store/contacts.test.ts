@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContactPageDto, ContactRowDto } from "../ipc";
 import { useContacts } from "./contacts";
 
+const notify = vi.fn();
 const contactsPage = vi.fn();
 const contactsImport = vi.fn();
 const contactsLists = vi.fn();
 const contactsProfiles = vi.fn();
+
+vi.mock("./bridge", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bridge")>()),
+  report: (failure: unknown) => notify(failure) as unknown,
+}));
 
 vi.mock("../ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc")>()),
@@ -37,6 +43,7 @@ function aPage(rows: ContactRowDto[], next: string | null, total = rows.length) 
 
 describe("the contacts store", () => {
   beforeEach(() => {
+    notify.mockReset();
     contactsPage.mockReset();
     contactsImport.mockReset();
     contactsLists.mockReset().mockResolvedValue({ ok: true, value: [] });
@@ -205,5 +212,39 @@ describe("the contacts store", () => {
     expect(contactsPage).toHaveBeenCalled();
     expect(useContacts.getState().importing).toBe(false);
     expect(useContacts.getState().report).toBeNull();
+  });
+
+  /**
+   * A refused import must SAY so. The file-picker guard added at this
+   * milestone refuses any path the native dialog did not hand back, and
+   * without this the operator sees the progress bar vanish, no report, and no
+   * reason — a guard that protects and explains nothing.
+   */
+  it("surfaces the failure of a refused import instead of swallowing it", async () => {
+    contactsImport.mockResolvedValue({
+      ok: false,
+      failure: {
+        kind: "backend",
+        error: { code: "CONTACTS_FILE_NOT_PICKED", message: "", details: null },
+      },
+    });
+    contactsPage.mockResolvedValue(aPage([], null, 0));
+
+    await useContacts.getState().runImport(
+      { kind: "csv", path: "/etc/passwd" },
+      {
+        mapping: { msisdn: { by: "name", value: "msisdn" }, country: null, attributes: [] },
+        headers: "detect",
+        defaultRegion: null,
+        mobilesOnly: false,
+        deduplication: "firstWins",
+        listId: null,
+      },
+    );
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]).toMatchObject({
+      error: { code: "CONTACTS_FILE_NOT_PICKED" },
+    });
   });
 });
