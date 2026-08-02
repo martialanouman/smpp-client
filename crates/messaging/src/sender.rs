@@ -624,7 +624,7 @@ where
     /// `attempts` is zero here on purpose: no `submit_sm` has left, so no
     /// attempt has been made. The number arrives with the `SENT` transition,
     /// which is the one that says a PDU went out.
-    fn queued_row(
+    pub(crate) fn queued_row(
         &self,
         request: &SendRequest,
         session_id: SessionId,

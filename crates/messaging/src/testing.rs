@@ -214,6 +214,14 @@ pub struct MemoryJournal {
 #[derive(Debug, Default)]
 struct JournalState {
     rows: HashMap<ClientMessageId, Message>,
+    /// Inserts refused from the `n`-th attempt on, counting from 1.
+    ///
+    /// Distinct from [`MemoryJournal::refusing_inserts`], which is global and
+    /// therefore cannot express the family that matters: a batch whose *k*-th
+    /// insert fails, leaving `k − 1` rows written and nothing sent. A double
+    /// that cannot represent a case is a double that reports it green.
+    insert_fails_from: Option<u64>,
+    insert_attempts: u64,
     inserted: u64,
     transitions: u64,
     reads: u64,
@@ -314,6 +322,20 @@ impl MemoryJournal {
     /// How this journal misbehaves from now on.
     pub async fn set_fault(&self, fault: JournalFault) {
         self.inner.lock().await.fault = fault;
+    }
+
+    /// Refuses inserts from the `attempt`-th on, counting from 1.
+    ///
+    /// `None` restores an ordinary journal, and restoring it is the point: the
+    /// family this exists for is a **sequence** — a batch whose second insert
+    /// fails, then the same batch retried against a journal that works. What
+    /// the first run leaves behind is a `QUEUED` row with no `SENT` transition,
+    /// which nothing but a failed insert can produce.
+    pub async fn fail_inserts_from(&self, attempt: Option<u64>) {
+        let mut state = self.inner.lock().await;
+
+        state.insert_fails_from = attempt;
+        state.insert_attempts = 0;
     }
 
     /// Yields, when this journal was built to.
@@ -420,6 +442,15 @@ impl MessageRepository for MemoryJournal {
         let mut state = self.inner.lock().await;
 
         if state.fault == JournalFault::RefusesWrites {
+            return Err(unavailable());
+        }
+
+        state.insert_attempts += 1;
+
+        if state
+            .insert_fails_from
+            .is_some_and(|from| state.insert_attempts >= from)
+        {
             return Err(unavailable());
         }
 
@@ -560,6 +591,98 @@ pub enum Reply {
     Failed(SubmitError),
 }
 
+/// What a [`FakeSmsc`] answers one `submit_multi` with.
+///
+/// Separate from [`Reply`] because the answers are not the same shape: a
+/// `submit_multi_resp` is **partially** successful, carrying one identifier and
+/// a list of the recipients it refused, each with its own status. Folding the
+/// two into one enum would have made the batch double answer in the shape of a
+/// `submit_sm`, which is the very confusion the fallback has to survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MultiReply {
+    /// `ESME_ROK` and a `submit_multi_resp` refusing these recipients.
+    ///
+    /// An empty list is the whole batch accepted.
+    Accepted {
+        /// Who this message centre refused, and how it says so.
+        refused: Vec<Refused>,
+    },
+
+    /// A `submit_multi_resp` carrying a refusal of the whole PDU.
+    Refused(CommandStatus),
+
+    /// `generic_nack` — the message centre does not know the operation.
+    Unsupported,
+
+    /// `ESME_ROK` over a body that is not a `submit_multi_resp`.
+    Unreadable,
+
+    /// No response at all.
+    Failed(SubmitError),
+}
+
+impl Default for MultiReply {
+    fn default() -> Self {
+        Self::Accepted {
+            refused: Vec::new(),
+        }
+    }
+}
+
+/// One recipient a [`MultiReply::Accepted`] refuses.
+///
+/// # Why "who was refused" and "how it is written back" are two fields
+///
+/// They are the same string at every well-behaved message centre, and the whole
+/// hazard of this milestone lives in the gap between them. A centre that refuses
+/// `2250700000002` and renders it `00225700000002` in `unsuccess_sme` has
+/// refused that recipient — the handset gets nothing — while the client cannot
+/// attribute the refusal. Folding the two into one string would make that case
+/// **unrepresentable**, and a test suite that cannot represent it is a test suite
+/// that reports the batch accepted and says so with a green tick.
+///
+/// [`Self::destination`] is therefore the message centre's own truth, used to
+/// decide what it accepted, and [`Self::quoted`] is only what travels in the
+/// PDU.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    /// The destination that was really refused, as it appeared in the PDU.
+    pub destination: String,
+    /// How this message centre writes it in `unsuccess_sme`.
+    pub quoted: String,
+    /// Its own `error_status_code`.
+    pub status: CommandStatus,
+}
+
+impl Refused {
+    /// A refusal quoted back verbatim — what a well-behaved centre does.
+    #[must_use]
+    pub fn plain(destination: impl Into<String>, status: CommandStatus) -> Self {
+        let destination = destination.into();
+
+        Self {
+            quoted: destination.clone(),
+            destination,
+            status,
+        }
+    }
+
+    /// A refusal quoted back in another form than the one it was sent in.
+    #[must_use]
+    pub fn quoted_as(
+        destination: impl Into<String>,
+        quoted: impl Into<String>,
+        status: CommandStatus,
+    ) -> Self {
+        Self {
+            destination: destination.into(),
+            quoted: quoted.into(),
+            status,
+        }
+    }
+}
+
 /// A message centre that answers from a script.
 ///
 /// Narrower than `smpp_session::testing::Smsc` on purpose: that one is a socket
@@ -576,7 +699,10 @@ struct SmscState {
     session_id: SessionId,
     script: Mutex<VecDeque<Reply>>,
     fallback: Reply,
+    multi_script: Mutex<VecDeque<MultiReply>>,
+    multi_fallback: MultiReply,
     submitted: AtomicU64,
+    multi_submitted: AtomicU64,
     destinations: Mutex<Option<Vec<(String, bool)>>>,
     gate: Option<Semaphore>,
     yields: bool,
@@ -597,7 +723,10 @@ impl FakeSmsc {
                 session_id: SessionId::new(),
                 script: Mutex::new(VecDeque::new()),
                 fallback: Reply::Accepted,
+                multi_script: Mutex::new(VecDeque::new()),
+                multi_fallback: MultiReply::default(),
                 submitted: AtomicU64::new(0),
+                multi_submitted: AtomicU64::new(0),
                 destinations: Mutex::new(None),
                 gate: None,
                 yields: false,
@@ -629,6 +758,38 @@ impl FakeSmsc {
         }
 
         smsc
+    }
+
+    /// The same message centre, answering every `submit_multi` with `reply`.
+    #[must_use]
+    pub fn answering_multi(mut self, reply: MultiReply) -> Self {
+        if let Some(state) = Arc::get_mut(&mut self.inner) {
+            state.multi_fallback = reply;
+        }
+
+        self
+    }
+
+    /// The same message centre, answering `replies` to the first
+    /// `submit_multi`s and [`Self::answering_multi`]'s reply after that.
+    ///
+    /// What the capability latch is observed with: "the first batch is refused
+    /// and the second is never attempted" needs a double that *would* answer a
+    /// second one differently.
+    #[must_use]
+    pub fn multi_scripted(self, replies: impl IntoIterator<Item = MultiReply>) -> Self {
+        // The lock is uncontended here: nothing else holds this `Arc` yet.
+        if let Ok(mut script) = self.inner.multi_script.try_lock() {
+            script.extend(replies);
+        }
+
+        self
+    }
+
+    /// How many `submit_multi` reached this message centre.
+    #[must_use]
+    pub fn multi_submitted(&self) -> u64 {
+        self.inner.multi_submitted.load(Ordering::SeqCst)
     }
 
     /// The same message centre, answering `reply` once the script runs out.
@@ -707,6 +868,79 @@ impl FakeSmsc {
             .collect()
     }
 
+    /// Answers one `submit_multi`, recording every recipient it named.
+    ///
+    /// Each destination is recorded with **its own** verdict, not the batch's:
+    /// a `submit_multi_resp` is partially successful, so a recording that
+    /// credited the whole batch to the top-level status could not tell the
+    /// invariant "at most one accepted message per recipient" from its
+    /// opposite.
+    async fn answer_multi(
+        &self,
+        body: &smpp_core::pdus::SubmitMulti,
+        sequence: u64,
+    ) -> Result<Command, SubmitError> {
+        use smpp_core::values::DestAddress;
+
+        self.inner.multi_submitted.fetch_add(1, Ordering::SeqCst);
+
+        let reply = self
+            .inner
+            .multi_script
+            .lock()
+            .await
+            .pop_front()
+            .unwrap_or_else(|| self.inner.multi_fallback.clone());
+
+        if let Some(recorded) = self.inner.destinations.lock().await.as_mut() {
+            for address in body.dest_address() {
+                let DestAddress::SmeAddress(sme) = address else {
+                    continue;
+                };
+
+                let number = sme.destination_addr.as_str().to_owned();
+                let accepted = match &reply {
+                    // Read off `destination`, never off `quoted`: this is what
+                    // the message centre knows it did, and the client's ability
+                    // to work it out from the PDU is the thing under test.
+                    MultiReply::Accepted { refused } => !refused
+                        .iter()
+                        .any(|entry| entry.destination.trim_start_matches('+') == number),
+                    MultiReply::Refused(_)
+                    | MultiReply::Unsupported
+                    | MultiReply::Unreadable
+                    | MultiReply::Failed(_) => false,
+                };
+
+                recorded.push((number, accepted));
+            }
+        }
+
+        let number = u32::try_from(sequence).unwrap_or(u32::MAX);
+
+        match reply {
+            MultiReply::Accepted { refused } => Ok(Command::new(
+                CommandStatus::EsmeRok,
+                number,
+                multi_response(&format!("batch-{sequence}"), &refused),
+            )),
+            MultiReply::Refused(status) => {
+                Ok(Command::new(status, number, multi_response("", &[])))
+            }
+            MultiReply::Unsupported => Ok(Command::new(
+                CommandStatus::EsmeRinvcmdid,
+                number,
+                Pdu::GenericNack,
+            )),
+            MultiReply::Unreadable => Ok(Command::new(
+                CommandStatus::EsmeRok,
+                number,
+                submit_response("not-a-batch"),
+            )),
+            MultiReply::Failed(failure) => Err(failure),
+        }
+    }
+
     /// Every recipient, with whether the submission was accepted.
     async fn recorded(&self) -> Vec<(String, bool)> {
         self.inner
@@ -747,6 +981,10 @@ impl SmscSession for FakeSmsc {
         }
 
         let sequence = self.inner.submitted.fetch_add(1, Ordering::SeqCst) + 1;
+
+        if let Pdu::SubmitMulti(body) = &pdu {
+            return self.answer_multi(body, sequence).await;
+        }
 
         let reply = self
             .inner
@@ -792,6 +1030,35 @@ fn submit_response(message_id: &str) -> Pdu {
         .unwrap_or_else(|_| smpp_core::octets::COctetString::empty());
 
     Pdu::SubmitSmResp(smpp_core::pdus::SubmitSmResp::new(identifier, Vec::new()))
+}
+
+/// A `submit_multi_resp` carrying `message_id` and the refused destinations.
+fn multi_response(message_id: &str, refused: &[Refused]) -> Pdu {
+    use core::str::FromStr as _;
+
+    use smpp_core::values::{Npi, Ton, UnsuccessSme};
+
+    let identifier = smpp_core::octets::COctetString::from_str(message_id)
+        .unwrap_or_else(|_| smpp_core::octets::COctetString::empty());
+
+    let unsuccess = refused
+        .iter()
+        .map(|entry| {
+            UnsuccessSme::new(
+                Ton::International,
+                Npi::Isdn,
+                smpp_core::octets::COctetString::from_str(&entry.quoted)
+                    .unwrap_or_else(|_| smpp_core::octets::COctetString::empty()),
+                entry.status,
+            )
+        })
+        .collect();
+
+    Pdu::SubmitMultiResp(smpp_core::pdus::SubmitMultiResp::new(
+        identifier,
+        unsuccess,
+        Vec::new(),
+    ))
 }
 
 /// A recipient source holding a fixed list.

@@ -34,8 +34,8 @@ use smpp_core::octets::{AnyOctetString, COctetString, EmptyOrFullCOctetString, O
 use smpp_core::pdus::SubmitSm;
 use smpp_core::tlvs::{MessageSubmissionRequestTlvValue, TlvTag};
 use smpp_core::values::{
-    IntermediateNotification, MCDeliveryReceipt, Npi, PriorityFlag, RegisteredDelivery,
-    ReplaceIfPresentFlag, ServiceType, SmeOriginatedAcknowledgement, Ton,
+    DataCoding, EsmClass, IntermediateNotification, MCDeliveryReceipt, Npi, PriorityFlag,
+    RegisteredDelivery, ReplaceIfPresentFlag, ServiceType, SmeOriginatedAcknowledgement, Ton,
 };
 
 use crate::addressing::{empty_address, AddressError, Destination, SourceAddress};
@@ -103,6 +103,27 @@ pub enum SubmitBuildError {
     PriorityOutOfRange {
         /// The ceiling, so the interface can show it.
         maximum: u8,
+    },
+
+    /// A `submit_multi` was asked for with no recipient at all.
+    ///
+    /// `number_of_dests = 0` is not a PDU any message centre accepts, and a
+    /// batch nobody is in is a caller mistake rather than an empty success.
+    #[error("a submit_multi carries at least one recipient")]
+    NoDestinations,
+
+    /// A `submit_multi` was asked for with more recipients than one PDU holds.
+    ///
+    /// Refused rather than truncated. `number_of_dests` is a single octet and
+    /// `rusmpp` fills it with `dest_address.len() as u8`, so a 256-recipient
+    /// vector would announce **zero** destinations and the extra recipients
+    /// would vanish without a trace — exactly the "losing a recipient"
+    /// CA-010-08 forbids. Split the batch with
+    /// [`slice::chunks`](slice::chunks) instead.
+    #[error("a submit_multi carries at most {maximum} recipients")]
+    TooManyDestinations {
+        /// The ceiling, so the caller can split on it.
+        maximum: usize,
     },
 }
 
@@ -259,77 +280,131 @@ pub fn build_submit_sm(
     options: &SubmitOptions,
     segment: &Segment,
 ) -> Result<SubmitSm, SubmitBuildError> {
-    if u8::from(options.priority_flag) > MAX_PRIORITY_FLAG {
-        return Err(SubmitBuildError::PriorityOutOfRange {
-            maximum: MAX_PRIORITY_FLAG,
-        });
-    }
-
-    let (source_field, source_ton, source_npi) = match options.source.as_ref() {
-        Some(source) => (source.to_field()?, source.ton(), source.npi()),
-        // An empty `source_addr` is legal and means "message centre, use your
-        // own". TON and NPI go to `Unknown` with it: announcing
-        // `International` beside an empty address is a contradiction some
-        // SMSCs reject.
-        None => (empty_address()?, Ton::Unknown, Npi::Unknown),
-    };
-
-    let mut tlvs: Vec<MessageSubmissionRequestTlvValue> =
-        Vec::with_capacity(options.tlvs.len() + 4);
-
-    // The operator's TLVs go in FIRST, so a `sar_*` or `message_payload` the
-    // segmenter owns cannot be shadowed by one typed by hand: `rusmpp` encodes
-    // the vector in order, and a message centre reading the last occurrence
-    // would then reassemble against a hand-typed reference.
-    tlvs.extend(options.tlvs.iter().map(CustomTlv::to_tlv));
-
-    if let Some(sar) = segment.sar() {
-        tlvs.push(MessageSubmissionRequestTlvValue::SarMsgRefNum(
-            sar.msg_ref_num,
-        ));
-        tlvs.push(MessageSubmissionRequestTlvValue::SarTotalSegments(
-            sar.total_segments,
-        ));
-        tlvs.push(MessageSubmissionRequestTlvValue::SarSegmentSeqnum(
-            sar.segment_seqnum,
-        ));
-    }
-
-    let short_message = match segment.body() {
-        SegmentBody::ShortMessage(octets) => {
-            OctetString::from_slice(octets).map_err(|_| SubmitBuildError::BodyTooLong)?
-        }
-        SegmentBody::MessagePayload(payload) => {
-            tlvs.push(MessageSubmissionRequestTlvValue::MessagePayload(
-                payload.clone(),
-            ));
-
-            // Spec §7.5: the two are exclusive — with the payload TLV present,
-            // `sm_length` is zero and `short_message` is empty.
-            OctetString::empty()
-        }
-    };
+    let common = CommonFields::build(options, segment)?;
 
     Ok(SubmitSm::new(
-        service_type(&options.service_type)?,
-        source_ton,
-        source_npi,
-        source_field,
+        common.service_type,
+        common.source_ton,
+        common.source_npi,
+        common.source_addr,
         options.destination.ton(),
         options.destination.npi(),
         options.destination.to_field()?,
-        segment.esm_class(),
+        common.esm_class,
         options.protocol_id,
         options.priority_flag,
-        smpp_time(&options.schedule_delivery_time, "schedule_delivery_time")?,
-        smpp_time(&options.validity_period, "validity_period")?,
+        common.schedule_delivery_time,
+        common.validity_period,
         options.registered_delivery,
         options.replace_if_present_flag,
-        segment.data_coding(),
+        common.data_coding,
         options.sm_default_msg_id,
-        short_message,
-        tlvs,
+        common.short_message,
+        common.tlvs,
     ))
+}
+
+/// Everything a `submit_sm` and a `submit_multi` carry **identically**.
+///
+/// Extracted so the two builders cannot drift: the only difference between the
+/// PDUs of spec §7.3 and §7.4 is how the recipient is named — one address
+/// against a list — and every other field, every validation and the TLV
+/// ordering are the same. Two independent transcriptions of that would
+/// eventually disagree on one octet, and the octet they disagreed on would be
+/// whichever one nobody wrote a test for.
+///
+/// Fields are `pub(crate)` rather than accessors: this is a bag of already
+/// built values with no invariant of its own, and it never leaves the crate.
+pub(crate) struct CommonFields {
+    pub(crate) service_type: ServiceType,
+    pub(crate) source_ton: Ton,
+    pub(crate) source_npi: Npi,
+    pub(crate) source_addr: COctetString<1, 21>,
+    pub(crate) esm_class: EsmClass,
+    pub(crate) schedule_delivery_time: EmptyOrFullCOctetString<17>,
+    pub(crate) validity_period: EmptyOrFullCOctetString<17>,
+    pub(crate) data_coding: DataCoding,
+    pub(crate) short_message: OctetString<0, 255>,
+    pub(crate) tlvs: Vec<MessageSubmissionRequestTlvValue>,
+}
+
+impl CommonFields {
+    /// Builds them, refusing every field the protocol cannot carry.
+    ///
+    /// # Errors
+    ///
+    /// One of [`SubmitBuildError`]; every variant names the offending field.
+    pub(crate) fn build(
+        options: &SubmitOptions,
+        segment: &Segment,
+    ) -> Result<Self, SubmitBuildError> {
+        if u8::from(options.priority_flag) > MAX_PRIORITY_FLAG {
+            return Err(SubmitBuildError::PriorityOutOfRange {
+                maximum: MAX_PRIORITY_FLAG,
+            });
+        }
+
+        let (source_addr, source_ton, source_npi) = match options.source.as_ref() {
+            Some(source) => (source.to_field()?, source.ton(), source.npi()),
+            // An empty `source_addr` is legal and means "message centre, use
+            // your own". TON and NPI go to `Unknown` with it: announcing
+            // `International` beside an empty address is a contradiction some
+            // SMSCs reject.
+            None => (empty_address()?, Ton::Unknown, Npi::Unknown),
+        };
+
+        let mut tlvs: Vec<MessageSubmissionRequestTlvValue> =
+            Vec::with_capacity(options.tlvs.len() + 4);
+
+        // The operator's TLVs go in FIRST, so a `sar_*` or `message_payload` the
+        // segmenter owns cannot be shadowed by one typed by hand: `rusmpp`
+        // encodes the vector in order, and a message centre reading the last
+        // occurrence would then reassemble against a hand-typed reference.
+        tlvs.extend(options.tlvs.iter().map(CustomTlv::to_tlv));
+
+        if let Some(sar) = segment.sar() {
+            tlvs.push(MessageSubmissionRequestTlvValue::SarMsgRefNum(
+                sar.msg_ref_num,
+            ));
+            tlvs.push(MessageSubmissionRequestTlvValue::SarTotalSegments(
+                sar.total_segments,
+            ));
+            tlvs.push(MessageSubmissionRequestTlvValue::SarSegmentSeqnum(
+                sar.segment_seqnum,
+            ));
+        }
+
+        let short_message = match segment.body() {
+            SegmentBody::ShortMessage(octets) => {
+                OctetString::from_slice(octets).map_err(|_| SubmitBuildError::BodyTooLong)?
+            }
+            SegmentBody::MessagePayload(payload) => {
+                tlvs.push(MessageSubmissionRequestTlvValue::MessagePayload(
+                    payload.clone(),
+                ));
+
+                // Spec §7.5: the two are exclusive — with the payload TLV
+                // present, `sm_length` is zero and `short_message` is empty.
+                OctetString::empty()
+            }
+        };
+
+        Ok(Self {
+            service_type: service_type(&options.service_type)?,
+            source_ton,
+            source_npi,
+            source_addr,
+            esm_class: segment.esm_class(),
+            schedule_delivery_time: smpp_time(
+                &options.schedule_delivery_time,
+                "schedule_delivery_time",
+            )?,
+            validity_period: smpp_time(&options.validity_period, "validity_period")?,
+            data_coding: segment.data_coding(),
+            short_message,
+            tlvs,
+        })
+    }
 }
 
 /// Builds the `service_type` field.

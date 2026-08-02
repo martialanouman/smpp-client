@@ -76,7 +76,14 @@
 //!   and a daily window, midnight crossings and time zones included (CA-010-10);
 //! * [`campaign::runner`] ties them together and counts what happened.
 //!
-//! `submit_multi` and its fallback (L-010-06) are not here yet.
+//! * [`submit_multi`] batches the recipients that share a body into one PDU and
+//!   falls back onto individual `submit_sm` when the message centre refuses the
+//!   operation, without losing a recipient (L-010-06, CA-010-08). Its header
+//!   states the consequence the milestone does **not** settle: one identifier
+//!   for N messages means a batched message's delivery receipt cannot be
+//!   correlated.
+//!
+//! The campaign runner does not batch yet — see [`submit_multi`]'s header.
 
 pub mod addressing;
 pub mod campaign;
@@ -90,6 +97,7 @@ pub mod retry;
 pub mod segmentation;
 pub mod sender;
 pub mod submit;
+pub mod submit_multi;
 pub mod template;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -115,6 +123,11 @@ pub use retry::{
     GiveUpReason, RetryBackoff, RetryDecision, RetryPolicy, RetryPolicyError, SendFailure,
 };
 pub use sender::{SegmentOutcome, SendObserver, SendReport, SendRequest, Sender};
+pub use submit_multi::{
+    build_submit_multi, match_refusals, read_multi_response, Batch, BatchRecipient, BatchReport,
+    BatchSender, FallbackReason, MultiResponse, MultiSupport, MultiSupportState, RecipientOutcome,
+    RecipientReport, Refusal, Via, MAX_DESTINATIONS,
+};
 pub use template::{MissingVariablePolicy, RenderError, Template, TemplateError, Variables};
 
 /// Crate version, as declared in its manifest.

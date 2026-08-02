@@ -73,10 +73,10 @@ pub use version::{SmppVersion, UnsupportedInterfaceVersion};
 
 pub use rusmpp::{
     values::{
-        Ansi41Specific, DataCoding, EsmClass, GsmFeatures, InterfaceVersion,
+        Ansi41Specific, DataCoding, DestAddress, EsmClass, GsmFeatures, InterfaceVersion,
         IntermediateNotification, MCDeliveryReceipt, MessagePayload, MessageState, MessageType,
         MessagingMode, Npi, PriorityFlag, RegisteredDelivery, ReplaceIfPresentFlag, ServiceType,
-        SmeOriginatedAcknowledgement, Ton, UserMessageReference,
+        SmeAddress, SmeOriginatedAcknowledgement, Ton, UnsuccessSme, UserMessageReference,
     },
     CommandId, CommandStatus,
 };

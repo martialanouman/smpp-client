@@ -9,6 +9,103 @@ majeur.
 
 ## [Non publié]
 
+### Ajouté — jalon 010, campagnes : `submit_multi` et repli automatique
+
+- **`submit_multi` pour les destinataires partageant le même contenu**
+  (`messaging::submit_multi`, L-010-06) : jusqu'à 254 destinataires par PDU.
+  Tous les champs autres que la liste de destinataires sont construits par
+  exactement le code que `build_submit_sm` utilise (`submit::CommonFields`), si
+  bien que les deux PDU ne peuvent pas diverger.
+- **Le plafond est refusé, jamais tronqué** : `number_of_dests` est un octet et
+  `rusmpp` le remplit avec `dest_address.len() as u8` — un lot de 256 annoncerait
+  **zéro** destinataire et disparaîtrait en silence. Une erreur typée
+  (`SubmitBuildError::TooManyDestinations`) plutôt qu'un `chunks` implicite.
+- **Un verdict par destinataire** : `submit_multi_resp` n'est ni un succès ni un
+  échec — il porte **un** `message_id` et la liste des destinataires refusés,
+  chacun avec son propre `error_status_code`. Chaque destinataire a sa ligne, son
+  état et son `command_status`, et le rapport de lot porte exactement une entrée
+  par destinataire du lot (CA-010-08, « sans perdre de destinataire »).
+- **Repli automatique, et sa règle écrite une fois** : seul un refus de
+  l'**opération** — `ESME_RINVCMDID` ou un `generic_nack` — déclenche le repli
+  sur des `submit_sm` individuels, et le support est mémorisé par session
+  (`MultiSupport`) pour ne pas réessayer 2 000 fois. Un `ESME_RTHROTTLED`
+  **ne** déclenche **pas** de repli : répondre « ralentis » par 254 PDU est
+  l'inverse de ce qui est demandé. Une soumission **sans réponse** non plus :
+  elle a pu être acceptée pour tout le monde, et un repli intra-exécution
+  livrerait 254 seconds exemplaires sans que la ligne passe par la reprise, là où
+  l'arbitrage d'ADR 0014 vit et où le doublon est **compté**.
+- **Le repli ne peut pas dupliquer** : il ne se déclenche que sur la deuxième
+  ligne du tableau d'ADR 0014 — « le SMSC a répondu en refusant, il ne l'a pas
+  prise » — et réémet par `Sender::resend`, le chemin qu'emprunte déjà un rejeu.
+- **Write-ahead par destinataire** : un lot de 254 est 254 lignes et 254
+  transitions `SENT`, toutes commitées **avant** que le `submit_multi` n'atteigne
+  la socket. Une ligne par lot rendrait 253 destinataires invisibles à la reprise
+  de la spec §10.5 — le défaut que la revue de `sender` a corrigé, réintroduit à
+  l'échelle 254.
+- **Toute ambiguïté annule les verdicts du lot** (`match_refusals`) : un refus
+  est attribué seulement s'il nomme **exactement un** destinataire, et un
+  destinataire n'est refusé **qu'une fois**. Quatre situations rendent `None` —
+  plus de refus que de destinataires, un refus ne nommant personne, un refus
+  nommant **deux** destinataires, **deux** refus nommant le même. Le contraire
+  est la sur-déclaration silencieuse : un SMSC qui cite les adresses refusées
+  sous une forme non reconnue ferait journaliser `ACCEPTED` un lot entier de
+  messages refusés, sans erreur ni ligne de log. Le troisième cas n'est pas
+  hypothétique : `Destination::parse_with` construit deux destinations
+  **légitimement distinctes** à partir des mêmes chiffres sous deux TON, et
+  `unsuccess_sme` ne les sépare pas.
+- **Ce que le lot laisse en base dépend de `last_attempt`** : `SENT` sans
+  `command_status` — la famille incertaine d'ADR 0014, que la reprise arbitre —
+  tant que l'appelant a des tentatives ; `FAILED`, terminal et jamais relu par
+  la reprise, sur la dernière, qui est le **défaut** de `Batch::new`. Même règle
+  que `Sender::final_transition`, énoncée avec sa condition.
+- **Un refus de la session avant la socket n'est pas une absence de réponse** :
+  `SubmitError::prevented_emission()` est une garantie du port, donc ces
+  destinataires n'ont rien reçu et ne sont pas des risques de doublon —
+  `RecipientOutcome::NotEmitted`, exclus de `BatchReport::at_risk_of_duplication`.
+  Les confondre multipliait par 254 le résidu qu'ADR 0014 dimensionne comme « au
+  plus la fenêtre d'émission ».
+- **Une ligne conflictuelle est une question, pas une réponse** : le lot
+  interroge `EmissionGuard` sur un conflit d'insertion, exactement comme le
+  moteur de campagne. Sans quoi une ligne `QUEUED` laissée par une exécution
+  interrompue en cours d'insertion excluait **définitivement** son destinataire.
+  `BatchReport::reemitted_unanswered` chiffre les lignes reprises en vol.
+- **Le verrou de support est lié à son `SessionId`** : ce qu'un bind a appris ne
+  dit rien d'un autre. Un verrou étranger ne désactive pas le groupage sur un
+  centre qui le supporte, il fait simplement envoyer un par un
+  (`FallbackReason::ForeignLatch`). Une réponse inattribuable verrouille la
+  session : le centre citera ses refus de la même façon au lot suivant.
+- **Test de propriété** (`tests/submit_multi_fallback.rs`) : sur des réponses
+  arbitraires du SMSC, aucun destinataire n'est perdu et aucun n'est déclaré
+  accepté sans que le SMSC l'ait pris — vérifié contre l'enregistrement du SMSC
+  factice. Le générateur est **recensé sur douze graines** et chaque plancher
+  vaut la moitié du minimum mesuré, donc 2× de marge : un plancher franchi par
+  chance n'est pas une garantie. Douze familles couvertes, dont l'abonné répété,
+  la ligne échouée en `QUEUED`, la ligne en vol et le refus pré-socket.
+
+### Limitation connue — accusés de livraison d'un envoi groupé
+
+- **Un message envoyé en `submit_multi` n'est pas corrélable avec son accusé de
+  livraison.** Le jalon 008 corrèle par `messages.smsc_message_id` ; un
+  `submit_multi_resp` rend **un** identifiant pour N messages, et SMPP n'offre
+  pas d'identifiant par destination.
+- L'identifiant partagé n'est **pas** écrit sur les lignes : la recherche
+  renverrait une ligne arbitraire, si bien que l'accusé du destinataire 200
+  créditerait le destinataire 1, et un `stat:UNDELIV` ferait échouer un message
+  qu'un autre destinataire a reçu — silencieusement. C'est la décision déjà
+  rendue par `Sender::aggregate` pour un message multi-segments partiellement
+  échoué. Les accusés d'un envoi groupé partent donc au journal des orphelins.
+- **Cet arbitrage n'est pas tranché ici.** Avec `registered_delivery = 1` (le
+  défaut), une campagne qui groupe échange le nombre de PDU contre le suivi de
+  livraison. Les trois issues — une table d'identifiants par message (migration),
+  une passe `query_sm`, ou ne pas grouper quand les accusés sont voulus —
+  coûtent toutes hors de ce fichier. À arbitrer par ADR.
+- **Le moteur de campagne ne groupe pas encore.** `CampaignRunner` émet toujours
+  un `submit_sm` à la fois : grouper suppose de regrouper les destinataires par
+  corps rendu (un modèle à variables n'a pas de corps commun) et de transformer
+  la boucle de rejeu par message en boucle par lot. Tout ce que décrit CA-010-08
+  est implémenté et testé ; ce qui n'est pas encore vrai, c'est qu'une campagne y
+  arrive.
+
 ### Ajouté — jalon 010, campagnes : exécution (alimentation, reprise, contrôle)
 
 - **Alimentation en flux avec back-pressure de bout en bout**
