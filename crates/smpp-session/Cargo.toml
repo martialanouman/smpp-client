@@ -66,6 +66,17 @@ test-support = ["tokio/io-util", "tokio/macros"]
 # say that.
 smpp-session = { path = ".", features = ["test-support"] }
 
+# `tests/pdu_log.rs` only. The library does not — and must not — depend on
+# this crate: `PduObserver` is declared here precisely so that the recorder
+# can sit above without this crate ever naming it (CLAUDE.md §3).
+#
+# The test does name it, and has to. What CA-008-09 asks about is the whole
+# chain — socket, observer, bounded queue, recorder, store — and a test that
+# stopped at a fake recorder would prove that a double behaves like a double.
+# An integration test is its own crate, compiled after the library and unable
+# to affect it, so this edge exists only under `cargo test`.
+logging-export = { path = "../logging-export" }
+
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
