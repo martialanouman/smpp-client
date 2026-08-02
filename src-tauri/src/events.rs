@@ -409,6 +409,23 @@ impl EventEmitter {
         }
     }
 
+    /// Emits `import:progress`.
+    ///
+    /// Unconditional, and deliberately so — the reasoning is on
+    /// [`ImportProgressEvent`]. The importer already paces these; a throttle
+    /// here would be free to drop the final one, the only event carrying
+    /// `done`, and leave a progress bar running under a finished report. That
+    /// is the defect `sessions:state` had.
+    pub(crate) fn emit_import_progress<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        payload: &ImportProgressEvent,
+    ) {
+        if let Err(error) = payload.emit(app) {
+            tracing::warn!(error = %error, "failed to emit import:progress");
+        }
+    }
+
     /// Emits `sessions:state`.
     ///
     /// Unconditional, deliberately. Nothing here decides whether the interface

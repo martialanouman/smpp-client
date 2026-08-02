@@ -111,6 +111,33 @@ pub(crate) enum ErrorCode {
     LogsInvalidFilter,
     /// The business journal or the PDU log could not be read.
     LogsUnavailable,
+
+    /// The file an import points at could not be read or made sense of.
+    ///
+    /// Covers a missing file, an unreadable sheet and a mapping that names a
+    /// column the file does not have. One code, because the operator's next
+    /// move is the same in all three: look at `details`, which names the file
+    /// position or the column, and fix the file or the mapping.
+    ContactsImportRejected,
+    /// An import is already running.
+    ///
+    /// Its own code rather than a storage one: nothing is broken, and the
+    /// interface has to say "wait or cancel", not "retry".
+    ContactsImportBusy,
+    /// The contact store could not be read or written.
+    ContactsStorage,
+    /// A contact or a list already exists under that identifier.
+    ContactsDuplicate,
+    /// The contact, list or import profile a call referred to does not exist.
+    ContactsNotFound,
+    /// A field of a contacts call could not be read.
+    ///
+    /// Distinct from [`Self::ContactsImportRejected`], which is about the
+    /// operator's **file**. This one is about the call itself — an identifier
+    /// that is not one, a cursor that does not parse — so it points at the
+    /// interface, not at something the operator can fix by editing a
+    /// spreadsheet.
+    ContactsInvalidInput,
 }
 
 /// Key of the `details` entry naming the offending field.
@@ -356,6 +383,76 @@ impl From<&smpp_session::SessionError> for ErrorDto {
             // guessing.
             _ => Self::bare(ErrorCode::SessionClosed, error),
         }
+    }
+}
+
+impl ErrorDto {
+    /// The refusal an import gets while another one is running.
+    ///
+    /// Not built from an error type: the condition is a state of the
+    /// application, not a failure of anything, and there is no source chain to
+    /// carry.
+    pub(crate) fn contacts_import_busy() -> Self {
+        Self {
+            code: ErrorCode::ContactsImportBusy,
+            message: String::from("an import is already running"),
+            details: None,
+        }
+    }
+
+    /// The contact store would not answer a read.
+    ///
+    /// Takes a `ToString` rather than a `&ContactStoreError` because the
+    /// contacts screen reads through `ContactDirectory`, a `persistence` port
+    /// that returns `PersistenceError`, while the writes go through
+    /// `contacts::ports`. One code either way — what the operator does about
+    /// it is the same, and the `#[source]` chain stays on this side.
+    pub(crate) fn contacts_storage(error: &impl ToString) -> Self {
+        Self::bare(ErrorCode::ContactsStorage, error)
+    }
+
+    /// A field of a contacts call could not be read.
+    ///
+    /// `details` names the field and never carries its value, for the reason
+    /// [`Self::logs_invalid_filter`] gives: the rule that no operator value
+    /// crosses the boundary is only worth anything without exceptions.
+    pub(crate) fn contacts_invalid_input(field: &'static str) -> Self {
+        Self::detailed(
+            ErrorCode::ContactsInvalidInput,
+            &"a contacts field could not be read",
+            [(FIELD, field.to_owned())],
+        )
+    }
+}
+
+impl From<&contacts::ContactsError> for ErrorDto {
+    /// Projects a read or mapping failure onto the IPC contract.
+    ///
+    /// `details` carries the position — the line, the sheet, the column name —
+    /// because an import that fails without saying **where** is unusable on a
+    /// file of fifty thousand rows, which is the fiche's own argument.
+    fn from(error: &contacts::ContactsError) -> Self {
+        Self::bare(ErrorCode::ContactsImportRejected, error)
+    }
+}
+
+impl From<&contacts::ports::ContactStoreError> for ErrorDto {
+    /// Projects a store failure onto the IPC contract.
+    ///
+    /// The three outcomes the port names stay distinct here, because the
+    /// operator's next move differs: a conflict means the record is already
+    /// there, a missing row means the list was deleted under them, and
+    /// unavailability means retry or check the disk.
+    fn from(error: &contacts::ports::ContactStoreError) -> Self {
+        use contacts::ports::ContactStoreError as Store;
+
+        let code = match error {
+            Store::Conflict => ErrorCode::ContactsDuplicate,
+            Store::NotFound => ErrorCode::ContactsNotFound,
+            _ => ErrorCode::ContactsStorage,
+        };
+
+        Self::bare(code, error)
     }
 }
 

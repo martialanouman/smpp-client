@@ -72,6 +72,10 @@ smpp-session = { path = "../crates/smpp-session" }
 # every rule it applies — validation, segmentation, the write-ahead order —
 # belongs to the crate, not to the command (CLAUDE.md §3).
 contacts = { path = "../crates/contacts" }
+
+# `CancellationToken` for the import: the same primitive the session
+# actors use, so cancelling an import reads like cancelling a session.
+tokio-util = { version = "0.7", default-features = false }
 messaging = { path = "../crates/messaging" }
 
 # The business journal and the PDU recorder of milestone 008. Same rule: the

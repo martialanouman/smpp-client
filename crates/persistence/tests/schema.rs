@@ -24,6 +24,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "contacts",
     // Milestone 008, CA-008-04: receipts that correlate to no message.
     "dlr_orphans",
+    "import_profiles",
     "messages",
     "pdu_log",
     "session_profiles",

@@ -9,6 +9,11 @@
 // do not apply: an `unwrap` in a test is intended, and denying it here would
 // mean an `#[allow]` on every function.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+// `#[tokio::test(flavor = "multi_thread")]` expands to `Runtime::block_on`, and
+// clippy attributes it to the test body. The ban exists for production code —
+// a nested `block_on` there is a deadlock — not for the macro that starts a
+// runtime in the first place.
+#![allow(clippy::disallowed_methods)]
 
 mod support;
 

@@ -28,6 +28,7 @@ use tauri::Manager as _;
 
 mod commands;
 mod config;
+mod contacts;
 mod error;
 mod events;
 mod ipc;
