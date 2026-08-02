@@ -3,6 +3,91 @@
     "name": "ShinobiSMPP",
     "tagline": "SMPP ESME client"
   },
+  "campaign": {
+    "intro": "Create a campaign, follow its progress and its throughput. Recipients are read as a stream from the contacts; the message-by-message detail is on the Logs screen.",
+    "name": "Campaign name",
+    "session": "Session",
+    "sessionPlaceholder": "Choose an open session",
+    "noBoundSession": "No session is open. Connect from the Sessions screen.",
+    "list": "Recipient list",
+    "allContacts": "Every contact",
+    "listHint": "Invalid numbers are not filtered out here: they are counted as rejected and stay visible in the totals.",
+    "template": "Message template",
+    "templateHint": "Variables such as prenom or ville are written between double braces and resolved per recipient from the contact attributes.",
+    "source": "Sender",
+    "sourceHint": "Leave empty to let the message centre choose one.",
+    "destTon": "Type of number (recipient)",
+    "destNpi": "Numbering plan (recipient)",
+    "encoding": "Encoding (DCS)",
+    "mode": "Concatenation",
+    "registeredDelivery": "Delivery receipt",
+    "advanced": "Advanced options, replay and planning",
+    "create": "Create the campaign",
+    "creating": "Creating…",
+    "listHeading": "Campaigns",
+    "empty": "No campaign yet.",
+    "progress": "Progress",
+    "progressSpoken": "{{processed}} recipients dealt with out of {{total}}",
+    "throughput": "Session throughput (msg/s)",
+    "detailHint": "The message-by-message detail is on the Logs screen, filtered on the campaign.",
+    "interrupted": "This campaign was interrupted (the application stopped, or the machine did). Resume it: messages already accepted will not be sent again.",
+    "duplicateRisk": "{{count}} message(s) left in flight by a previous run were sent again; their recipients may receive them twice.",
+    "notJournalled": "{{count}} message(s) were sent without their outcome being recorded.",
+    "start": "Start",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "status": {
+      "CREATED": "Created",
+      "VALIDATED": "Validated",
+      "RUNNING": "Running",
+      "PAUSED": "Paused",
+      "COMPLETED": "Completed",
+      "CANCELLED": "Cancelled",
+      "FAILED": "Failed"
+    },
+    "counters": {
+      "accepted": "Accepted",
+      "failed": "Failed",
+      "rejected": "Rejected",
+      "skipped": "Skipped",
+      "cancelled": "Cancelled",
+      "retried": "Replays",
+      "delivered": "Delivered"
+    },
+    "missing": {
+      "legend": "Missing variable",
+      "substitute": "Replace with a default value",
+      "value": "Replacement value",
+      "rejectHint": "By default, a recipient a variable is missing for is dropped: no message holding an unresolved variable is ever sent."
+    },
+    "unanswered": {
+      "abandon": "Do not re-send a message left unanswered by an abrupt stop",
+      "hint": "By default, a message that was sent and whose answer was not recorded is sent again on resume: nothing is lost, but a recipient may receive it twice. The other option trades that risk for a silent non-delivery."
+    },
+    "retry": {
+      "legend": "Replay policy",
+      "maxAttempts": "Attempts",
+      "initialDelay": "Initial delay (s)",
+      "maxDelay": "Maximum delay (s)",
+      "backoff": "Delay growth",
+      "hint": "An ESME_RTHROTTLED, an ESME_RMSGQFUL or a missing response are replayed; an ESME_RINVDSTADR never is."
+    },
+    "backoff": {
+      "fixed": "Fixed",
+      "exponential": "Exponential"
+    },
+    "schedule": {
+      "legend": "Planning",
+      "startAt": "Deferred start",
+      "startAtHint": "Local time of this machine. Leave empty to start at once.",
+      "windowed": "Restrict sending to a daily window",
+      "open": "Opens",
+      "close": "Closes",
+      "offset": "UTC offset (minutes)",
+      "hint": "The window may cross midnight (22:00-06:00). The offset is fixed: a zone observing daylight saving shifts by an hour twice a year."
+    }
+  },
   "contacts": {
     "import": {
       "cancel": "Cancel",
@@ -112,6 +197,13 @@
     "title": "Screen to come"
   },
   "error": {
+    "CAMPAIGN_BUSY": "This campaign is already sending.",
+    "CAMPAIGN_INVALID_INPUT": "A campaign field could not be read.",
+    "CAMPAIGN_INVALID_TRANSITION": "The campaign lifecycle does not allow this action from its current state.",
+    "CAMPAIGN_NOT_FOUND": "No such campaign.",
+    "CAMPAIGN_NO_RECIPIENTS": "The contact selection holds no recipient.",
+    "CAMPAIGN_SESSION_NOT_BOUND": "The session this campaign sends on is not open.",
+    "CAMPAIGN_STORAGE": "The campaign store did not answer.",
     "CONFIG_INVALID_LANGUAGE": "Unsupported language.",
     "CONFIG_INVALID_LOG_LEVEL": "Unknown log level.",
     "CONFIG_INVALID_RETENTION": "Retention is outside the accepted range.",
@@ -374,6 +466,11 @@
       "SENT": "Sent"
     },
     "submit": "Send",
+    "tabs": {
+      "label": "Sending mode",
+      "simple": "Single message",
+      "campaign": "Campaign"
+    },
     "text": "Message",
     "timeHint": "Empty, or exactly sixteen characters.",
     "tlv": {

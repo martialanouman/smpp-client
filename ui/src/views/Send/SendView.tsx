@@ -1,21 +1,38 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { onMessageUpdate } from "../../ipc";
 import { usePreferences } from "../../store/preferences";
 import { useSend } from "../../store/send";
 import { useSessions } from "../../store/sessions";
+import { CampaignView } from "./Campaign/CampaignView";
 import { SendResult } from "./Simple/SendResult";
 import { SimpleForm } from "./Simple/SimpleForm";
+
+/** The two ways of sending (spec §10.1 and §10.2). */
+const TABS = ["simple", "campaign"] as const;
+
+/** One of them. */
+type Tab = (typeof TABS)[number];
 
 /**
  * The Send screen (spec §21).
  *
- * One tab at this milestone. Bulk, templates and scheduling arrive at
- * milestone 010 and the tab bar with them; a bar with a single tab today would
- * be furniture.
+ * Two tabs since milestone 010: the unit form of §10.1 and the campaigns of
+ * §10.2. The bar arrived with the second tab rather than before it — a bar with
+ * one tab is furniture.
  *
- * Two effects, and neither computes anything:
+ * # Why the campaign tab is unmounted rather than hidden
+ *
+ * Its effects subscribe to `campaign:progress` and load the campaign list, and
+ * an operator writing a unit message has no use for either. Keeping it mounted
+ * behind a `hidden` attribute would hold the subscription — four events a
+ * second during a campaign — for a screen nobody is looking at.
+ *
+ * The cost is stated: switching back re-reads the list. That is one command,
+ * and the live counters resume on the next reading, which is 250 ms away.
+ *
+ * Two effects below, and neither computes anything:
  *
  * * the counter is recomputed by the **backend** whenever the text, the
  *   encoding or the mode changes — CA-006-09 wants the counter and the
@@ -35,6 +52,7 @@ const PREVIEW_DEBOUNCE_MS = 60;
 
 export function SendView() {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<Tab>("simple");
 
   const profiles = useSessions((state) => state.profiles);
   const statuses = useSessions((state) => state.statuses);
@@ -110,21 +128,50 @@ export function SendView() {
 
   return (
     <>
-      <p className="mb-6 max-w-3xl text-sm opacity-70">{t("send.intro")}</p>
+      <div role="tablist" aria-label={t("send.tabs.label")} className="mb-6 flex gap-1">
+        {TABS.map((entry) => (
+          <button
+            key={entry}
+            type="button"
+            role="tab"
+            id={`send-tab-${entry}`}
+            aria-selected={tab === entry}
+            aria-controls={`send-panel-${entry}`}
+            onClick={() => setTab(entry)}
+            className={`rounded-md px-3 py-1.5 text-sm ${
+              tab === entry
+                ? "bg-[var(--shinobi-hover)] font-medium"
+                : "opacity-70 hover:opacity-100"
+            }`}
+          >
+            {t(`send.tabs.${entry}`)}
+          </button>
+        ))}
+      </div>
 
-      <SimpleForm
-        profiles={profiles}
-        statuses={statuses}
-        sessionId={sessionId}
-        form={form}
-        preview={preview}
-        sending={sending}
-        onSession={chooseSession}
-        onChange={update}
-        onSubmit={() => void send()}
-      />
+      {tab === "simple" ? (
+        <div role="tabpanel" id="send-panel-simple" aria-labelledby="send-tab-simple">
+          <p className="mb-6 max-w-3xl text-sm opacity-70">{t("send.intro")}</p>
 
-      <SendResult result={result} progress={progress} />
+          <SimpleForm
+            profiles={profiles}
+            statuses={statuses}
+            sessionId={sessionId}
+            form={form}
+            preview={preview}
+            sending={sending}
+            onSession={chooseSession}
+            onChange={update}
+            onSubmit={() => void send()}
+          />
+
+          <SendResult result={result} progress={progress} />
+        </div>
+      ) : (
+        <div role="tabpanel" id="send-panel-campaign" aria-labelledby="send-tab-campaign">
+          <CampaignView />
+        </div>
+      )}
     </>
   );
 }

@@ -21,6 +21,9 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { commands, events } from "./generated/bindings";
 import type {
   AppConfig,
+  CampaignCreateInput,
+  CampaignPageDto,
+  CampaignProgressEvent,
   ConfigSetInput,
   ContactListDto,
   ContactPageDto,
@@ -52,6 +55,11 @@ export type {
   AppConfig,
   AttributeColumnInput,
   BindTypeDto,
+  CampaignCreateInput,
+  CampaignPageDto,
+  CampaignProgressEvent,
+  CampaignRowDto,
+  CampaignSendConfigInput,
   ColumnMappingInput,
   ColumnRefInput,
   CombinationInput,
@@ -64,10 +72,12 @@ export type {
   ErrorDto,
   ErrorNotify,
   Gsm7CharsetDto,
+  DailyWindowInput,
   DeduplicationInput,
   Gsm7PackingDto,
   HeaderModeInput,
   IdMatchingDto,
+  MissingVariableInput,
   ImportOptionsInput,
   ImportProfileDto,
   ImportProgressEvent,
@@ -95,6 +105,9 @@ export type {
   RegisteredDeliveryDto,
   RejectedRowDto,
   RetentionDays,
+  RetryBackoffInput,
+  RetryInput,
+  ScheduleInput,
   SelectionInput,
   SegmentOutcomeDto,
   SegmentationModeDto,
@@ -105,6 +118,7 @@ export type {
   Theme,
   TlvDto,
   TonDto,
+  UnansweredInput,
 } from "./generated/bindings";
 
 /** Why a call produced no value. */
@@ -457,6 +471,97 @@ export function onImportProgress(
   handler: (payload: ImportProgressEvent) => void,
 ): Promise<UnlistenFn> {
   return events.importProgress.listen((event) => handler(event.payload));
+}
+
+/**
+ * Creates a campaign (EF-MSG-02, spec §10.2).
+ *
+ * Validates the whole configuration, counts the recipients the selection picks
+ * out and stores the campaign as `VALIDATED`. Resolves to its identifier.
+ *
+ * Nothing is sent: starting is {@link campaignStart}, and it is a separate
+ * click on purpose — a form that both configured and launched a send to two
+ * hundred thousand people would have no step at which to change one's mind.
+ */
+export function campaignCreate(input: CampaignCreateInput): Promise<IpcOutcome<string>> {
+  return call(() => commands.campaignCreate(input));
+}
+
+/**
+ * One page of campaigns, oldest first.
+ *
+ * `cursor` is opaque — hand back whatever the previous page returned in `next`,
+ * and `null` to start over.
+ */
+export function campaignList(
+  cursor: string | null,
+  limit: number | null,
+): Promise<IpcOutcome<CampaignPageDto>> {
+  return call(() => commands.campaignList(cursor, limit));
+}
+
+/**
+ * Starts a campaign (spec §10.3).
+ *
+ * Resolves as soon as the campaign is **running**, not when it has finished: a
+ * campaign of half a million recipients runs for hours. Follow it with
+ * {@link onCampaignProgress}, and read the per-message detail on the Journaux
+ * screen.
+ */
+export function campaignStart(campaignId: string): Promise<IpcOutcome<null>> {
+  return call(() => commands.campaignStart(campaignId));
+}
+
+/**
+ * Suspends the feeding of a running campaign (CA-010-03).
+ *
+ * The messages already in the send window finish normally and the session stays
+ * bound; only the feeding stops.
+ */
+export function campaignPause(campaignId: string): Promise<IpcOutcome<null>> {
+  return call(() => commands.campaignPause(campaignId));
+}
+
+/**
+ * Resumes a campaign (CA-010-03).
+ *
+ * One command for two situations the interface does not have to tell apart: a
+ * campaign paused a moment ago carries on where it was, and a campaign a crash
+ * or a restart left behind is run again in resuming mode — which asks the
+ * journal about every recipient before emitting, so nothing already accepted
+ * goes out twice (CA-010-05).
+ */
+export function campaignResume(campaignId: string): Promise<IpcOutcome<null>> {
+  return call(() => commands.campaignResume(campaignId));
+}
+
+/** Stops a campaign for good (CA-010-09). */
+export function campaignCancel(campaignId: string): Promise<IpcOutcome<null>> {
+  return call(() => commands.campaignCancel(campaignId));
+}
+
+/**
+ * Subscribes to `campaign:progress` (CA-010-11).
+ *
+ * The backend samples the campaign's counters at a fixed 4 Hz whatever the
+ * throughput — see `CAMPAIGN_PROGRESS_INTERVAL` in `events.rs` — so a campaign
+ * at ten thousand messages a second produces the same four events a second as
+ * one at ten. Each payload is a **reading**, not a delta, so a missed one costs
+ * a frame and nothing else.
+ *
+ * The **last** event of a run carries `done` and the terminal status. It is
+ * emitted outside the paced loop and is never throttled, which is what stops a
+ * finished campaign leaving a progress bar running for ever.
+ *
+ * The payload carries no throughput: the rate comes from the `metrics:tick` of
+ * the session it names — see {@link onMetricsTick}. One measurement, one place.
+ *
+ * Returns the unsubscribe function. Call it on unmount.
+ */
+export function onCampaignProgress(
+  handler: (payload: CampaignProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return events.campaignProgress.listen((event) => handler(event.payload));
 }
 
 /**
