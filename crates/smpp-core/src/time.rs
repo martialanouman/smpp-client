@@ -68,6 +68,25 @@ impl Timestamp {
         ))
     }
 
+    /// Wraps an instant a caller computed, truncated to the second and
+    /// normalised to UTC.
+    ///
+    /// The counterpart of [`Self::as_offset_date_time`], and the only other way
+    /// to build a value of this type. Milestone 010 needs it: the daily send
+    /// window of CA-010-10 answers "when does the window next open", which is
+    /// date arithmetic on an [`OffsetDateTime`], and the answer has to come back
+    /// as the instant type the rest of the application speaks.
+    ///
+    /// Truncating here rather than at the call sites is what keeps the promise
+    /// [`Self::now`] makes: no value of this type carries a sub-second
+    /// component, so a round trip through the database never changes one.
+    #[must_use]
+    pub fn from_offset_date_time(instant: OffsetDateTime) -> Self {
+        let utc = instant.to_offset(time::UtcOffset::UTC);
+
+        Self(utc.replace_nanosecond(0).unwrap_or(utc))
+    }
+
     /// Parses the text form held in the database.
     ///
     /// # Errors
@@ -157,6 +176,36 @@ mod tests {
         assert_eq!(
             Timestamp::parse(&now.to_storage()).expect("own output parses"),
             now
+        );
+    }
+
+    /// Milestone 010 computes on instants — "the next time the daily send
+    /// window opens" — and has to hand the answer back as a [`Timestamp`].
+    #[test]
+    fn a_computed_instant_becomes_a_timestamp() {
+        let instant = Timestamp::parse("2026-07-26T12:34:56Z").expect("valid RFC 3339");
+        let later = *instant.as_offset_date_time() + time::Duration::hours(3);
+
+        assert_eq!(
+            Timestamp::from_offset_date_time(later).to_storage(),
+            "2026-07-26T15:34:56Z"
+        );
+    }
+
+    /// The stored form carries no sub-second component, so a value that kept
+    /// one in memory would change on a round trip through the database — the
+    /// same reason [`Timestamp::now`] truncates.
+    #[test]
+    fn a_computed_instant_is_truncated_to_the_second_and_normalised_to_utc() {
+        let instant = time::OffsetDateTime::parse(
+            "2026-07-26T14:34:56.789+02:00",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("valid RFC 3339");
+
+        assert_eq!(
+            Timestamp::from_offset_date_time(instant).to_storage(),
+            "2026-07-26T12:34:56Z"
         );
     }
 
