@@ -190,6 +190,16 @@ pub struct ImportReport {
     /// Rows whose number repeated an earlier one.
     pub duplicates: u64,
     /// Rows that held nothing, counted apart from [`Self::total`].
+    ///
+    /// **Counts the blank rows the reader can see**, which is not always every
+    /// blank line of the file. The `csv` crate consumes a wholly empty line
+    /// before yielding the next record and offers no way to keep it, so a CSV
+    /// contributes only its rows of bare separators (`;;`). A workbook, where
+    /// `calamine` yields every row, contributes all of them.
+    ///
+    /// The figure is therefore a lower bound on a CSV. What the criterion
+    /// actually turns on holds either way: a blank row is never counted as a
+    /// rejection, and never inflates [`Self::total`].
     pub blank: u64,
     /// Contacts the plan reported as mobile.
     pub mobiles: u64,

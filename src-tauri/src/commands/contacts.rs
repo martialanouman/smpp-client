@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt as _;
 
 use contacts::import::{
     AttributeColumn, ColumnMapping, ColumnRef, Deduplication, HeaderMode, ImportOptions,
@@ -604,6 +605,60 @@ fn parse_cursor(raw: Option<&str>) -> Result<Cursor, ErrorDto> {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// Opens the native picker and returns the file the operator chose.
+///
+/// # Why the picker lives in the backend
+///
+/// It could run in the WebView — the plugin has a JavaScript side — and that
+/// is what the first cut did. But then `contacts_import` has to take whatever
+/// path it is handed, and CLAUDE.md §3 says the WebView is untrusted: injected
+/// script could pass `~/.ssh/id_rsa` and read the file back out of the
+/// rejected rows, which carry the offending value verbatim. Opening the picker
+/// here is what lets the backend **remember** which files the operator pointed
+/// at, so `contacts_import` can refuse everything else. The window is granted
+/// no `dialog:` permission at all as a result.
+///
+/// Returns `None` when the operator dismissed the picker, which is an outcome
+/// and not a failure.
+///
+/// # Errors
+///
+/// [`ErrorDto`] with `CONTACTS_INVALID_INPUT` if the picked entry is not a
+/// path this platform can open — a content URI on a mobile target.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn contacts_pick_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, ErrorDto> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("contacts", &["csv", "txt", "xlsx"])
+        .pick_file(move |chosen| {
+            // The receiver is gone only if the command was cancelled; there is
+            // nothing to report to and nothing to clean up.
+            drop(sender.send(chosen));
+        });
+
+    let Ok(Some(chosen)) = receiver.await else {
+        // A dropped sender means the dialog went away without answering, which
+        // the operator cannot tell apart from dismissing it.
+        return Ok(None);
+    };
+
+    let path = chosen
+        .into_path()
+        .map_err(|_| ErrorDto::contacts_invalid_input("path"))?;
+
+    let rendered = path.to_string_lossy().into_owned();
+
+    state.contacts().remember_picked(path).await;
+
+    Ok(Some(rendered))
+}
+
 /// Reads a file and writes the contacts it holds.
 ///
 /// Progress arrives on `import:progress` (CA-009-11); this returns the final
@@ -611,7 +666,8 @@ fn parse_cursor(raw: Option<&str>) -> Result<Cursor, ErrorDto> {
 ///
 /// # Errors
 ///
-/// [`ErrorDto`] with `CONTACTS_IMPORT_BUSY` if one is already running,
+/// [`ErrorDto`] with `CONTACTS_FILE_NOT_PICKED` if the file did not come from
+/// [`contacts_pick_file`], `CONTACTS_IMPORT_BUSY` if one is already running,
 /// `CONTACTS_INVALID_INPUT` if an option will not parse,
 /// `CONTACTS_IMPORT_REJECTED` if the file cannot be read or mapped, or a
 /// storage code if the contacts cannot be written.

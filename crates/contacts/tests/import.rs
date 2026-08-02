@@ -19,6 +19,7 @@ mod support;
 
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use contacts::import::{
     ColumnMapping, ColumnRef, Deduplication, HeaderMode, ImportOptions, ImportProgress,
@@ -178,7 +179,7 @@ async fn blank_lines_sit_outside_the_total() {
     let path = write(
         &directory,
         "trous.csv",
-        b"telephone\n0700000000\n\n\n0700000001\n\n",
+        b"telephone;autre\n0700000000;x\n\n;\n0700000001;y\n;\n",
     );
     let store = MemoryStore::new();
 
@@ -191,6 +192,22 @@ async fn blank_lines_sit_outside_the_total() {
 
     assert_eq!((report.total, report.imported, report.rejected), (2, 2, 0));
     assert!(report.is_consistent());
+
+    // Counted, and counted APART. Asserting only the total would pass whether
+    // blank rows were tallied or silently swallowed by the reader — and the
+    // report shows the figure to the operator, so a permanent zero is a lie
+    // the screen tells about their file.
+    //
+    // The two rows counted here are the `;` ones: a row of bare separators is
+    // a record the `csv` crate hands over with every field empty. The wholly
+    // empty line between them is consumed by the crate itself before any code
+    // here sees it — there is no option to keep it — so `blank` counts the
+    // blank rows the reader is *able* to see, which is what
+    // `ImportReport::blank` documents.
+    assert_eq!(
+        report.blank, 2,
+        "the rows of bare separators are counted apart"
+    );
 }
 
 /// CA-009-05 and CA-009-08 together, on one file: every rejection names its
@@ -517,4 +534,71 @@ async fn an_import_enrols_its_contacts_in_the_list_it_was_given() {
     let memberships = store.memberships().await;
     assert_eq!(memberships.len(), 2);
     assert!(memberships.iter().all(|(held, _)| *held == list));
+}
+
+/// CA-009-10, the half the other cancellation test does not reach: an import
+/// cancelled **while it is running**, with the queue between the reader and the
+/// writer full.
+///
+/// # Why this shape, and not a plain `cancel()` mid-flight
+///
+/// The reader runs on `spawn_blocking` and offers rows with `blocking_send`,
+/// which does not watch the cancellation token — it returns only when the
+/// receiver is dropped or closed. So the failure needs three things at once: a
+/// file longer than the queue, a writer slow enough that the queue actually
+/// fills, and a cancellation while the reader is parked in `blocking_send`.
+/// A fast double never reaches that state, which is why the store is slowed
+/// down here.
+///
+/// Without `receiver.close()` before the reader is joined, this test does not
+/// fail — it **hangs**, which is exactly what the operator sees: the progress
+/// bar frozen, the cancel button doing nothing, and the import never returning.
+/// The timeout is what turns that hang into a red test.
+#[tokio::test]
+async fn a_cancellation_mid_import_returns_rather_than_hanging() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut file = String::from("telephone\n");
+
+    // Comfortably more than ROW_QUEUE_CAPACITY, so the reader is certain to be
+    // parked in `blocking_send` when the cancellation lands.
+    for index in 0..5_000 {
+        file.push_str(&format!("+2250700{index:06}\n"));
+    }
+
+    let path = write(&directory, "long.csv", file.as_bytes());
+    let store = MemoryStore::slow(Duration::from_millis(300));
+    let cancel = CancellationToken::new();
+
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        trigger.cancel();
+    });
+
+    let report = tokio::time::timeout(
+        Duration::from_secs(10),
+        Importer::new(store.clone(), FrozenClock::new())
+            .with_batch_size(100)
+            .run(
+                ImportSource::Csv { path },
+                ivorian(ColumnMapping::by_name("telephone")),
+                None,
+                cancel,
+            ),
+    )
+    .await
+    .expect("a cancelled import must return, not hang")
+    .unwrap();
+
+    assert!(report.cancelled, "the report says it was cancelled");
+    assert!(report.is_consistent(), "the counts still add up");
+    assert_eq!(
+        u64::try_from(store.contacts().await.len()).unwrap(),
+        report.imported,
+        "the store holds exactly what the report claims"
+    );
+    assert!(
+        report.imported < 5_000,
+        "the cancellation actually cut the import short"
+    );
 }

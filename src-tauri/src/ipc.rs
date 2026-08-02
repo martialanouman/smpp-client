@@ -38,6 +38,7 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::logs::logs_orphans,
             crate::commands::logs::logs_pdus,
             crate::commands::logs::logs_set_pdu_logging,
+            crate::commands::contacts::contacts_pick_file,
             crate::commands::contacts::contacts_import,
             crate::commands::contacts::contacts_cancel_import,
             crate::commands::contacts::contacts_page,

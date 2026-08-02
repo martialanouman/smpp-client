@@ -17,7 +17,6 @@
       },
       "deduplication": "Duplicates",
       "defaultRegion": "Default country",
-      "fileFilter": "Contact files",
       "headerMode": {
         "absent": "Every row is data",
         "detect": "Detect automatically",
@@ -111,6 +110,7 @@
     "CONFIG_UNREADABLE": "Preferences could not be read.",
     "CONFIG_UNWRITABLE": "Preferences could not be saved.",
     "CONTACTS_DUPLICATE": "A contact or a list already exists under that identifier.",
+    "CONTACTS_FILE_NOT_PICKED": "The file was not chosen in the native picker. Pick it again.",
     "CONTACTS_IMPORT_BUSY": "An import is already running. Wait for it to finish, or cancel it.",
     "CONTACTS_IMPORT_REJECTED": "The file could not be read or matched to the columns given.",
     "CONTACTS_INVALID_INPUT": "A field of the call could not be read.",

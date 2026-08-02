@@ -130,6 +130,12 @@ pub(crate) enum ErrorCode {
     ContactsDuplicate,
     /// The contact, list or import profile a call referred to does not exist.
     ContactsNotFound,
+    /// The file an import names was not chosen in the native picker.
+    ///
+    /// Its own code because it is not a fault of the file: it is the
+    /// application refusing to open something the operator did not point at.
+    /// The interface tells them to pick the file again.
+    ContactsFileNotPicked,
     /// A field of a contacts call could not be read.
     ///
     /// Distinct from [`Self::ContactsImportRejected`], which is about the
@@ -396,6 +402,19 @@ impl ErrorDto {
         Self {
             code: ErrorCode::ContactsImportBusy,
             message: String::from("an import is already running"),
+            details: None,
+        }
+    }
+
+    /// An import named a file the picker never handed back.
+    ///
+    /// Carries no path — naming the file the caller asked for would report
+    /// back what it already knows, and CA-001-06 keeps paths off the bridge
+    /// either way.
+    pub(crate) fn contacts_file_not_picked() -> Self {
+        Self {
+            code: ErrorCode::ContactsFileNotPicked,
+            message: String::from("the file was not chosen through the native picker"),
             details: None,
         }
     }

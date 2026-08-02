@@ -17,7 +17,6 @@
  */
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 
 import { commands, events } from "./generated/bindings";
 import type {
@@ -453,21 +452,13 @@ export function onImportProgress(
 /**
  * Opens the native file picker and returns the chosen path, or `null`.
  *
- * A wrapper and not a direct call from the component, for the reason every
- * other function here is one: `@tauri-apps/plugin-dialog` is a Tauri surface,
- * and CLAUDE.md §4 keeps those behind this module. It is also the one place
- * that knows which extensions an import accepts.
+ * The picker runs in the **backend**, not here: it is what lets the backend
+ * remember which files the operator pointed at, so `contacts_import` can
+ * refuse every other path. The WebView holds no filesystem or dialog
+ * permission at all as a result.
  *
- * There is no {@link IpcOutcome} here because there is no backend call and no
- * {@link ErrorDto}: a cancelled picker is `null`, which is an outcome and not
- * a failure.
+ * `null` means the operator dismissed the picker — an outcome, not a failure.
  */
-export async function pickContactFile(filterName: string): Promise<string | null> {
-  const chosen = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: filterName, extensions: ["csv", "txt", "xlsx"] }],
-  });
-
-  return typeof chosen === "string" ? chosen : null;
+export function pickContactFile(): Promise<IpcOutcome<string | null>> {
+  return call(() => commands.contactsPickFile());
 }

@@ -196,6 +196,29 @@ export const commands = {
 	 */
 	logsSetPduLogging: (enabled: boolean) => typedError<boolean, ErrorDto>(__TAURI_INVOKE("logs_set_pdu_logging", { enabled })),
 	/**
+	 *  Opens the native picker and returns the file the operator chose.
+	 * 
+	 *  # Why the picker lives in the backend
+	 * 
+	 *  It could run in the WebView — the plugin has a JavaScript side — and that
+	 *  is what the first cut did. But then `contacts_import` has to take whatever
+	 *  path it is handed, and CLAUDE.md §3 says the WebView is untrusted: injected
+	 *  script could pass `~/.ssh/id_rsa` and read the file back out of the
+	 *  rejected rows, which carry the offending value verbatim. Opening the picker
+	 *  here is what lets the backend **remember** which files the operator pointed
+	 *  at, so `contacts_import` can refuse everything else. The window is granted
+	 *  no `dialog:` permission at all as a result.
+	 * 
+	 *  Returns `None` when the operator dismissed the picker, which is an outcome
+	 *  and not a failure.
+	 * 
+	 *  # Errors
+	 * 
+	 *  [`ErrorDto`] with `CONTACTS_INVALID_INPUT` if the picked entry is not a
+	 *  path this platform can open — a content URI on a mobile target.
+	 */
+	contactsPickFile: () => typedError<string | null, ErrorDto>(__TAURI_INVOKE("contacts_pick_file")),
+	/**
 	 *  Reads a file and writes the contacts it holds.
 	 * 
 	 *  Progress arrives on `import:progress` (CA-009-11); this returns the final
@@ -203,7 +226,8 @@ export const commands = {
 	 * 
 	 *  # Errors
 	 * 
-	 *  [`ErrorDto`] with `CONTACTS_IMPORT_BUSY` if one is already running,
+	 *  [`ErrorDto`] with `CONTACTS_FILE_NOT_PICKED` if the file did not come from
+	 *  [`contacts_pick_file`], `CONTACTS_IMPORT_BUSY` if one is already running,
 	 *  `CONTACTS_INVALID_INPUT` if an option will not parse,
 	 *  `CONTACTS_IMPORT_REJECTED` if the file cannot be read or mapped, or a
 	 *  storage code if the contacts cannot be written.
@@ -555,6 +579,14 @@ export type ErrorCode =
 "CONTACTS_DUPLICATE" | 
 /**  The contact, list or import profile a call referred to does not exist. */
 "CONTACTS_NOT_FOUND" | 
+/**
+ *  The file an import names was not chosen in the native picker.
+ * 
+ *  Its own code because it is not a fault of the file: it is the
+ *  application refusing to open something the operator did not point at.
+ *  The interface tells them to pick the file again.
+ */
+"CONTACTS_FILE_NOT_PICKED" | 
 /**
  *  A field of a contacts call could not be read.
  * 

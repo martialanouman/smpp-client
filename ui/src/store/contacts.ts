@@ -57,6 +57,15 @@ interface ContactsState {
   readonly loading: boolean;
   /** Whether the last page request reached the end. */
   readonly complete: boolean;
+  /**
+   * Which query the rows belong to.
+   *
+   * Bumped by every `reload`. A response whose generation is no longer the
+   * current one is **discarded**: without it, an operator typing "ab" can end
+   * up looking at the results of "a", because the two requests race and the
+   * slower one wins by arriving last.
+   */
+  readonly generation: number;
 
   /** Which lists the table spans. */
   readonly selection: SelectionInput;
@@ -110,6 +119,7 @@ export const useContacts = create<ContactsState>((set, get) => ({
   cursor: null,
   loading: false,
   complete: false,
+  generation: 0,
   selection: EVERYTHING,
   search: "",
   lists: [],
@@ -119,12 +129,19 @@ export const useContacts = create<ContactsState>((set, get) => ({
   report: null,
 
   reload: async () => {
-    if (get().loading) return;
+    // No `loading` guard here, deliberately. `reload` REPLACES, so a second
+    // one is not a duplicate of the first — it supersedes it, and refusing to
+    // issue it would leave the screen showing the previous query's rows with
+    // no request in flight to correct them. The guard belongs on `loadMore`,
+    // which appends. Staleness is handled by the generation instead.
+    const generation = get().generation + 1;
 
-    set({ loading: true });
+    set({ loading: true, generation });
 
     const { selection, search } = get();
     const outcome = await contactsPage(selection, search || null, null, PAGE);
+
+    if (get().generation !== generation) return;
 
     if (outcome.ok) {
       set({
@@ -150,7 +167,12 @@ export const useContacts = create<ContactsState>((set, get) => ({
 
     set({ loading: true });
 
+    const generation = get().generation;
     const outcome = await contactsPage(selection, search || null, cursor, PAGE);
+
+    // A page that started under the previous query must not be appended to the
+    // rows of the new one — that is how a table ends up mixing two selections.
+    if (get().generation !== generation) return;
 
     if (outcome.ok) {
       set((state) => ({

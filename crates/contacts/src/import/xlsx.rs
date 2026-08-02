@@ -183,10 +183,9 @@ impl XlsxRows {
                 }
             }
 
-            if unreadable.is_empty() && values.iter().all(|value| value.trim().is_empty()) {
-                continue;
-            }
-
+            // Blank rows are kept, for the reason `CsvRows` keeps them: the
+            // writer counts them apart from the total, and a reader that
+            // dropped them would hold `ImportReport::blank` at zero.
             rows.push(RawRow {
                 line,
                 values,

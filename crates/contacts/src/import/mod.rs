@@ -101,6 +101,20 @@ pub enum ImportSource {
 }
 
 impl ImportSource {
+    /// The file the source reads.
+    ///
+    /// Defined here rather than matched at the call site because the enum is
+    /// `#[non_exhaustive]`: a caller outside the crate needs a wildcard arm,
+    /// and a wildcard arm has no path to return. A future variant that reads
+    /// from something other than a file will have to answer this question
+    /// explicitly, which is the point.
+    #[must_use]
+    pub const fn path(&self) -> &PathBuf {
+        match self {
+            Self::Csv { path } | Self::Xlsx { path, .. } => path,
+        }
+    }
+
     /// The value written to `contacts.source`.
     #[must_use]
     pub const fn label(&self) -> &'static str {
@@ -364,8 +378,27 @@ where
             self.commit(&mut chunk, options.list).await?;
         }
 
-        // The reader task is joined AFTER the queue is drained, never before:
-        // waiting on it first would deadlock on a full channel.
+        // Closing the queue is what makes the join below safe, and it is not
+        // optional on the cancelled path.
+        //
+        // The reader runs on `spawn_blocking` and offers rows with
+        // `blocking_send`, which does not watch the cancellation token: it
+        // returns only when the receiver is closed or dropped. On the nominal
+        // path the loop above drains the queue to `None`, so the reader has
+        // already finished. On the **cancelled** path the biased `select!`
+        // breaks out without a further `recv`, and if the reader was parked on
+        // a full queue at that moment — which is exactly where a slow commit
+        // leaves it — nothing would ever free it and `reader.await` would hang
+        // for ever. The operator sees a frozen progress bar, a cancel button
+        // that does nothing, and a blocking-pool thread leaked for the life of
+        // the process.
+        //
+        // `close` makes the pending `blocking_send` fail, which the reader
+        // already treats as "the writer is gone, nothing more to do". Rows
+        // still queued are dropped on purpose: they were never counted, and the
+        // report only claims what was committed.
+        receiver.close();
+
         match reader.await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => return Err(error),

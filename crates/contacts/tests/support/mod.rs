@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use contacts::lists::ListSelection;
 use contacts::model::{Contact, ContactId, ContactList, ListId};
@@ -63,6 +64,13 @@ pub(crate) struct StoreState {
     pub(crate) batches: Vec<usize>,
     /// When set, the *n*-th `insert_contacts` call fails.
     pub(crate) fail_batch: Option<usize>,
+    /// How long each `insert_contacts` call takes.
+    ///
+    /// A store that answers instantly never lets the reader get ahead, so the
+    /// bounded queue between the two never fills — and a bug that only shows
+    /// up on a **full** queue cannot be reproduced. This is what makes the
+    /// cancellation test exercise the state a real `fsync` puts the import in.
+    pub(crate) batch_delay: Option<Duration>,
 }
 
 /// An in-memory [`ContactRepository`].
@@ -75,6 +83,19 @@ impl MemoryStore {
     /// An empty store.
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// A store that takes `delay` to commit each batch.
+    ///
+    /// See [`StoreState::batch_delay`] for why a slow double is the only way
+    /// to reach the interesting state.
+    pub(crate) fn slow(delay: Duration) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(StoreState {
+                batch_delay: Some(delay),
+                ..StoreState::default()
+            })),
+        }
     }
 
     /// A store whose `index`-th batch (0-based) fails.
@@ -124,6 +145,14 @@ impl ContactRepository for MemoryStore {
     }
 
     async fn insert_contacts(&self, contacts: &[Contact]) -> Result<u64, ContactStoreError> {
+        let delay = self.state.lock().await.batch_delay;
+
+        // Outside the lock, so the delay stands for the commit and not for
+        // contention on the double itself.
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+
         let mut state = self.state.lock().await;
 
         if state.fail_batch == Some(state.batches.len()) {

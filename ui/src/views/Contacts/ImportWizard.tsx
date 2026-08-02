@@ -51,10 +51,10 @@ export function ImportWizard() {
   const isWorkbook = path !== null && /\.xlsx?$/i.test(path);
 
   const pick = async () => {
-    const chosen = await pickContactFile(t("contacts.import.fileFilter"));
+    const outcome = await pickContactFile();
 
-    if (chosen !== null) {
-      setPath(chosen);
+    if (outcome.ok && outcome.value !== null) {
+      setPath(outcome.value);
     }
   };
 

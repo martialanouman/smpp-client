@@ -17,7 +17,6 @@
       },
       "deduplication": "Doublons",
       "defaultRegion": "Pays par défaut",
-      "fileFilter": "Fichiers de contacts",
       "headerMode": {
         "absent": "Toutes les lignes sont des données",
         "detect": "Détecter automatiquement",
@@ -111,6 +110,7 @@
     "CONFIG_UNREADABLE": "Les préférences n'ont pas pu être lues.",
     "CONFIG_UNWRITABLE": "Les préférences n'ont pas pu être enregistrées.",
     "CONTACTS_DUPLICATE": "Un contact ou une liste existe déjà sous cet identifiant.",
+    "CONTACTS_FILE_NOT_PICKED": "Le fichier n'a pas été choisi dans le sélecteur natif. Choisissez-le à nouveau.",
     "CONTACTS_IMPORT_BUSY": "Un import est déjà en cours. Attendez la fin ou annulez-le.",
     "CONTACTS_IMPORT_REJECTED": "Le fichier n'a pas pu être lu ou associé aux colonnes indiquées.",
     "CONTACTS_INVALID_INPUT": "Un champ de l'appel est illisible.",

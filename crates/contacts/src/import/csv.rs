@@ -301,52 +301,52 @@ fn read_record(
 ) -> Result<Option<RawRow>, ContactsError> {
     let mut record = csv::StringRecord::new();
 
-    loop {
-        let read = reader
-            .read_record(&mut record)
-            .map_err(|error| ContactsError::read_at(line.saturating_add(1), &error))?;
+    let read = reader
+        .read_record(&mut record)
+        .map_err(|error| ContactsError::read_at(line.saturating_add(1), &error))?;
 
-        if !read {
-            return Ok(None);
-        }
-
-        // The line number comes from the reader, NOT from a counter of records
-        // handed out: the reader counts the newlines it consumed, so a record
-        // whose quoted field spans three lines advances the count by three and
-        // the next rejection points at the right place. A counter of records
-        // would be two lines out from there on.
-        //
-        // ONE case it still gets wrong, stated rather than hidden, and
-        // measured rather than assumed. The `csv` crate captures a record's
-        // position *before* consuming the blank lines that precede it, so the
-        // record immediately following a blank line is reported one line
-        // short — it points at the blank line itself. The count then recovers:
-        // the record after that one is exact again. Measured on
-        // `a\n\nb\nc\n`: b reports 4 when it sits on 5, c reports 6 and sits
-        // on 6.
-        //
-        // So the error is bounded at one line and does not accumulate, which
-        // is what matters for an operator jumping to it in an editor. There is
-        // no way to disable the skipping or observe it through the public API,
-        // and the alternative — counting newlines in a wrapping reader —
-        // cannot be aligned with record boundaries because the reader buffers
-        // ahead.
-        *line = record
-            .position()
-            .map_or_else(|| line.saturating_add(1), csv::Position::line);
-
-        let values: Vec<String> = record.iter().map(str::trim).map(str::to_owned).collect();
-
-        if values.iter().all(String::is_empty) {
-            continue;
-        }
-
-        return Ok(Some(RawRow {
-            line: *line,
-            values,
-            unreadable: Vec::new(),
-        }));
+    if !read {
+        return Ok(None);
     }
+
+    // The line number comes from the reader, NOT from a counter of records
+    // handed out: the reader counts the newlines it consumed, so a record
+    // whose quoted field spans three lines advances the count by three and
+    // the next rejection points at the right place. A counter of records
+    // would be two lines out from there on.
+    //
+    // ONE case it still gets wrong, stated rather than hidden, and
+    // measured rather than assumed. The `csv` crate captures a record's
+    // position *before* consuming the blank lines that precede it, so the
+    // record immediately following a blank line is reported one line
+    // short — it points at the blank line itself. The count then recovers:
+    // the record after that one is exact again. Measured on
+    // `a\n\nb\nc\n`: b reports 4 when it sits on 5, c reports 6 and sits
+    // on 6.
+    //
+    // So the error is bounded at one line and does not accumulate, which
+    // is what matters for an operator jumping to it in an editor. There is
+    // no way to disable the skipping or observe it through the public API,
+    // and the alternative — counting newlines in a wrapping reader —
+    // cannot be aligned with record boundaries because the reader buffers
+    // ahead.
+    *line = record
+        .position()
+        .map_or_else(|| line.saturating_add(1), csv::Position::line);
+
+    let values: Vec<String> = record.iter().map(str::trim).map(str::to_owned).collect();
+
+    // A blank row is HANDED OVER, not swallowed. The writer counts it as
+    // `Outcome::Blank`, outside the total — which is what lets the report
+    // show the operator that the twelve rows their spreadsheet export left
+    // at the end of the file were seen and set aside, rather than making
+    // their file look shorter than it is. Skipping here would leave
+    // `ImportReport::blank` at zero for ever.
+    Ok(Some(RawRow {
+        line: *line,
+        values,
+        unreadable: Vec::new(),
+    }))
 }
 
 #[cfg(test)]

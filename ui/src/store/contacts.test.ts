@@ -83,7 +83,7 @@ describe("the contacts store", () => {
     contactsPage.mockResolvedValueOnce(aPage([aRow("+2250700000001")], "10", 2));
     await useContacts.getState().reload();
 
-    let release = (_: unknown) => undefined as void;
+    let release: (value: unknown) => void = () => undefined;
     contactsPage.mockReturnValueOnce(
       new Promise((resolve) => {
         release = resolve;
@@ -122,7 +122,7 @@ describe("the contacts store", () => {
     contactsPage.mockResolvedValueOnce(aPage([aRow("+2250700000001")], "10", 2));
     await useContacts.getState().reload();
 
-    let release = (_: unknown) => undefined as void;
+    let release: (value: unknown) => void = () => undefined;
     contactsPage.mockReturnValueOnce(
       new Promise((resolve) => {
         release = resolve;
@@ -144,6 +144,38 @@ describe("the contacts store", () => {
       null,
       100,
     );
+  });
+
+  /**
+   * The race the `loading` guard on `reload` used to lose. An operator typing
+   * "ab" fires two searches; if the second is dropped because the first is
+   * still in flight, the screen ends up showing the results of "a" under the
+   * text "ab" — and, worse, no further request is ever issued, so the table
+   * stays wrong until they retype.
+   *
+   * The guard belongs on `loadMore`, which appends, and not on `reload`, which
+   * replaces.
+   */
+  it("issues the second search even while the first is in flight", async () => {
+    let releaseFirst: (value: unknown) => void = () => undefined;
+    contactsPage
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          releaseFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(aPage([aRow("+2250700000009")], null, 1));
+
+    const first = useContacts.getState().setSearch("a");
+    const second = useContacts.getState().setSearch("ab");
+
+    // The stale answer lands after the fresh one was already asked for.
+    releaseFirst(aPage([aRow("+2250700000001")], "10", 2));
+    await Promise.all([first, second]);
+
+    expect(contactsPage).toHaveBeenCalledTimes(2);
+    expect(useContacts.getState().rows.map((row) => row.msisdn)).toEqual(["+2250700000009"]);
+    expect(useContacts.getState().search).toBe("ab");
   });
 
   /**
