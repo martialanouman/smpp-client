@@ -34,10 +34,27 @@
 //! # Progress is not the journal
 //!
 //! A campaign of 500 000 recipients does not push 500 000 events.
-//! `campaign:progress` carries **aggregated counters** at a fixed cadence
-//! (CA-010-11), and the per-message detail is read through `logs_query`, page by
-//! page, filtered on the campaign — the same arrangement `import:progress` and
-//! `message:update` already make for their own screens.
+//! `campaign:progress` carries **aggregated counters and the campaign's own
+//! throughput** at a fixed cadence (CA-010-11), and the per-message detail is
+//! read through `logs_query`, page by page, filtered on the campaign — the same
+//! arrangement `import:progress` and `message:update` already make for their own
+//! screens.
+//!
+//! # What is NOT verified at this milestone
+//!
+//! Stated here rather than in a pull-request description, because this is where
+//! somebody will look:
+//!
+//! * **CA-010-12, the M3 recipe, is not covered.** There is no `src-tauri/tests`
+//!   and no test in this workspace has ever driven a campaign through these
+//!   commands to a message centre. What *is* covered is every piece separately —
+//!   the runner against a fake centre (`messaging`), the recipient source and the
+//!   lifecycle against a real database (`crate::campaigns`), the commands'
+//!   validation here. The assembly, and the cold restart in the middle of a
+//!   massive campaign, are not.
+//! * **CA-010-11 is covered as a mechanism, not as a measurement.** The event
+//!   rate is provably 4 Hz whatever the throughput, and that is tested; nobody
+//!   has run a campaign at full rate with the screen open and measured frames.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -246,17 +263,37 @@ impl ScheduleInput {
 
 /// Everything a campaign sends with, minus its name and its template.
 ///
-/// Stored verbatim in `campaigns.send_config` — see the module header for why.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+/// Stored verbatim in `campaigns.send_config` — see the module header for why,
+/// and for what that costs.
+///
+/// # `#[serde(default)]` on the container, and it is load-bearing
+///
+/// This type is both the IPC input and the **stored** form, so a field added in
+/// a later version is a field every existing row lacks. Without a default,
+/// `from_str` fails on the whole document — and a campaign a `kill -9` left
+/// `RUNNING` would then be impossible to resume *or* to cancel, which is
+/// CA-010-04 and CA-010-12 defeated by a schema change.
+///
+/// The container attribute makes every absent field fall back instead, so an
+/// older row reads as "this campaign was configured before that option
+/// existed", which is what it is. What it does **not** buy is a field whose
+/// meaning changed: that needs a version tag and a migration, and this type has
+/// neither. Stated so the day it is needed the cost is already written down.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub(crate) struct CampaignSendConfigInput {
     /// Which session to send on. One session per campaign at this milestone;
     /// spreading a campaign over several is milestone 011.
+    ///
+    /// Its default is the empty string, which no `SessionId` parses — so a
+    /// document that lost it fails at `campaign_start` with a named field,
+    /// rather than making the whole row unreadable. See the container attribute
+    /// above.
     pub(crate) session_id: String,
     /// The contact list to send to, or `null` for every contact.
     pub(crate) list_id: Option<String>,
     /// Lists whose members are excluded whatever else says.
-    #[serde(default)]
     pub(crate) excluded_list_ids: Vec<String>,
     /// The sender, or `null` to let the message centre choose one.
     pub(crate) source: Option<String>,
@@ -271,15 +308,12 @@ pub(crate) struct CampaignSendConfigInput {
     /// What to ask for in `registered_delivery`.
     pub(crate) registered_delivery: RegisteredDeliveryDto,
     /// What to do with a recipient a variable is missing for.
-    #[serde(default)]
     pub(crate) on_missing_variable: MissingVariableInput,
     /// What to do with a message a previous run left in flight.
-    #[serde(default)]
     pub(crate) on_unanswered: UnansweredInput,
     /// The replay policy.
     pub(crate) retry: RetryInput,
     /// The optional planning.
-    #[serde(default)]
     pub(crate) schedule: ScheduleInput,
 }
 
@@ -319,12 +353,9 @@ impl CampaignSendConfigInput {
         // and parsing it under the campaign's own TON and NPI is what makes a
         // combination the message centre would refuse fail at creation rather
         // than on the first of two hundred thousand messages.
-        let placeholder = Destination::parse_with(
-            PLACEHOLDER_DESTINATION,
-            self.dest_ton.into(),
-            self.dest_npi.into(),
-        )
-        .map_err(|error| ErrorDto::from(&error))?;
+        let placeholder =
+            Destination::campaign_placeholder(self.dest_ton.into(), self.dest_npi.into())
+                .map_err(|error| ErrorDto::from(&error))?;
 
         let mut submit = SubmitOptions::to(placeholder);
 
@@ -373,14 +404,6 @@ impl CampaignSendConfigInput {
         Ok(selection.excluding(excluded))
     }
 }
-
-/// The number the placeholder destination is parsed from.
-///
-/// Never sent to: [`CampaignPlan`] replaces the destination with the recipient
-/// the feeder resolved, for every message. It exists because `SubmitOptions`
-/// carries a recipient and a campaign has one per message — the alternative
-/// being a second options type with one field removed.
-const PLACEHOLDER_DESTINATION: &str = "+10000000000";
 
 /// Input of [`campaign_create`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]

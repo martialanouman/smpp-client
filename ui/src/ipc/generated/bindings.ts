@@ -483,21 +483,32 @@ export type CampaignPageDto = {
  *  through `logs_query`, page by page, filtered on the campaign — that is what
  *  the Journaux screen is, and there is no second way to it.
  * 
- *  # Where the throughput is *not*
+ *  # The throughput is the campaign's, and it is measured in the backend
  * 
- *  Spec §15.3 describes this payload as "compteurs + débit". The counters are
- *  here; the rate is not, and [`Self::session_id`] is why: milestone 007 already
- *  measures the throughput of a session at full rate and publishes it on
- *  `metrics:tick` (spec §9.6). A second figure computed here — or worse, in the
- *  WebView from the four samples a second that reach it — would be a different
- *  number for the same thing, and its accuracy would depend on this very
- *  constant. The interface reads the rate from the tick of the session named
- *  here. The deviation is deliberate and is recorded in `docs/adr/0015`.
+ *  Spec §15.3 describes this payload as "compteurs + débit", and the rate it
+ *  means is the rate of *this campaign* — [`Self::accepted_per_second`].
+ * 
+ *  It is emphatically **not** the session's. `metrics:tick` (milestone 007,
+ *  spec §9.6) measures the whole link, so a unit send made while a campaign
+ *  runs is inside it; a figure shown beside a campaign's counters that counted
+ *  traffic belonging to something else would be two numbers describing two
+ *  different things, side by side, with nothing saying so.
+ * 
+ *  It is measured by `messaging::AcceptanceRate` against the runner's injected
+ *  clock, never derived in the WebView: computed there from the four readings a
+ *  second that reach it, its accuracy would depend on
+ *  [`CAMPAIGN_PROGRESS_INTERVAL`], so tightening the cadence to protect the
+ *  bridge would silently degrade a measurement. ADR 0015 records the reasoning.
  */
 export type CampaignProgressEvent = {
 	/**  Which campaign these figures belong to. */
 	campaignId: string,
-	/**  The session it is sending on, and whose `metrics:tick` carries the rate. */
+	/**
+	 *  The session it is sending on.
+	 * 
+	 *  For the interface to name the link, and for a log to correlate the two.
+	 *  **Not** where the rate comes from — see above.
+	 */
 	sessionId: string,
 	/**  `RUNNING`, `PAUSED`, `COMPLETED`… — the names of spec §10.3. */
 	status: string,
@@ -532,6 +543,15 @@ export type CampaignProgressEvent = {
 	reemittedUnanswered: number,
 	/**  Messages that were sent and whose outcome could not be written down. */
 	notJournalled: number,
+	/**
+	 *  Messages **this campaign** had accepted per second, over the last ten.
+	 * 
+	 *  Acceptances and not submissions: a message refused and replayed twice is
+	 *  one delivery's worth of work, and counting attempts would put a
+	 *  campaign's rate at its highest exactly when the message centre is
+	 *  refusing everything.
+	 */
+	acceptedPerSecond: number | null,
 	/**
 	 *  Whether this is the **last** event of this run.
 	 * 
@@ -590,36 +610,56 @@ export type CampaignRowDto = {
 /**
  *  Everything a campaign sends with, minus its name and its template.
  * 
- *  Stored verbatim in `campaigns.send_config` — see the module header for why.
+ *  Stored verbatim in `campaigns.send_config` — see the module header for why,
+ *  and for what that costs.
+ * 
+ *  # `#[serde(default)]` on the container, and it is load-bearing
+ * 
+ *  This type is both the IPC input and the **stored** form, so a field added in
+ *  a later version is a field every existing row lacks. Without a default,
+ *  `from_str` fails on the whole document — and a campaign a `kill -9` left
+ *  `RUNNING` would then be impossible to resume *or* to cancel, which is
+ *  CA-010-04 and CA-010-12 defeated by a schema change.
+ * 
+ *  The container attribute makes every absent field fall back instead, so an
+ *  older row reads as "this campaign was configured before that option
+ *  existed", which is what it is. What it does **not** buy is a field whose
+ *  meaning changed: that needs a version tag and a migration, and this type has
+ *  neither. Stated so the day it is needed the cost is already written down.
  */
 export type CampaignSendConfigInput = {
 	/**
 	 *  Which session to send on. One session per campaign at this milestone;
 	 *  spreading a campaign over several is milestone 011.
+	 * 
+	 *  Its default is the empty string, which no `SessionId` parses — so a
+	 *  document that lost it fails at `campaign_start` with a named field,
+	 *  rather than making the whole row unreadable. See the container attribute
+	 *  above.
 	 */
-	sessionId: string,
+	sessionId?: string,
 	/**  The contact list to send to, or `null` for every contact. */
-	listId: string | null,
+	listId?: string | null,
 	/**  Lists whose members are excluded whatever else says. */
 	excludedListIds?: string[],
 	/**  The sender, or `null` to let the message centre choose one. */
-	source: string | null,
+	source?: string | null,
 	/**  `dest_addr_ton` of every recipient. */
-	destTon: TonDto,
+	destTon?: TonDto,
 	/**  `dest_addr_npi` of every recipient. */
-	destNpi: NpiDto,
+	destNpi?: NpiDto,
 	/**  Which alphabet to write the messages in. */
-	encoding: EncodingDto,
+	encoding?: EncodingDto,
 	/**  How a long message announces its parts. */
-	segmentationMode: SegmentationModeDto,
+	segmentationMode?: SegmentationModeDto,
 	/**  What to ask for in `registered_delivery`. */
-	registeredDelivery: RegisteredDeliveryDto,
+	registeredDelivery?: RegisteredDeliveryDto,
 	/**  What to do with a recipient a variable is missing for. */
 	onMissingVariable?: MissingVariableInput,
 	/**  What to do with a message a previous run left in flight. */
 	onUnanswered?: UnansweredInput,
 	/**  The replay policy. */
-	retry: RetryInput,
+	retry?: RetryInput,
 	/**  The optional planning. */
 	schedule?: ScheduleInput,
 };

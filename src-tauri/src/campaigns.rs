@@ -42,7 +42,9 @@ use futures_util::StreamExt as _;
 use messaging::campaign::runner::{CampaignPlan, CampaignRunner, CampaignTally};
 use messaging::ports::{Recipient, RecipientSource, RecipientSourceError};
 use messaging::sender::Sender;
-use messaging::{CampaignControl, CampaignProgress, CampaignStatus};
+use messaging::{
+    CampaignControl, CampaignProgress, CampaignReading, CampaignStatus, CampaignSummary,
+};
 use persistence::ports::CampaignRepository as _;
 use persistence::{
     Campaign, CampaignId, Database, ListSelection, SqliteCampaignRepository,
@@ -128,6 +130,69 @@ struct Running {
     total: u32,
 }
 
+impl Running {
+    /// A live campaign under the operator's controls.
+    fn new(session_id: SessionId, total: u32) -> Self {
+        Self {
+            control: CampaignControl::new(),
+            progress: Arc::new(CampaignProgress::new()),
+            session_id,
+            total,
+        }
+    }
+
+    /// The intermediate reading the sampler publishes.
+    ///
+    /// # It takes no status, and that is the fix
+    ///
+    /// This method used to be a call to `publish` with `CampaignStatus::Running`
+    /// written out at the call site, and the consequence was a bug an operator
+    /// could not get out of: pausing a campaign wrote `PAUSED`, the button
+    /// became *Reprendre*, and under 250 ms later the next reading published
+    /// `RUNNING` and put *Mettre en pause* back. Clicking it called
+    /// `campaign_pause` again — `PAUSED → PAUSED` is a legal no-op — so a paused
+    /// campaign of two hundred thousand recipients could only be cancelled.
+    ///
+    /// The status now comes from [`CampaignControl::state`], through the
+    /// projection `messaging` states, and there is no parameter through which a
+    /// caller could disagree with it.
+    ///
+    /// Both halves are read **here**, when the sampler wakes, and never prepared
+    /// in advance: a payload assembled before the wait is already stale when it
+    /// is emitted — the rule the session forwarder learned at milestone 007.
+    fn sampled_reading(&self, campaign_id: &str) -> CampaignProgressEvent {
+        CampaignProgressEvent::of(
+            campaign_id,
+            &self.session_id.to_string(),
+            CampaignStatus::from(self.control.state()),
+            self.total,
+            &self.progress.snapshot(),
+            false,
+        )
+    }
+
+    /// The last reading of a run, carrying the status it actually ended in.
+    ///
+    /// Separate from [`Self::sampled_reading`] because the terminal status is
+    /// the **runner's** verdict and not the control's: a campaign nobody
+    /// cancelled ends `COMPLETED`, and one whose source failed ends `FAILED`.
+    fn final_reading(
+        &self,
+        campaign_id: &str,
+        status: CampaignStatus,
+        reading: &CampaignReading,
+    ) -> CampaignProgressEvent {
+        CampaignProgressEvent::of(
+            campaign_id,
+            &self.session_id.to_string(),
+            status,
+            self.total,
+            reading,
+            true,
+        )
+    }
+}
+
 /// Everything a spawned campaign needs, behind one `Arc`.
 ///
 /// Split out of [`CampaignServices`] so the task that runs a campaign can hold a
@@ -139,8 +204,28 @@ struct CampaignInner {
     contacts: SqliteContactRepository,
     messages: SqliteMessageRepository,
     events: Arc<EventEmitter>,
-    running: Mutex<HashMap<CampaignId, Arc<Running>>>,
+    running: Mutex<LiveTable>,
 }
+
+/// The campaigns running right now, keyed by campaign.
+type LiveTable = HashMap<CampaignId, Arc<Running>>;
+
+/// Proof that the caller holds the live table.
+///
+/// # A parameter that is never read
+///
+/// Every writer of a campaign's status has to hold [`CampaignInner::running`]
+/// across the **whole** read-modify-write, not merely take it once: `start`
+/// writes `RUNNING` and the finishing task writes the terminal status, and a
+/// lock released between the read and the write lets a campaign restarted in
+/// the gap be written `COMPLETED` while it is sending.
+///
+/// A comment saying so is what this replaced, and a test could not hold it: an
+/// implementation that took the lock, removed its entry and released it before
+/// writing still passed a test that only observed the lock being taken. Threading
+/// the guard through makes the same mistake a **compile error** — there is no
+/// way to release it and still call the writer.
+type Held<'a> = tokio::sync::MutexGuard<'a, LiveTable>;
 
 /// The campaign half of the application state.
 pub(crate) struct CampaignServices {
@@ -266,12 +351,7 @@ impl CampaignServices {
         let campaign_id = campaign.campaign_id;
         let session_id = session.session_id();
 
-        let running = Arc::new(Running {
-            control: CampaignControl::new(),
-            progress: Arc::new(CampaignProgress::new()),
-            session_id,
-            total: campaign.total_count,
-        });
+        let running = Arc::new(Running::new(session_id, campaign.total_count));
 
         // The table lock is held ACROSS the status write, and that is not a
         // convenience. `CampaignInner::settle` takes the same lock to remove a
@@ -299,7 +379,7 @@ impl CampaignServices {
         // The status is written BEFORE the campaign is registered and before
         // the task is spawned: a campaign whose row could not be moved to
         // `RUNNING` must not be sending, and must not be left in the table.
-        self.write_status(campaign_id, CampaignStatus::Running)
+        self.write_status(&mut table, campaign_id, CampaignStatus::Running)
             .await?;
 
         table.insert(campaign_id, Arc::clone(&running));
@@ -308,9 +388,50 @@ impl CampaignServices {
         let inner = Arc::clone(&self.inner);
         let app = app.clone();
 
+        let driver = {
+            let inner = Arc::clone(&inner);
+            let running = Arc::clone(&running);
+
+            tauri::async_runtime::spawn(async move {
+                inner
+                    .drive(app, campaign_id, session, plan, selection, running)
+                    .await;
+            })
+        };
+
+        // The campaign task is JOINED, by a second task that does nothing else.
+        //
+        // `spawn` hands back a `JoinHandle` and the first cut dropped it, which
+        // is the shape `crate::sessions` uses — and justifies there, because a
+        // forwarder that dies has nothing to clean up. This one does: a panic
+        // anywhere under `drive` unwinds past the removal from the live table
+        // and past the terminal status, so the campaign stays marked as running
+        // for the life of the process. `CAMPAIGN_BUSY` then becomes permanent
+        // and the campaign can be neither started, nor resumed, nor cancelled.
+        //
+        // Not an orphan (CLAUDE.md §4): it waits on one handle and returns when
+        // that handle resolves, which the campaign guarantees it eventually
+        // does.
         tauri::async_runtime::spawn(async move {
+            let Err(error) = driver.await else {
+                return;
+            };
+
+            tracing::error!(
+                campaign_id = %campaign_id,
+                error = %error,
+                "the campaign task ended abnormally; recording it as failed"
+            );
+
+            // The counters as they stood: they are what the campaign really did
+            // before it fell over, and zeroing them would report a campaign
+            // that sent nothing.
             inner
-                .drive(app, campaign_id, session, plan, selection, running)
+                .finish(
+                    campaign_id,
+                    CampaignStatus::Failed,
+                    &running.progress.snapshot().tally,
+                )
                 .await;
         });
 
@@ -324,9 +445,9 @@ impl CampaignServices {
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` if the lifecycle refuses
     /// it, or `CAMPAIGN_STORAGE` if the status cannot be written.
     pub(crate) async fn pause(&self, campaign_id: CampaignId) -> Result<(), ErrorDto> {
-        let table = self.inner.running.lock().await;
+        let mut table = self.inner.running.lock().await;
 
-        self.write_status(campaign_id, CampaignStatus::Paused)
+        self.write_status(&mut table, campaign_id, CampaignStatus::Paused)
             .await?;
 
         if let Some(running) = table.get(&campaign_id) {
@@ -346,13 +467,13 @@ impl CampaignServices {
     ///
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
     pub(crate) async fn resume_in_place(&self, campaign_id: CampaignId) -> Result<bool, ErrorDto> {
-        let table = self.inner.running.lock().await;
+        let mut table = self.inner.running.lock().await;
 
         let Some(running) = table.get(&campaign_id).map(Arc::clone) else {
             return Ok(false);
         };
 
-        self.write_status(campaign_id, CampaignStatus::Running)
+        self.write_status(&mut table, campaign_id, CampaignStatus::Running)
             .await?;
         running.control.resume();
 
@@ -369,7 +490,7 @@ impl CampaignServices {
     ///
     /// [`ErrorDto`] with `CAMPAIGN_INVALID_TRANSITION` or `CAMPAIGN_STORAGE`.
     pub(crate) async fn cancel(&self, campaign_id: CampaignId) -> Result<(), ErrorDto> {
-        let table = self.inner.running.lock().await;
+        let mut table = self.inner.running.lock().await;
 
         match table.get(&campaign_id).map(Arc::clone) {
             Some(running) => {
@@ -388,7 +509,7 @@ impl CampaignServices {
                 running.control.cancel();
             }
             None => {
-                self.write_status(campaign_id, CampaignStatus::Cancelled)
+                self.write_status(&mut table, campaign_id, CampaignStatus::Cancelled)
                     .await?;
             }
         }
@@ -396,7 +517,14 @@ impl CampaignServices {
         Ok(())
     }
 
-    /// Stops every running campaign. Called when the application exits.
+    /// Signals every running campaign to stop. Called when the application
+    /// exits.
+    ///
+    /// **Signals, and does not wait.** Each campaign's own task sees the
+    /// cancellation at its next check and drains what it holds; this returns as
+    /// soon as the tokens are set. So a message already on its way to `submit`
+    /// may still leave after this call, and `crate::run` says so where it
+    /// orders the two shutdowns.
     ///
     /// The rows keep whatever status they had, deliberately: a campaign the
     /// operator did not stop is one they will want to resume, and rewriting it
@@ -436,31 +564,15 @@ impl CampaignServices {
     /// same lock.
     async fn write_status(
         &self,
+        _held: &mut Held<'_>,
         campaign_id: CampaignId,
         next: CampaignStatus,
     ) -> Result<(), ErrorDto> {
-        let campaign = self.read(campaign_id).await?;
-
-        // THE MACHINE DECIDES, not this layer. `messaging::CampaignStatus`
-        // enumerates the transitions of spec §10.3 and refuses the rest; a
-        // second reading of the same rules here would be a second reading to
-        // keep in step.
-        let status = campaign
-            .status
-            .try_move_to(next)
+        // THE MACHINE DECIDES, not this layer — see [`advance`], which is the
+        // one place a row's status and its instants move, shared with the task
+        // that ends a campaign.
+        let updated = advance(self.read(campaign_id).await?, next, None)
             .map_err(|rejection| ErrorDto::campaign_invalid_transition(&rejection))?;
-
-        let mut updated = campaign;
-
-        updated.status = status;
-
-        if status == CampaignStatus::Running && updated.started_at.is_none() {
-            updated.started_at = Some(Timestamp::now());
-        }
-
-        if status.is_terminal() {
-            updated.completed_at = Some(Timestamp::now());
-        }
 
         self.save(&updated).await
     }
@@ -475,6 +587,7 @@ impl CampaignInner {
     /// [`CAMPAIGN_PROGRESS_INTERVAL`] and publishes the **final** reading once,
     /// after the sampling has stopped. Nothing on the send path can raise the
     /// rate of the intermediate events, and nothing can suppress the last one.
+    #[tracing::instrument(skip_all, fields(campaign_id = %campaign_id))]
     async fn drive<R: Runtime>(
         self: Arc<Self>,
         app: AppHandle<R>,
@@ -493,49 +606,39 @@ impl CampaignInner {
         let outcome = run_reporting(
             CAMPAIGN_PROGRESS_INTERVAL,
             runner.run(&session, &source, &running.control),
+            // No status is passed: `Running::sampled_reading` reads the control.
+            // A `CampaignStatus::Running` written out here is exactly the bug
+            // that made a paused campaign unresumable — see that method.
             || async {
-                // The reading is taken HERE, when the sampler wakes, and never
-                // prepared in advance — the same rule the session forwarder
-                // learned at milestone 007: a payload assembled before the wait
-                // is a payload that is already stale when it is emitted.
-                let tally = running.progress.snapshot();
-
-                self.publish(
-                    &app,
-                    &rendered,
-                    &running,
-                    CampaignStatus::Running,
-                    &tally,
-                    false,
-                )
-                .await;
+                self.events
+                    .emit_campaign_progress(&app, &running.sampled_reading(&rendered));
             },
         )
         .await;
 
-        let (status, tally) = match outcome {
-            Ok(outcome) => (outcome.status, outcome.tally),
+        // The last reading the runner published: its counters, and the rate
+        // over the window that ended with the last message. The outcome's tally
+        // is the authoritative one, so it replaces the reading's — the rate has
+        // no second source and is carried through as measured.
+        let mut reading = running.progress.snapshot();
+
+        let status = match outcome {
+            Ok(outcome) => {
+                reading.tally = outcome.tally;
+
+                outcome.status
+            }
             Err(error) => {
                 tracing::error!(error = %error, "the campaign stopped on a journal failure");
 
                 // The counters are still the truth of what happened before the
                 // journal gave out; they are simply not the counters of a
                 // campaign that covered its recipients.
-                (CampaignStatus::Failed, running.progress.snapshot())
+                CampaignStatus::Failed
             }
         };
 
-        // Leaving the table and writing the terminal status are ONE step, under
-        // the lock `CampaignServices::start` also holds while it writes
-        // `RUNNING`. Split in two, the two writers interleave: a campaign
-        // restarted in the gap reads `RUNNING`, and this task writes
-        // `COMPLETED` over a campaign that is sending.
-        {
-            let mut table = self.running.lock().await;
-
-            table.remove(&campaign_id);
-            self.settle(campaign_id, status, &tally).await;
-        }
+        self.finish(campaign_id, status, &reading.tally).await;
 
         // THE LAST EVENT, and it is unconditional. The sampler has returned, so
         // nothing can arrive after it; the emitter applies no throttle, so
@@ -543,40 +646,42 @@ impl CampaignInner {
         // rate limit swallowed the last transition and left the screen on
         // `CONNECTING` for ever — this is the same defect, on the event that
         // says a campaign of two hundred thousand messages has finished.
-        self.publish(&app, &rendered, &running, status, &tally, true)
-            .await;
+        self.events
+            .emit_campaign_progress(&app, &running.final_reading(&rendered, status, &reading));
     }
 
-    /// Emits one reading.
-    async fn publish<R: Runtime>(
+    /// Takes a campaign out of the live table and writes its terminal row.
+    ///
+    /// # One step, under one lock
+    ///
+    /// Leaving the table and writing the status are **not** separable.
+    /// [`CampaignServices::start`] holds the same lock while it writes
+    /// `RUNNING`; split in two, the two writers interleave — a campaign
+    /// restarted in the gap reads `RUNNING`, and this writes `COMPLETED` over a
+    /// campaign that is sending.
+    ///
+    /// A storage failure here is logged rather than propagated: the campaign is
+    /// over and there is nobody to return an error to. The row is a summary of
+    /// the `messages` table, which is the record (spec §17.6).
+    #[tracing::instrument(skip_all, fields(campaign_id = %campaign_id, status = %status))]
+    async fn finish(&self, campaign_id: CampaignId, status: CampaignStatus, tally: &CampaignTally) {
+        let mut table = self.running.lock().await;
+
+        table.remove(&campaign_id);
+        self.settle(&mut table, campaign_id, status, tally).await;
+    }
+
+    /// Writes the terminal row of a campaign whose task has ended.
+    ///
+    /// Takes the guard rather than the lock, so it cannot be called except by a
+    /// caller that already holds it — see [`Held`].
+    async fn settle(
         &self,
-        app: &AppHandle<R>,
-        campaign_id: &str,
-        running: &Running,
+        _held: &mut Held<'_>,
+        campaign_id: CampaignId,
         status: CampaignStatus,
         tally: &CampaignTally,
-        done: bool,
     ) {
-        self.events.emit_campaign_progress(
-            app,
-            &CampaignProgressEvent::of(
-                campaign_id,
-                &running.session_id.to_string(),
-                status,
-                running.total,
-                tally,
-                done,
-            ),
-        );
-    }
-
-    /// Writes the terminal status and the final counters onto the row.
-    ///
-    /// A failure here is logged rather than propagated: the campaign is over,
-    /// the journal holds every message it sent, and there is nobody left to
-    /// return an error to. The row is a summary of the `messages` table, which
-    /// is the record (spec §17.6).
-    async fn settle(&self, campaign_id: CampaignId, status: CampaignStatus, tally: &CampaignTally) {
         let stored = match self.campaigns.find_campaign(campaign_id).await {
             Ok(Some(stored)) => stored,
             Ok(None) => {
@@ -591,27 +696,64 @@ impl CampaignInner {
             }
         };
 
-        let Ok(status) = stored.status.try_move_to(status) else {
+        let Ok(updated) = advance(stored, status, Some(tally.summary())) else {
             tracing::warn!(
-                from = %stored.status,
-                to = %status,
                 "the campaign ended in a status the lifecycle refuses from where the row stands"
             );
 
             return;
         };
 
-        let mut updated = stored;
-
-        updated.status = status;
-        updated.sent_count = narrow(tally.accepted);
-        updated.failed_count = narrow(tally.failed);
-        updated.completed_at = Some(Timestamp::now());
-
         if let Err(error) = self.campaigns.upsert_campaign(&updated).await {
             tracing::error!(error = %error, "the campaign outcome could not be written");
         }
     }
+}
+
+/// Applies one lifecycle transition to a stored campaign.
+///
+/// The **one** place a campaign row's status, its two instants and its durable
+/// counters move together — it was written twice, in `write_status` and in what
+/// is now [`CampaignInner::finish`], and the two copies were already one
+/// `completed_at` apart.
+///
+/// Every rule it applies belongs to `messaging` and is read from it rather than
+/// restated: [`CampaignStatus::try_move_to`] decides whether the move is legal,
+/// [`CampaignStatus::is_terminal`] decides whether the campaign is over, and
+/// [`messaging::CampaignTally::summary`] decides which bucket feeds which
+/// column. What is left here is assignment.
+///
+/// # Errors
+///
+/// The rejection the lifecycle produced, for the caller to render or log.
+fn advance(
+    campaign: Campaign,
+    next: CampaignStatus,
+    summary: Option<CampaignSummary>,
+) -> Result<Campaign, messaging::InvalidCampaignTransition> {
+    let status = campaign.status.try_move_to(next)?;
+    let mut updated = campaign;
+
+    updated.status = status;
+
+    // `is_none()`, not "always": a campaign resumed after a restart is moved to
+    // `RUNNING` again, and stamping it would lose the instant it first started
+    // sending — which is the one an operator reads to know how long a campaign
+    // of two hundred thousand messages has been going.
+    if status == CampaignStatus::Running && updated.started_at.is_none() {
+        updated.started_at = Some(Timestamp::now());
+    }
+
+    if status.is_terminal() {
+        updated.completed_at = Some(Timestamp::now());
+    }
+
+    if let Some(summary) = summary {
+        updated.sent_count = narrow(summary.sent);
+        updated.failed_count = narrow(summary.failed);
+    }
+
+    Ok(updated)
 }
 
 /// A counter narrowed for the row, saturating rather than wrapping.
@@ -672,7 +814,11 @@ mod tests {
     // reserves for "the binary entry point". A test harness is one.
     #![allow(clippy::disallowed_methods)]
 
-    use super::{run_reporting, ContactRecipients, Duration};
+    use super::{
+        advance, run_reporting, Campaign, CampaignId, CampaignReading, CampaignServices,
+        CampaignStatus, CampaignTally, ContactRecipients, Duration, EventEmitter, Running,
+        SessionId,
+    };
     use contacts::model::{Contact, ContactId, ContactList, ListId};
     use futures_util::StreamExt as _;
     use messaging::ports::RecipientSource as _;
@@ -683,6 +829,11 @@ mod tests {
     use std::sync::Arc;
 
     const INTERVAL: Duration = Duration::from_millis(250);
+
+    /// How long a test waits before concluding a future is not going to resolve.
+    /// Virtual time, under : it costs nothing and it is the same
+    /// on every machine.
+    const SETTLE: Duration = Duration::from_millis(50);
 
     // --- the recipient source ------------------------------------------------
 
@@ -799,16 +950,477 @@ mod tests {
         assert_eq!(recipients[0].destination.as_str(), "2250700000001");
     }
 
-    // NO TEST for "the traversal order is stable across two runs", although
+    // NO TEST here for "the traversal order is stable across two runs", although
     // `RecipientSource` states it as a requirement on its implementor.
     //
-    // One was written and then deleted: it read the same store twice and
-    // compared the two lists, which passes whatever the query does — SQLite
-    // returns rows in rowid order with or without an `ORDER BY`, so the
-    // assertion could not fail even with the ordering removed. What actually
-    // holds the property is `ORDER BY contacts.rowid` in
-    // `persistence::repositories::contacts::stream_contacts`, and that crate's
-    // own tests are where it belongs.
+    // One was written and then deleted: it read the **same store twice** and
+    // compared the two lists, which is a tautology whatever the query does —
+    // two identical reads of an unchanged table agree in any order. The
+    // property has to be asserted where the order is produced, against a
+    // traversal whose insertion order and natural key differ, and that is
+    // `persistence::tests::repositories::stream_contacts_traverses_in_insertion_order`.
+
+    // --- the lifecycle, against a real store ---------------------------------
+
+    /// Services over a temporary database of their own.
+    ///
+    /// None of `pause`, `resume_in_place`, `cancel`, `write_status` or `finish`
+    /// needs an `AppHandle` — only `start` does, because only `start` spawns a
+    /// task that emits. That is what makes the whole lifecycle testable here.
+    async fn services() -> (tempfile::TempDir, CampaignServices) {
+        let directory = tempfile::TempDir::new().expect("creating a temporary directory");
+        let database = Database::open(DatabaseConfig::new(directory.path().join("campaigns.db")))
+            .await
+            .expect("the database opens");
+
+        database.migrate().await.expect("the migrations apply");
+
+        (
+            directory,
+            CampaignServices::new(database, Arc::new(EventEmitter::default())),
+        )
+    }
+
+    fn a_campaign(status: CampaignStatus) -> Campaign {
+        Campaign {
+            campaign_id: CampaignId::new(),
+            name: String::from("juillet"),
+            status,
+            template: String::from("Bonjour"),
+            send_config: String::from("{}"),
+            total_count: 200,
+            sent_count: 0,
+            delivered_count: 0,
+            failed_count: 0,
+            created_at: Timestamp::now(),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    /// Registers a live run, the way `start` does once the task is spawned.
+    async fn register(services: &CampaignServices, campaign_id: CampaignId) -> Arc<Running> {
+        let running = Arc::new(Running::new(SessionId::new(), 200));
+
+        services
+            .inner
+            .running
+            .lock()
+            .await
+            .insert(campaign_id, Arc::clone(&running));
+
+        running
+    }
+
+    #[tokio::test]
+    async fn pausing_a_campaign_writes_the_status_and_suspends_its_feeding() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Running);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        let running = register(&services, campaign.campaign_id).await;
+
+        services
+            .pause(campaign.campaign_id)
+            .await
+            .expect("a running campaign pauses");
+
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Paused
+        );
+        assert_eq!(running.control.state(), messaging::RunState::Paused);
+    }
+
+    /// **The non-regression test of the read-modify-write.**
+    ///
+    /// The command reads the row, then takes the table lock; a campaign can
+    /// finish in between. When `pause` applied the transition to the copy the
+    /// *caller* held, that stale copy said `RUNNING`, `RUNNING → PAUSED` is a
+    /// legal move, and a campaign that had completed was written back to
+    /// `PAUSED` — non-terminal for ever, with a resume button on a campaign
+    /// that had finished.
+    ///
+    /// The stale copy is what `campaign` stands for here: the row underneath has
+    /// already moved on.
+    #[tokio::test]
+    async fn a_control_is_refused_against_the_stored_status_not_a_stale_copy() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Running);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        // The campaign finishes under the caller's feet.
+        let mut finished = campaign.clone();
+        finished.status = CampaignStatus::Completed;
+        services.save(&finished).await.expect("the row moves on");
+
+        for control in ["pause", "resume", "cancel"] {
+            let refusal = match control {
+                "pause" => services.pause(campaign.campaign_id).await,
+                "resume" => services
+                    .resume_in_place(campaign.campaign_id)
+                    .await
+                    .map(|_| ()),
+                _ => services.cancel(campaign.campaign_id).await,
+            };
+
+            // `resume` on a campaign nothing is running is `Ok(false)`, not a
+            // refusal — the caller then launches a fresh run, which reads the
+            // row and is refused there.
+            if control != "resume" {
+                assert_eq!(
+                    refusal.expect_err(control).code,
+                    crate::error::ErrorCode::CampaignInvalidTransition,
+                    "{control}"
+                );
+            }
+
+            assert_eq!(
+                services
+                    .find(campaign.campaign_id)
+                    .await
+                    .expect("the row is there")
+                    .status,
+                CampaignStatus::Completed,
+                "{control} moved a campaign that had finished"
+            );
+        }
+    }
+
+    /// Cancelling a campaign that is **running** does not write the status: the
+    /// task is about to end and writes it with the final counters. What it must
+    /// do is reach the control (CA-010-09).
+    #[tokio::test]
+    async fn cancelling_a_running_campaign_stops_it_and_leaves_the_row_to_its_task() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Running);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        let running = register(&services, campaign.campaign_id).await;
+
+        services
+            .cancel(campaign.campaign_id)
+            .await
+            .expect("a running campaign cancels");
+
+        assert_eq!(running.control.state(), messaging::RunState::Cancelled);
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Running,
+            "the row is the finishing task's to write"
+        );
+    }
+
+    /// One that is **not** running has nobody to write it, so the command does.
+    #[tokio::test]
+    async fn cancelling_a_campaign_nothing_is_running_writes_its_terminal_row() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Paused);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        services
+            .cancel(campaign.campaign_id)
+            .await
+            .expect("a paused campaign cancels");
+
+        let stored = services
+            .find(campaign.campaign_id)
+            .await
+            .expect("the row is there");
+
+        assert_eq!(stored.status, CampaignStatus::Cancelled);
+        assert!(stored.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn resuming_a_campaign_nothing_is_running_reports_that_there_was_nothing() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Paused);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        assert!(!services
+            .resume_in_place(campaign.campaign_id)
+            .await
+            .expect("no failure"));
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Paused,
+            "a resume that found nothing must not move the row"
+        );
+    }
+
+    #[tokio::test]
+    async fn resuming_a_paused_campaign_in_place_restarts_its_feeding() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Paused);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        let running = register(&services, campaign.campaign_id).await;
+        running.control.pause();
+
+        assert!(services
+            .resume_in_place(campaign.campaign_id)
+            .await
+            .expect("a paused campaign resumes"));
+
+        assert_eq!(running.control.state(), messaging::RunState::Running);
+        assert_eq!(
+            services
+                .find(campaign.campaign_id)
+                .await
+                .expect("the row is there")
+                .status,
+            CampaignStatus::Running
+        );
+    }
+
+    /// `finish` takes a campaign out of the live table **and** writes its row,
+    /// so a completed campaign can be started again.
+    #[tokio::test]
+    async fn finishing_a_campaign_frees_it_and_writes_its_counters() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Running);
+
+        services.save(&campaign).await.expect("the row is written");
+        register(&services, campaign.campaign_id).await;
+
+        services
+            .inner
+            .finish(
+                campaign.campaign_id,
+                CampaignStatus::Completed,
+                &CampaignTally {
+                    accepted: 190,
+                    failed: 10,
+                    ..CampaignTally::default()
+                },
+            )
+            .await;
+
+        let stored = services
+            .find(campaign.campaign_id)
+            .await
+            .expect("the row is there");
+
+        assert_eq!(stored.status, CampaignStatus::Completed);
+        assert_eq!(stored.sent_count, 190);
+        assert_eq!(stored.failed_count, 10);
+        assert!(stored.completed_at.is_some());
+        assert!(
+            !services.is_running(campaign.campaign_id).await,
+            "a finished campaign that stays in the table is CAMPAIGN_BUSY for ever"
+        );
+    }
+
+    /// **Every status writer takes the live table's lock.**
+    ///
+    /// Holding it from outside and watching each writer fail to make progress
+    /// is what says so.
+    ///
+    /// What this test does **not** assert is that the lock is held across the
+    /// whole read-modify-write — an implementation that took it, removed its
+    /// entry and released it before writing passed this test unchanged, which is
+    /// how the gap was found. That half is a compile-time guarantee instead:
+    /// `write_status` and `settle` take a [`Held`] and cannot be reached
+    /// without one.
+    #[tokio::test]
+    async fn every_status_writer_waits_for_the_live_table() {
+        let (_directory, services) = services().await;
+        let campaign = a_campaign(CampaignStatus::Running);
+
+        services.save(&campaign).await.expect("the row is written");
+
+        // Virtual time from HERE, not from the top of the test: SQLx measures
+        // its pool-acquire timeout against the same clock, and a paused one
+        // makes opening the database fail with `PoolTimedOut` before the test
+        // has begun. Pausing after the pool is warm costs nothing and keeps the
+        // waits below deterministic.
+        tokio::time::pause();
+
+        let held = services.inner.running.lock().await;
+
+        assert!(
+            tokio::time::timeout(SETTLE, services.pause(campaign.campaign_id))
+                .await
+                .is_err(),
+            "pause wrote a status without holding the live table"
+        );
+        assert!(
+            tokio::time::timeout(
+                SETTLE,
+                services.inner.finish(
+                    campaign.campaign_id,
+                    CampaignStatus::Completed,
+                    &CampaignTally::default(),
+                ),
+            )
+            .await
+            .is_err(),
+            "the finishing task wrote a status without holding the live table"
+        );
+
+        drop(held);
+
+        services
+            .pause(campaign.campaign_id)
+            .await
+            .expect("the pause goes through once the table is free");
+    }
+
+    // --- what a reading carries ----------------------------------------------
+
+    /// **The blocker.** The sampler used to publish `RUNNING` outright, so a
+    /// paused campaign was shown as running again within 250 ms and its resume
+    /// button vanished — leaving cancellation as the only way out.
+    ///
+    /// The reading takes no status argument any more; it reads the control.
+    #[tokio::test]
+    async fn a_sampled_reading_carries_the_command_actually_in_force() {
+        let running = Running::new(SessionId::new(), 200);
+
+        assert_eq!(running.sampled_reading("c").status, "RUNNING");
+
+        running.control.pause();
+        assert_eq!(
+            running.sampled_reading("c").status,
+            "PAUSED",
+            "a paused campaign published as RUNNING loses its resume button"
+        );
+
+        running.control.resume();
+        assert_eq!(running.sampled_reading("c").status, "RUNNING");
+
+        running.control.cancel();
+        assert_eq!(running.sampled_reading("c").status, "CANCELLED");
+    }
+
+    /// The rate a reading carries is the **campaign's**, taken from the runner's
+    /// own measurement — nothing here reads `metrics:tick`, which counts the
+    /// whole link and would put a unit send made beside the campaign into the
+    /// campaign's figure.
+    #[tokio::test]
+    async fn a_sampled_reading_carries_the_campaign_s_own_throughput() {
+        let running = Running::new(SessionId::new(), 200);
+
+        running.progress.publish(CampaignReading {
+            tally: CampaignTally {
+                accepted: 40,
+                ..CampaignTally::default()
+            },
+            accepted_per_second: 12.5,
+        });
+
+        let reading = running.sampled_reading("c");
+
+        assert!((reading.accepted_per_second - 12.5).abs() < f64::EPSILON);
+        assert_eq!(reading.accepted, 40);
+    }
+
+    /// A sampled reading is never the last one: only the run's own verdict is.
+    #[tokio::test]
+    async fn a_sampled_reading_never_claims_to_be_the_last() {
+        let running = Running::new(SessionId::new(), 200);
+
+        running.control.cancel();
+
+        assert!(
+            !running.sampled_reading("c").done,
+            "a cancelled campaign is still draining its queue"
+        );
+        assert!(
+            running
+                .final_reading("c", CampaignStatus::Cancelled, &CampaignReading::default())
+                .done
+        );
+    }
+
+    // --- the row transition --------------------------------------------------
+
+    /// A campaign picked up after a restart is moved to `RUNNING` again, and the
+    /// instant it *first* started sending must survive it — it is what an
+    /// operator reads to know how long a campaign has been going.
+    #[tokio::test]
+    async fn a_second_start_does_not_move_the_instant_the_campaign_began() {
+        let first = advance(
+            a_campaign(CampaignStatus::Validated),
+            CampaignStatus::Running,
+            None,
+        )
+        .expect("a validated campaign starts");
+        let began = first.started_at.expect("the first start is stamped");
+
+        let paused =
+            advance(first, CampaignStatus::Paused, None).expect("a running campaign pauses");
+        let resumed =
+            advance(paused, CampaignStatus::Running, None).expect("a paused campaign resumes");
+
+        assert_eq!(resumed.started_at, Some(began));
+    }
+
+    #[tokio::test]
+    async fn a_transition_the_lifecycle_refuses_changes_nothing() {
+        let rejection = advance(
+            a_campaign(CampaignStatus::Completed),
+            CampaignStatus::Running,
+            None,
+        )
+        .expect_err("a completed campaign does not restart");
+
+        assert_eq!(rejection.from, CampaignStatus::Completed);
+        assert_eq!(rejection.to, CampaignStatus::Running);
+    }
+
+    /// The durable counters are written only when the campaign ends, and they
+    /// come from `messaging`'s own summary — not from a rule restated here.
+    #[tokio::test]
+    async fn only_a_terminal_transition_carries_the_counters() {
+        let tally = CampaignTally {
+            accepted: 7,
+            failed: 2,
+            rejected: 90,
+            ..CampaignTally::default()
+        };
+
+        let without = advance(
+            a_campaign(CampaignStatus::Running),
+            CampaignStatus::Paused,
+            None,
+        )
+        .expect("a running campaign pauses");
+
+        assert_eq!(without.sent_count, 0);
+
+        let with = advance(
+            a_campaign(CampaignStatus::Running),
+            CampaignStatus::Completed,
+            Some(tally.summary()),
+        )
+        .expect("a running campaign completes");
+
+        assert_eq!(with.sent_count, 7);
+        assert_eq!(
+            with.failed_count, 2,
+            "a rejected recipient is not a failure"
+        );
+    }
 
     // --- the progress sampler ------------------------------------------------
 

@@ -41,12 +41,13 @@ use crate::state::AppState;
 /// A closed enum rather than the bare octet CLAUDE.md §4 forbids. The seven
 /// values are the whole standard table; a message centre that wanted an eighth
 /// would need a milestone, not a free-form field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TonDto {
     /// `0` — unknown.
     Unknown,
     /// `1` — international (E.164). The default, and the safe one.
+    #[default]
     International,
     /// `2` — national.
     National,
@@ -75,12 +76,13 @@ impl From<TonDto> for Ton {
 }
 
 /// Numbering plan indicator, as spec §7.4 tabulates it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum NpiDto {
     /// `0` — unknown.
     Unknown,
     /// `1` — ISDN / E.164. The default, and the safe one.
+    #[default]
     Isdn,
     /// `3` — data (X.121).
     Data,
@@ -115,10 +117,11 @@ impl From<NpiDto> for Npi {
 /// nothing, and one who picked `0` for a text full of emoji would send
 /// mojibake. Choosing the *alphabet* and letting the encoder settle the octet
 /// is the only combination that cannot contradict itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum EncodingDto {
     /// GSM 7-bit when the text allows it, UCS2 otherwise. The default.
+    #[default]
     Automatic,
     /// Force GSM 7-bit; a text it cannot write is refused.
     Gsm7Bit,
@@ -150,10 +153,11 @@ impl From<Encoding> for EncodingDto {
 }
 
 /// How the parts of a long message announce that they belong together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SegmentationModeDto {
     /// Concatenation UDH inside `short_message`. The portable default.
+    #[default]
     Udh,
     /// `sar_*` TLVs, and a body with no header.
     Sar,
@@ -177,13 +181,14 @@ impl From<SegmentationModeDto> for SegmentationMode {
 /// — SME acknowledgements, intermediate notifications — is refused by most
 /// message centres with `ESME_RINVREGDLVFLG`, so offering it would be offering
 /// a rejection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RegisteredDeliveryDto {
     /// `0` — no delivery receipt.
     None,
     /// `1` — a receipt on the final outcome, success or failure. The default
     /// of spec §23.3, and the one milestone 008 correlates.
+    #[default]
     OnAnyOutcome,
     /// `2` — a receipt on failure only.
     OnFailure,

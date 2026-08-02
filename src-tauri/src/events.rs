@@ -237,23 +237,32 @@ pub(crate) const CAMPAIGN_PROGRESS_INTERVAL: Duration = Duration::from_millis(25
 /// through `logs_query`, page by page, filtered on the campaign — that is what
 /// the Journaux screen is, and there is no second way to it.
 ///
-/// # Where the throughput is *not*
+/// # The throughput is the campaign's, and it is measured in the backend
 ///
-/// Spec §15.3 describes this payload as "compteurs + débit". The counters are
-/// here; the rate is not, and [`Self::session_id`] is why: milestone 007 already
-/// measures the throughput of a session at full rate and publishes it on
-/// `metrics:tick` (spec §9.6). A second figure computed here — or worse, in the
-/// WebView from the four samples a second that reach it — would be a different
-/// number for the same thing, and its accuracy would depend on this very
-/// constant. The interface reads the rate from the tick of the session named
-/// here. The deviation is deliberate and is recorded in `docs/adr/0015`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, tauri_specta::Event)]
+/// Spec §15.3 describes this payload as "compteurs + débit", and the rate it
+/// means is the rate of *this campaign* — [`Self::accepted_per_second`].
+///
+/// It is emphatically **not** the session's. `metrics:tick` (milestone 007,
+/// spec §9.6) measures the whole link, so a unit send made while a campaign
+/// runs is inside it; a figure shown beside a campaign's counters that counted
+/// traffic belonging to something else would be two numbers describing two
+/// different things, side by side, with nothing saying so.
+///
+/// It is measured by `messaging::AcceptanceRate` against the runner's injected
+/// clock, never derived in the WebView: computed there from the four readings a
+/// second that reach it, its accuracy would depend on
+/// [`CAMPAIGN_PROGRESS_INTERVAL`], so tightening the cadence to protect the
+/// bridge would silently degrade a measurement. ADR 0015 records the reasoning.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 #[tauri_specta(event_name = "campaign:progress")]
 pub(crate) struct CampaignProgressEvent {
     /// Which campaign these figures belong to.
     pub(crate) campaign_id: String,
-    /// The session it is sending on, and whose `metrics:tick` carries the rate.
+    /// The session it is sending on.
+    ///
+    /// For the interface to name the link, and for a log to correlate the two.
+    /// **Not** where the rate comes from — see above.
     pub(crate) session_id: String,
     /// `RUNNING`, `PAUSED`, `COMPLETED`… — the names of spec §10.3.
     pub(crate) status: String,
@@ -284,6 +293,13 @@ pub(crate) struct CampaignProgressEvent {
     pub(crate) reemitted_unanswered: u32,
     /// Messages that were sent and whose outcome could not be written down.
     pub(crate) not_journalled: u32,
+    /// Messages **this campaign** had accepted per second, over the last ten.
+    ///
+    /// Acceptances and not submissions: a message refused and replayed twice is
+    /// one delivery's worth of work, and counting attempts would put a
+    /// campaign's rate at its highest exactly when the message centre is
+    /// refusing everything.
+    pub(crate) accepted_per_second: f64,
     /// Whether this is the **last** event of this run.
     ///
     /// Emitted once, outside the paced loop, after the campaign has ended — see
@@ -296,20 +312,23 @@ impl CampaignProgressEvent {
     /// One reading of one campaign.
     ///
     /// `total` is the planned recipient count read off the campaign row;
-    /// everything else comes from the tally the runner keeps.
+    /// everything else comes from the reading the runner publishes.
     pub(crate) fn of(
         campaign_id: &str,
         session_id: &str,
         status: messaging::CampaignStatus,
         total: u32,
-        tally: &messaging::CampaignTally,
+        reading: &messaging::CampaignReading,
         done: bool,
     ) -> Self {
+        let tally = &reading.tally;
+
         Self {
             campaign_id: campaign_id.to_owned(),
             session_id: session_id.to_owned(),
             status: status.as_str().to_owned(),
             total,
+            accepted_per_second: reading.accepted_per_second,
             processed: narrow(tally.total()),
             accepted: narrow(tally.accepted),
             failed: narrow(tally.failed),
