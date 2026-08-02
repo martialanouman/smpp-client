@@ -61,12 +61,52 @@ ligne qui existe déjà.
   write-ahead est le contrôle. Seule une reprise interroge d'abord
   (`StartMode`).
 
-## Décision 2 — Un message `SENT` sans réponse est **réémis** à la reprise
+## Décision 2 — Un message `SENT` **sans réponse journalisée** est réémis
 
-Au moment d'un arrêt brutal, une ligne en `SENT` signifie : le `submit_sm` est
-parti, aucune réponse n'a été journalisée. Le SMSC l'a peut-être acceptée, ou
-jamais vue. **SMPP ne permet pas de le demander** : `submit_sm` ne porte pas de
-clé d'idempotence, et `query_sm` prend le `message_id` que la réponse manquante
+### Préalable : la tentative est journalisée avant la socket
+
+Cette décision n'a de sens que si l'état persisté dit la vérité. La transition
+`SENT` est donc commitée **avant** `submit_all`, dans sa propre transaction.
+
+Ce n'était pas le cas à la première rédaction de cette ADR, et une revue l'a
+relevé : `SENT` était empilée avec le verdict et écrite après le retour du SMSC,
+si bien qu'un `kill -9` entre le `submit_sm` parti et le commit laissait la ligne
+en `QUEUED` — état que tout le reste du module lit comme « rien n'est parti ».
+L'arbitrage ci-dessous portait donc sur une population **vide** :
+`UnansweredPolicy::Abandon` ne protégeait de rien et le compteur de risque valait
+zéro au moment précis où des doublons partaient. C'est aussi la lettre de
+CLAUDE.md §4 : « un message est persisté avant émission ; ses transitions d'état
+sont traçables ».
+
+Coût mesuré : une transaction SQLite (WAL) de plus par message, 111,7 µs sur la
+machine de développement, soit ~56 s pour 500 000 destinataires. Le chemin
+d'émission étant séquentiel et borné par l'aller-retour vers le SMSC, cette
+écriture plafonne le débit à ~8 900 messages/s : deux ordres de grandeur
+au-dessus de ce que la campagne atteint.
+
+### Ce que `SENT` dit, et ce qu'il ne dit pas
+
+`SENT` dit **qu'un `submit_sm` a quitté ce processus**. Il ne dit pas qu'une
+réponse est arrivée — c'est `command_status` qui le dit, et la reprise lit les
+deux :
+
+| Ligne | Le SMSC | Réémettre |
+|---|---|---|
+| `QUEUED` | ne l'a jamais vue | ne peut pas dupliquer |
+| `SENT` + `command_status` | a répondu, en refusant | ne peut pas dupliquer — il ne l'a pas prise |
+| `SENT` sans `command_status` | **l'a peut-être prise** | peut dupliquer |
+| `ACCEPTED` et au-delà | l'a prise | interdit (CA-010-05) |
+
+Seule la troisième ligne est incertaine, et seule elle est arbitrée. Les
+confondre — ce que fait la lecture du seul état — fait abandonner sous `Abandon`
+un message dont on **sait** qu'il a été refusé, et laisse sa ligne non terminale
+à jamais.
+
+### L'arbitrage lui-même
+
+Pour cette troisième ligne : le SMSC l'a peut-être acceptée, ou jamais vue.
+**SMPP ne permet pas de le demander** : `submit_sm` ne porte pas de clé
+d'idempotence, et `query_sm` prend le `message_id` que la réponse manquante
 aurait porté.
 
 Les deux politiques possibles sont donc :
@@ -93,7 +133,18 @@ Les deux politiques possibles sont donc :
 - La fenêtre n'est pas nulle : elle couvre les messages en vol au moment de
   l'arrêt, donc au plus la taille de la fenêtre d'émission. Elle est chiffrée
   dans le rapport de campagne (`reemitted_unanswered`) et journalisée en
-  `warn`.
+  `warn`. Le test de propriété vérifie que **tout doublon réellement livré est
+  couvert par ce chiffre**, et que sous `Abandon` il n'y en a aucun — un doublon
+  dont l'opérateur n'a pas été averti fait échouer la propriété.
+- **Résidu, non résolu :** une soumission que la *session elle-même* refuse
+  avant la socket (`SubmitError::NotBound`, session en reconnexion) laisse une
+  ligne `SENT` sans `command_status`, donc classée incertaine alors que rien
+  n'est parti. Dans une exécution le budget de rejeu la mène à `FAILED` ; seul un
+  crash pendant ce cycle en laisse une. Sous `Reemit` elle est simplement
+  renvoyée et seul le chiffre de risque sur-déclare ; sous `Abandon` elle est
+  abandonnée, et c'est un message perdu qui n'était jamais parti. Réduire ce
+  résidu supposerait d'écrire un `command_status` qu'aucun SMSC n'a envoyé, ce
+  que le journal ne fait pas.
 - L'arbitrage inverse est disponible sans rien changer d'autre :
   `UnansweredPolicy::Abandon`. Il est offert parce que c'est une décision
   produit, et qu'un opérateur dont le contenu est facturé au destinataire peut

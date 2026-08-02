@@ -63,6 +63,48 @@ majeur.
   au rouge. Ce que la mesure **n'inclut pas** est écrit dans l'en-tête du test
   (la base de données, et une source qui matérialiserait ses lignes).
 
+### Corrigé — jalon 010, revue
+
+- **La transition `SENT` est commitée avant la socket, pas après la réponse.**
+  Elle était empilée avec le verdict et écrite au retour de `submit_all` : un
+  `kill -9` entre le `submit_sm` parti et ce commit laissait donc la ligne en
+  `QUEUED`, état que la reprise lit comme « rien n'est parti, réémettre ne peut
+  pas dupliquer ». L'arbitrage d'ADR 0014 portait sur une population vide —
+  `UnansweredPolicy::Abandon` ne protégeait de rien, et `reemitted_unanswered`
+  valait zéro au moment précis où des doublons partaient. Coût mesuré : une
+  transaction SQLite de plus par message, 111,7 µs, soit ~56 s pour 500 000
+  destinataires ; le chemin d'émission étant séquentiel et borné par
+  l'aller-retour SMSC, c'est deux ordres de grandeur sous le débit atteint.
+- **`SENT` ne veut plus dire deux choses.** Une tentative rejouable écrivait
+  `SENT`, indistinguable d'un message en vol : sous `Abandon` on abandonnait
+  définitivement un message dont on savait qu'il avait été **refusé**, et sa
+  ligne restait non terminale à jamais. La reprise lit désormais `SENT` **et**
+  `command_status` : un refus répondu n'est pas un risque de doublon et est
+  rejoué sous les deux politiques.
+- **Un message dont le délai de rejeu est annulé reçoit son verdict** (CA-010-09,
+  « aucun message laissé dans un état indéterminé ») : la campagne étant
+  terminée, sa dernière tentative est son verdict et la ligne devient terminale.
+- **Un `resend` d'un message absent du journal n'émet plus rien** : il
+  soumettait puis signalait `journalled: false`, c'est-à-dire un PDU sans ligne
+  derrière lui.
+- **Une clé en conflit dont la ligne est illisible n'est plus perdue** (deux
+  exécutions de la même campagne en parallèle) : elle est comptée comme
+  ignorée, au lieu de sortir de tous les compteurs et de casser l'égalité
+  `total == file` en silence.
+- **Le test de propriété atteignait une seule famille.** Le journal ne pouvait
+  jamais échouer — donc la famille ci-dessus était inatteignable, ce qui explique
+  qu'elle ait survécu à la suite — et le seul point de suspension était le délai
+  de rejeu, si bien que les commandes de l'opérateur n'étaient servies qu'après
+  la fin de la campagne. Le générateur injecte désormais une panne de journal par
+  exécution, les doubles cèdent la main à chaque opération, et le script de
+  l'opérateur avance en tours d'ordonnanceur et non en millisecondes. Un test de
+  recensement compte les familles atteintes et échoue si l'une redevient
+  inatteignable.
+- **L'invariant est énoncé exactement.** « Au plus un message accepté par
+  destinataire » est faux sous `Reemit`, qui réémet délibérément : la propriété
+  vérifie que sous `Abandon` il n'y a **aucun** doublon, et que sous `Reemit`
+  tout doublon réellement livré est couvert par `reemitted_unanswered`.
+
 ### Modifié — jalon 010
 
 - **`FAILED` n'est plus écrit sur une tentative que la campagne va rejouer.**

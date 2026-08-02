@@ -85,13 +85,17 @@ const LARGE: u64 = 500_000;
 /// only legitimate where the measurement is impossible.
 const SAMPLING_IS_SUPPORTED: bool = cfg!(unix);
 
-/// How often the resident set size is sampled, in submissions.
+/// How many samples each run takes, whatever its size.
 ///
-/// Each sample spawns `ps`, which costs a few milliseconds: a hundred samples
-/// over the large run is a fraction of a second, and the queue is only 256 deep,
-/// so nothing this test is looking for can appear and vanish between two
-/// samples.
-const SAMPLE_EVERY: u64 = 5_000;
+/// A **rate** rather than a fixed interval, and that is not cosmetic: with one
+/// sample every 5 000 submissions the small run produced two, so "the peak for
+/// 5 000 recipients" was two readings and a coin toss. Both runs now take the
+/// same number, so the two figures are comparable by construction.
+///
+/// Each sample spawns `ps`, a few milliseconds: fifty of them is a fraction of a
+/// second, and the queue is only 256 deep, so nothing this test is looking for
+/// can appear and vanish between two samples.
+const SAMPLES_PER_RUN: u64 = 50;
 
 /// How much the peak may grow between the two runs, in kilobytes.
 ///
@@ -145,15 +149,17 @@ struct MeteredSmsc {
     submissions: Arc<AtomicU64>,
     peak_kb: Arc<AtomicU64>,
     samples: Arc<AtomicU64>,
+    every: u64,
 }
 
 impl MeteredSmsc {
-    fn new() -> Self {
+    fn sampling_over(count: u64) -> Self {
         Self {
             inner: FakeSmsc::accepting(),
             submissions: Arc::new(AtomicU64::new(0)),
             peak_kb: Arc::new(AtomicU64::new(0)),
             samples: Arc::new(AtomicU64::new(0)),
+            every: (count / SAMPLES_PER_RUN).max(1),
         }
     }
 
@@ -189,7 +195,7 @@ impl SmscSession for MeteredSmsc {
     async fn submit(&self, pdu: Pdu) -> Result<Command, SubmitError> {
         let count = self.submissions.fetch_add(1, Ordering::Relaxed);
 
-        if count.is_multiple_of(SAMPLE_EVERY) {
+        if count.is_multiple_of(self.every) {
             self.sample();
         }
 
@@ -199,7 +205,7 @@ impl SmscSession for MeteredSmsc {
 
 /// Runs a campaign of `count` recipients and returns its peak resident size.
 async fn run_campaign(count: u64) -> MeteredSmsc {
-    let smsc = MeteredSmsc::new();
+    let smsc = MeteredSmsc::sampling_over(count);
     let plan = CampaignPlan::new(
         campaign(),
         Template::parse("Bonjour, votre commande est prete.").unwrap(),
@@ -220,7 +226,9 @@ async fn run_campaign(count: u64) -> MeteredSmsc {
         .await
         .expect("the campaign runs");
 
-    // The last sample, taken while the campaign's structures are still alive.
+    // One reading after the run. The campaign's own buffers are gone by now —
+    // `run` has returned — so this is not a peak, it is a floor: anything the
+    // campaign left behind is still counted in it.
     smsc.sample();
 
     // CA-010-01 is also a statement that the campaign *finishes*, and CA-010-02

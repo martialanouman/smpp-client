@@ -42,7 +42,13 @@ pub enum ScheduleError {
     /// an operator who typed it meant one of them. *Parse, don't validate*
     /// (CLAUDE.md §4): it is refused where the setting comes in, so no
     /// [`DailyWindow`] that exists is ambiguous.
-    #[error("a daily window opens and closes at different times of day")]
+    ///
+    /// **Where an operator who wanted "all day" lands:** they ask for no window
+    /// at all — a [`Schedule`] built with [`Schedule::immediate`] and never
+    /// given [`Schedule::within`] allows sending at every hour. A twenty-four
+    /// hour [`DailyWindow`] is deliberately inexpressible, because the only way
+    /// to write one is the pair this refuses.
+    #[error("a daily window opens and closes at the same time of day")]
     EmptyWindow,
 }
 
