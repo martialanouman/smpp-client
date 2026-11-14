@@ -56,7 +56,8 @@ Le défi n'est pas d'envoyer beaucoup, c'est de rester **borné** : lire les des
 - [ ] **CA-010-09** — L'annulation arrête l'émission en moins d'une seconde et marque proprement les messages non émis ; aucun message n'est laissé dans un état indéterminé.
 - [ ] **CA-010-10** — Le planning différé démarre la campagne à l'heure prévue et respecte la plage horaire autorisée (test avec horloge injectée).
 - [ ] **CA-010-11** — `campaign:progress` est throttlé ; l'UI affiche la progression et le débit sans dégradation pendant une campagne à débit maximal.
-- [ ] **CA-010-12** — **Recette M3 :** campagne massive stable de bout en bout, avec pause/reprise et redémarrage à froid en cours de route.
+- [x] **CA-010-12** — **Recette M3 :** campagne massive stable de bout en bout, avec pause/reprise et redémarrage à froid en cours de route.
+  Vérifié par `src-tauri/src/commands/campaign/assembly.rs` : trois campagnes complètes entrant par `launch`, le point que `campaign_start` et `campaign_resume` partagent, contre un SMSC scripté joint par la pile de transport réelle — l'assemblage nominal, la pause/reprise en cours d'envoi, et le redémarrage à froid au milieu de la campagne. La volumétrie massive reste hors de ces tests (voir §7).
 
 ## 5. Tests attendus
 
@@ -77,16 +78,37 @@ Le défi n'est pas d'envoyer beaucoup, c'est de rester **borné** : lire les des
 Consignée ici plutôt que dans une description de PR, parce que c'est ici qu'on la
 relira.
 
-- **CA-010-12 (recette M3) n'est pas vérifié.** Il n'existe aucun
-  `src-tauri/tests/`, et aucune campagne n'a jamais envoyé un message à travers
-  l'IPC. Chaque pièce est couverte séparément — le runner contre un SMSC factice,
-  la source de destinataires et le cycle de vie contre une vraie base, la
-  validation des commandes — mais pas l'assemblage, ni le redémarrage à froid au
-  milieu d'une campagne massive.
+- **CA-010-12 est vérifié pour l'assemblage, pas pour la volumétrie.**
+  `src-tauri/src/commands/campaign/assembly.rs` fait passer trois campagnes
+  complètes par `launch` — l'envoi nominal, la pause suivie d'une reprise en
+  place, et la reprise d'une campagne qu'un arrêt brutal a laissée en
+  `RUNNING` — et compte les `submit_sm` sur le SMSC lui-même : exactement un par
+  destinataire, à travers la pause comme à travers le redémarrage. Ce que ces
+  tests ne couvrent pas, et que rien ne couvre encore :
+
+  - **la campagne massive à travers l'IPC.** Vingt destinataires, pas cinq cent
+    mille : l'empreinte mémoire d'une campagne de 500 000 est mesurée dans
+    `messaging::campaign_volume`, en dessous de la couche IPC, et un test lent
+    ici serait un test qu'on désactive. Personne n'a donc fait passer un volume
+    de recette par `campaign_start`.
+  - **la famille « `SENT` sans réponse » sous `Reemit`.** Le test de
+    redémarrage tourne sous `Abandon`, la politique qui *promet* de ne pas
+    dupliquer, ce qui rend le compte d'émissions exact. L'arbitrage de
+    l'ADR 0014 — le doublon assumé et compté — est éprouvé sur des séquences
+    arbitraires par `messaging::campaign_invariant`, jamais à travers l'IPC.
+  - **la tâche du premier run n'est pas tuée.** Un test dans un seul processus
+    ne peut pas faire un `kill -9` : elle est *bloquée* sur une réponse qui ne
+    viendra pas avant cinq minutes. La propriété asservie n'en dépend pas — la
+    clé d'écriture préalable est dérivée (ADR 0014), donc même réveillée elle ne
+    pourrait pas émettre vers un destinataire déjà journalisé — mais l'arrêt
+    n'est simulé qu'à ce degré.
 - **CA-010-11 n'est vérifié que comme mécanisme.** Le débit d'émission de
   `campaign:progress` est prouvé à 4 Hz quel que soit le débit de la campagne, et
-  c'est testé ; personne n'a lancé une campagne à débit maximal avec l'écran
-  ouvert pour mesurer une dégradation.
+  c'est testé ; le test d'assemblage ajoute que le **dernier** événement d'une
+  campagne porte bien `done` à travers un vrai `AppHandle`, ce que l'ADR 0015
+  affirmait sans que rien ne le vérifie. Personne n'a en revanche lancé une
+  campagne à débit maximal avec l'écran ouvert pour mesurer une dégradation :
+  c'est la mesure, et elle reste à faire.
 - **`campaigns.delivered_count` n'est alimenté par rien.** La colonne existe, le
   DTO la porte, et l'écran ne l'affiche **pas** — un zéro permanent à côté de
   cinq chiffres exacts se lit comme « le SMSC a tout accepté et rien n'est

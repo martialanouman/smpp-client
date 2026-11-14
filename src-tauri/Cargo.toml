@@ -103,7 +103,29 @@ smpp-core = { path = "../crates/smpp-core" }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt", "test-util", "time", "sync"] }
+# `net` and `io-util` are for the end-to-end assembly test only: it stands a
+# real `TcpListener` in front of the in-memory message centre, because
+# `SessionServices` holds a `SessionRegistry<TcpTransport>` and a test must not
+# widen a production type to reach it. See `commands/campaign/assembly.rs`.
+tokio = { version = "1", features = [
+  "macros",
+  "rt",
+  "test-util",
+  "time",
+  "sync",
+  "net",
+  "io-util",
+] }
+
+# `tauri::test::mock_app()` and `MockRuntime` — the `AppHandle` the campaign
+# commands take, with no window and no WebView. A **dev**-dependency, so the
+# feature is unified into the library only when the tests are built.
+tauri = { version = "2", features = ["test"] }
+
+# The scripted message centre of `smpp_session::testing`, behind the same
+# `test-support` feature `messaging` enables for its own tests. Off for
+# `cargo build`, so nothing of it reaches the application binary.
+smpp-session = { path = "../crates/smpp-session", features = ["test-support"] }
 
 [lints]
 workspace = true

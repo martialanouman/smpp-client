@@ -708,8 +708,16 @@ fn parse_id(raw: &str) -> Result<CampaignId, ErrorDto> {
 /// Shared by [`campaign_start`] and [`campaign_resume`] because the two differ
 /// in exactly one bit: whether the runner asks the journal about every recipient
 /// before emitting. Writing it twice is how the two would drift.
-async fn launch(
-    app: &AppHandle,
+///
+/// Generic over the runtime, like [`crate::campaigns::CampaignServices::start`]
+/// and every `EventEmitter::emit_*` below it, and for the same reason: this is
+/// the assembly point of the whole milestone — the only place where the stored
+/// configuration is read back, re-validated, matched to a live session and
+/// handed to a runner — and a signature naming `Wry` would make it reachable
+/// only from an application with a window. The two commands pass their own
+/// `AppHandle`, so `R` is inferred and nothing at the boundary changes.
+async fn launch<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     state: &State<'_, AppState>,
     campaign_id: &str,
     resuming: bool,
@@ -1025,3 +1033,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod assembly;
