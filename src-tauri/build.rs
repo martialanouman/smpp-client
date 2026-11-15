@@ -31,13 +31,31 @@ fn main() {
 /// pulls the import into the test harness — see `tauri-apps/tauri#13419`, and
 /// `pacifio/atlas#390` for the same fix.
 ///
-/// # Why `rustc-link-arg-tests` and not a manifest file
+/// # Why the plain `rustc-link-arg`, which is wider than one would like
 ///
-/// This argument reaches the **test** targets only. A manifest embedded for
-/// every target of the package would be a second copy in the application
-/// binary, which the linker rejects — and running `mt.exe` over the built test
-/// executable afterwards, the other workaround in circulation, puts a
-/// post-processing step between `cargo test` and the tests.
+/// The failing executable is the **library compiled as a test**, and Cargo has
+/// no instruction aimed at it: `rustc-link-arg-tests` covers `tests/` targets
+/// only, and this package has none — Cargo says so outright, `invalid
+/// instruction … does not have a test target`. Of the instructions Cargo
+/// documents, `rustc-link-arg` is the only one that reaches a test harness; it
+/// also reaches the binaries, the `cdylib` and the examples.
+///
+/// Conditioning it on "we are building tests" is not available either: a build
+/// script runs once per package, and `CARGO_CFG_TEST` is not among the
+/// variables it is given (checked, rather than assumed).
+///
+/// So the argument also lands on `shinobismpp.exe`, which already carries the
+/// very same declaration as a **resource** — `tauri_build` compiles its
+/// `windows-app-manifest.xml` in. The two mechanisms differ (a linker-generated
+/// manifest beside an embedded `RT_MANIFEST` resource), and whether MSVC merges
+/// them or objects is not settled here: nothing in this repository links that
+/// binary on Windows except the `Native packages` job, which pull requests
+/// skip. If it objects, that job is where it will say so, and the fix is to
+/// move the flag onto a `tests/` target that re-exports what these tests need.
+///
+/// The alternative in circulation — running `mt.exe` over the built test
+/// executable afterwards — puts a post-processing step between `cargo test` and
+/// the tests, which is worse than a flag that is one target too wide.
 ///
 /// MSVC only: `/MANIFESTDEPENDENCY` is a `link.exe` option, and it is the
 /// toolchain the CI matrix and the release workflow both use on Windows. Under
@@ -53,7 +71,7 @@ fn manifest_the_test_binaries() {
     }
 
     println!(
-        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
+        "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' \
          name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
          processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
     );
