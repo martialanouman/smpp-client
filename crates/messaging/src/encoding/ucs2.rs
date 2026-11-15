@@ -49,9 +49,16 @@ pub(crate) fn unpack(octets: &[u8], sequence_number: u8) -> Result<Vec<u16>, Enc
         });
     }
 
+    // `as_chunks`, not `chunks_exact`: a constant chunk size gives back
+    // `&[[u8; 2]]`, so `from_be_bytes` takes the pair whole and there is no
+    // indexing left to get wrong. The length is already known to be even, so
+    // the remainder `as_chunks` returns is empty by construction.
     Ok(octets
-        .chunks_exact(2)
-        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(u16::from_be_bytes)
         .collect())
 }
 

@@ -38,7 +38,10 @@ pub mod state;
 #[cfg(feature = "test-support")]
 pub mod testing;
 
-pub use actors::transport::{self as transport, TcpTransport, Transport};
+pub use actors::transport::{
+    self as transport, BoxedStream, ByteStream, DynTransport, SharedTransport, TcpTransport,
+    Transport,
+};
 pub use actors::{
     spawn, spawn_observed, Session, SessionHandle, SessionSnapshot, MAX_MISSED_ENQUIRE_LINKS,
 };

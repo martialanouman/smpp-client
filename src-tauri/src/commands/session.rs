@@ -632,7 +632,7 @@ pub(crate) async fn session_status(
 
 /// Every live session's state, as the `sessions:state` event carries it.
 pub(crate) async fn statuses(
-    registry: &Arc<smpp_session::SessionRegistry<smpp_session::TcpTransport>>,
+    registry: &Arc<smpp_session::SessionRegistry<smpp_session::SharedTransport>>,
 ) -> SessionsState {
     let mut sessions = Vec::new();
 

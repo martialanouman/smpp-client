@@ -105,5 +105,15 @@ smpp-core = { path = "../crates/smpp-core" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "test-util", "time", "sync"] }
 
+# `tauri::test::mock_app()` and `MockRuntime` — the `AppHandle` the campaign
+# commands take, with no window and no WebView. A **dev**-dependency, so the
+# feature is unified into the library only when the tests are built.
+tauri = { version = "2", features = ["test"] }
+
+# The scripted message centre of `smpp_session::testing`, behind the same
+# `test-support` feature `messaging` enables for its own tests. Off for
+# `cargo build`, so nothing of it reaches the application binary.
+smpp-session = { path = "../crates/smpp-session", features = ["test-support"] }
+
 [lints]
 workspace = true
