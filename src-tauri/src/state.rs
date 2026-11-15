@@ -41,19 +41,25 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    /// Builds the state from a store, the preferences read at startup, and an
-    /// open database.
+    /// Builds the state from a store, the preferences read at startup, an open
+    /// database and the transport sessions are opened over.
+    ///
+    /// `transport` is threaded through rather than chosen here: see
+    /// [`crate::sessions::SessionServices::new`], and
+    /// `smpp_session::DynTransport` for why the choice belongs at startup and
+    /// not in a type parameter this layer cannot carry.
     pub(crate) fn new(
         store: ConfigStore,
         settings: AppConfig,
         database: persistence::Database,
+        transport: smpp_session::SharedTransport,
     ) -> Self {
         let events = Arc::new(EventEmitter::default());
 
         Self {
             store: Arc::new(store),
             settings: RwLock::new(settings),
-            sessions: SessionServices::new(database.clone(), Arc::clone(&events)),
+            sessions: SessionServices::new(database.clone(), Arc::clone(&events), transport),
             messages: MessageServices::new(database.clone(), Arc::clone(&events)),
             logs: LogServices::new(database.clone(), Arc::clone(&events)),
             contacts: ContactServices::new(database.clone(), Arc::clone(&events)),
@@ -157,7 +163,12 @@ mod tests {
             .expect("an in-memory database always opens");
         database.migrate().await.expect("the migrations apply");
 
-        AppState::new(ConfigStore::new(directory), AppConfig::default(), database)
+        AppState::new(
+            ConfigStore::new(directory),
+            AppConfig::default(),
+            database,
+            Arc::new(smpp_session::TcpTransport),
+        )
     }
 
     #[tokio::test]

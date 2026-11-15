@@ -22,15 +22,19 @@
 //! The test is in-crate because `CampaignServices` is `pub(crate)`. Nothing of
 //! the production code had its visibility raised for it.
 //!
-//! # The one piece of scaffolding, and why it is unavoidable
+//! # No scaffolding: the transport is injected
 //!
-//! [`bridge`]. `SessionServices` holds a `SessionRegistry<TcpTransport>`, a
-//! concrete type, so the only way into its registry is a real TCP connection —
-//! and `smpp_session::testing::Smsc` speaks over `tokio::io::duplex`. The bridge
-//! accepts on a loopback port and copies the bytes both ways, so the scripted
-//! message centre is reached through the production transport, codec and session
-//! actors. Making `SessionServices` generic would have been the alternative, and
-//! it would have changed production code to suit a test.
+//! `AppState::new` takes the transport the application opens sessions over, so
+//! these tests hand it `smpp_session::testing::Smsc` and the campaign reaches
+//! the scripted message centre through the production registry, codec and
+//! session actors with nothing in between.
+//!
+//! The first cut of this file could not do that: `SessionServices` held a
+//! `SessionRegistry<TcpTransport>`, a concrete type chosen at compile time, so
+//! the only way into the registry was a real socket — the test stood a loopback
+//! listener in front of the double and copied bytes both ways. That bridge was
+//! the test paying for a dependency the production code had not inverted, and
+//! `smpp_session::DynTransport` now says where the choice belongs instead.
 //!
 //! # The three campaigns
 //!
@@ -75,6 +79,8 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::BTreeSet;
+
+use std::sync::Arc;
 
 use core::time::Duration;
 
@@ -153,12 +159,15 @@ async fn database(directory: &tempfile::TempDir) -> Database {
     database
 }
 
-/// An application over `database`, with its handle and the progress it emits.
+/// An application over `database`, sending through `smsc`.
 ///
 /// `mock_app` is a real Tauri application with no window: `launch` takes an
 /// `AppHandle`, and the final `campaign:progress` is emitted through it, so a
 /// hand-written double would be observing something other than what ships.
-fn app_over(database: Database, directory: &tempfile::TempDir) -> Harness {
+///
+/// `smsc` goes in as the application's transport, which is the whole of what
+/// the inversion bought: no listener, no port, no bytes copied by the test.
+fn app_over(database: Database, directory: &tempfile::TempDir, smsc: Smsc) -> Harness {
     let app = tauri::test::mock_app();
     let handle = app.handle().clone();
 
@@ -186,6 +195,7 @@ fn app_over(database: Database, directory: &tempfile::TempDir) -> Harness {
         ConfigStore::new(directory.path()),
         AppConfig::default(),
         database,
+        Arc::new(smsc),
     ));
 
     Harness {
@@ -233,14 +243,16 @@ impl Harness {
         progress.seen.clone()
     }
 
-    /// Binds a session onto `smsc` and waits for it to be `BOUND`.
+    /// Binds a session and waits for it to be `BOUND`.
     ///
-    /// Through the production registry and the production `TcpTransport`, over
-    /// [`bridge`]. The returned `Session` is kept by the caller: dropping its
-    /// last handle cancels the session (`HandleInner::drop`).
-    async fn bind_to(&self, session_id: SessionId, smsc: Smsc) -> smpp_session::Session {
-        let port = bridge(smsc).await;
-        let profile = SessionProfile::builder(session_id, "double", "127.0.0.1", port)
+    /// Through the production registry, over the transport this application was
+    /// built with — the message centre of [`app_over`]. The address is never
+    /// resolved: `Smsc::connect` ignores it and hands back a duplex pipe, which
+    /// is why these tests touch no port. The returned `Session` is kept by the
+    /// caller: dropping its last handle cancels the session
+    /// (`HandleInner::drop`).
+    async fn bind(&self, session_id: SessionId) -> smpp_session::Session {
+        let profile = SessionProfile::builder(session_id, "double", "in-memory", 2775)
             .system_id("esme01")
             // No `enquire_link`, and a response timeout at its ceiling. Both are
             // for the cold-restart test: the first run is left blocked on
@@ -305,35 +317,6 @@ impl Harness {
             .await
             .expect("the row is there")
     }
-}
-
-/// Stands a loopback listener in front of `smsc`, and returns its port.
-///
-/// One task per connection, copying bytes in both directions: the session under
-/// test connects with the production `TcpTransport`, and the scripted centre
-/// answers over its duplex pipe. Both tasks end when either side closes.
-async fn bridge(smsc: Smsc) -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback port is available");
-    let port = listener
-        .local_addr()
-        .expect("a bound listener has an address")
-        .port();
-
-    tokio::spawn(async move {
-        while let Ok((mut client, _)) = listener.accept().await {
-            let Ok(mut centre) = smpp_session::Transport::connect(&smsc, "in-memory").await else {
-                continue;
-            };
-
-            tokio::spawn(async move {
-                let _ignored = tokio::io::copy_bidirectional(&mut client, &mut centre).await;
-            });
-        }
-    });
-
-    port
 }
 
 /// The numbers the campaigns are sent to, in the order they are inserted.
@@ -527,11 +510,11 @@ async fn a_campaign_started_through_the_command_reaches_every_recipient_once() {
     let directory = tempfile::TempDir::new().expect("a temporary directory");
     let database = database(&directory).await;
     let list = a_list(&database).await;
-    let harness = app_over(database.clone(), &directory);
-
     let (smsc, mut seen) = Smsc::always(Script::Accept);
+    let harness = app_over(database.clone(), &directory, smsc);
+
     let session_id = SessionId::new();
-    let _session = harness.bind_to(session_id, smsc).await;
+    let _session = harness.bind(session_id).await;
 
     let campaign_id = harness
         .create(a_config(session_id, list, UnansweredInput::Reemit))
@@ -655,8 +638,8 @@ async fn a_campaign_a_crash_left_behind_is_resumed_without_sending_twice() {
     );
 
     let campaign_id = {
-        let harness = app_over(database.clone(), &directory);
-        let _session = harness.bind_to(session_id, dying_centre).await;
+        let harness = app_over(database.clone(), &directory, dying_centre);
+        let _session = harness.bind(session_id).await;
 
         // `Abandon`, the policy that promises not to duplicate: a `SENT` row
         // whose answer never came is left alone rather than replayed, which is
@@ -705,8 +688,8 @@ async fn a_campaign_a_crash_left_behind_is_resumed_without_sending_twice() {
 
     // --- the restart -------------------------------------------------------
     let (healthy_centre, mut healthy_seen) = Smsc::always(Script::Accept);
-    let restarted = app_over(database.clone(), &directory);
-    let _session = restarted.bind_to(session_id, healthy_centre).await;
+    let restarted = app_over(database.clone(), &directory, healthy_centre);
+    let _session = restarted.bind(session_id).await;
 
     super::launch(&restarted.handle, &restarted.state(), &campaign_id, true)
         .await
@@ -828,13 +811,15 @@ async fn a_campaign_paused_mid_flight_resumes_and_still_reaches_everybody_once()
     let directory = tempfile::TempDir::new().expect("a temporary directory");
     let database = database(&directory).await;
     let list = a_list(&database).await;
-    let harness = app_over(database.clone(), &directory);
-
     let (smsc, mut seen) = Smsc::always(Script::Accept);
+    let harness = app_over(
+        database.clone(),
+        &directory,
+        smsc.with_latency(ANSWERING_DELAY),
+    );
+
     let session_id = SessionId::new();
-    let session = harness
-        .bind_to(session_id, smsc.with_latency(ANSWERING_DELAY))
-        .await;
+    let session = harness.bind(session_id).await;
 
     let campaign_id = harness
         .create(a_config(session_id, list, UnansweredInput::Reemit))

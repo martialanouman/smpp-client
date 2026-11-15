@@ -15,7 +15,7 @@ use core::time::Duration;
 
 use persistence::{Database, SqliteSessionProfileRepository};
 use smpp_session::profile::{Password, SessionProfile};
-use smpp_session::{SessionHandle, SessionRegistry, TcpTransport};
+use smpp_session::{SessionHandle, SessionRegistry, SharedTransport};
 use tauri::{AppHandle, Runtime};
 use tokio::sync::watch;
 
@@ -26,7 +26,7 @@ use crate::events::{EventEmitter, MetricsTick, METRICS_TICK_INTERVAL, SESSIONS_S
 /// The session half of the application state.
 pub(crate) struct SessionServices {
     profiles: SqliteSessionProfileRepository,
-    registry: Arc<SessionRegistry<TcpTransport>>,
+    registry: Arc<SessionRegistry<SharedTransport>>,
     events: Arc<EventEmitter>,
 }
 
@@ -39,11 +39,24 @@ impl core::fmt::Debug for SessionServices {
 }
 
 impl SessionServices {
-    /// Binds the services to an open database.
-    pub(crate) fn new(database: Database, events: Arc<EventEmitter>) -> Self {
+    /// Binds the services to an open database, over `transport`.
+    ///
+    /// # Why the transport is a parameter
+    ///
+    /// It used to be `TcpTransport`, written here. That made the choice at
+    /// compile time for the whole application — `smpp_session::DynTransport`
+    /// says at length why that is the wrong place for it — and it is also what
+    /// made the registry unreachable from a test without a real socket. It is
+    /// now chosen once, in [`crate::run`], and milestone 015 picks TLS there
+    /// from a setting rather than from a type.
+    pub(crate) fn new(
+        database: Database,
+        events: Arc<EventEmitter>,
+        transport: SharedTransport,
+    ) -> Self {
         Self {
             profiles: SqliteSessionProfileRepository::new(database),
-            registry: Arc::new(SessionRegistry::new(TcpTransport)),
+            registry: Arc::new(SessionRegistry::new(transport)),
             events,
         }
     }
@@ -54,7 +67,7 @@ impl SessionServices {
     }
 
     /// The session registry.
-    pub(crate) const fn registry(&self) -> &Arc<SessionRegistry<TcpTransport>> {
+    pub(crate) const fn registry(&self) -> &Arc<SessionRegistry<SharedTransport>> {
         &self.registry
     }
 

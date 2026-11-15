@@ -112,7 +112,15 @@ pub fn run() -> anyhow::Result<()> {
 
             app.manage(guard);
             app.manage(level_handle);
-            app.manage(state::AppState::new(store, settings, database));
+            // The one place the application decides how a session reaches a
+            // message centre. Milestone 015 chooses TLS here, from the
+            // profile, instead of adding a branch inside the session.
+            app.manage(state::AppState::new(
+                store,
+                settings,
+                database,
+                std::sync::Arc::new(smpp_session::TcpTransport),
+            ));
 
             if let Some(error) = load_failure {
                 tracing::warn!(

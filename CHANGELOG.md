@@ -284,6 +284,19 @@ majeur.
 
 ### Modifié — jalon 010
 
+- **Le transport de session est injecté, plus choisi à la compilation**
+  (ADR 0018). `SessionServices::new` écrivait `SessionRegistry::new(TcpTransport)` :
+  le trait `Transport` existait et le registre était génrique, mais la couche
+  haute se donnait elle-même l'implémentation concrète, donc le choix était figé
+  pour toute l'application. `AppState::new` reçoit désormais un
+  `smpp_session::SharedTransport`, et `crate::run` est le seul endroit de la
+  production qui nomme encore `TcpTransport`. Le jalon 015 branchera TLS là,
+  sans toucher ni la session ni le registre.
+- **`smpp_session::DynTransport`** : `Transport` avec son type de flux effacé,
+  implémenté une fois pour tout `Transport`, parce qu'un paramètre de type sur
+  `SessionServices` se propagerait à `AppState` puis aux commandes Tauri, qui ne
+  peuvent pas être génriques. Coût : une allocation et une indirection **par
+  connexion**, pas par PDU.
 - **`FAILED` n'est plus écrit sur une tentative que la campagne va rejouer.**
   `FAILED` est terminal (spec §14.3), donc un rejeu accepté ne pouvait pas être
   enregistré : le journal restait `FAILED` pour un message effectivement parti,
